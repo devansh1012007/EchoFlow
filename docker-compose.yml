@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: echoflow_db
+    restart: always
+    environment:
+      POSTGRES_DB: echoflow_db
+      POSTGRES_USER: devansh
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+
+  redis:
+    image: redis:7-alpine
+    container_name: echoflow_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  web:
+    build: .
+    container_name: echoflow_web
+    working_dir: /app
+    command: >
+      sh -c "sleep 5 && 
+             python manage.py migrate && 
+             python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
+      - media_data:/app/media # Shared volume for audio segments
+    ports:
+      - "8005:8000"
+    environment:
+      - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
+      - REDIS_URL=redis://redis:6379/1
+      #- SECRET_KEY = django-insecure-637(8wp&#7+g)u&10xs!=2dwutofwh1my9la12$ogu9lm$^3ye
+    depends_on:
+      - db
+      - redis
+
+  # 4. The Background Worker: Celery for HLS and AI processing
+  celery:
+    build: .
+    container_name: echoflow_worker
+    working_dir: /app
+    command: >
+      sh -c "sleep 10 && 
+             celery -A EchoFlow worker --loglevel=info"
+    volumes:
+      - .:/app
+      - media_data:/app/media # Shared volume to write HLS segments
+    depends_on:
+      - db
+      - redis
+    environment:
+      - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
+      - REDIS_URL=redis://redis:6379/1
+
+# Define persistent storage
+volumes:
+  postgres_data:
+  media_data:

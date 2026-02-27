@@ -1,0 +1,16 @@
+- make vene "python -m venv .venv"-> .venv is name of virtual enviroment file
+- ".venv\Scripts\activate" -> activate venv
+- "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process" -> changing setting 
+python manage.py makemigrations; python manage.py migrate
+docker compose exec web python manage.py runserver
+docker compose up
+python -m http.server 3000
+Npm install
+Npm start
+pip install --no-cache-dir -r requirements.txt
+docker run --network host cloudflare/cloudflared:latest tunnel --url http://127.0.0.1:8000
+& .venv/Scripts/Activate.ps1
+python uvicorn ai_server:app --host 0.0.0.0 --port 8001
+docker run --rm -v db:/source -v "${PWD}:/backup" alpine tar cvf /backup/db_backup.tar /source→ for backup db 
+docker-compose up --build --force-recreate ## bulds from start
+docker-compose build --no-cache
