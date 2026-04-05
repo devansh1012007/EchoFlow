@@ -4,6 +4,7 @@ import random
 import json
 import math
 import numpy as np
+import logging
 import librosa
 from celery import shared_task
 from django.conf import settings
@@ -16,14 +17,57 @@ from django.core.cache import cache
 from pgvector.django import CosineDistance
 from openai import OpenAI
 from .models import AudioClip, UserInteraction, User
-from faster_whisper import WhisperModel
-from sentence_transformers import SentenceTransformer
-from keybert import KeyBERT
+#from faster_whisper import WhisperModel
+#from sentence_transformers import SentenceTransformer
+#from keybert import KeyBERT
 
-whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-kw_model = KeyBERT()
+#whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+#embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+#kw_model = KeyBERT()
+
+whisper_model = None
+embedding_model = None
+kw_model = None
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+logger = logging.getLogger(__name__)
+
+
+def get_whisper_model():
+    global whisper_model
+    if whisper_model is None:
+        try:
+            from faster_whisper import WhisperModel
+            whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+        except Exception as e:
+            logger.exception("Failed to initialize WhisperModel: %s", e)
+            raise
+    return whisper_model
+
+
+def get_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        except Exception as e:
+            logger.exception("Failed to initialize embedding model: %s", e)
+            raise
+    return embedding_model
+
+
+def get_kw_model():
+    global kw_model
+    if kw_model is None:
+        try:
+            from keybert import KeyBERT
+            kw_model = KeyBERT()
+        except Exception as e:
+            logger.exception("Failed to initialize KeyBERT: %s", e)
+            raise
+    return kw_model
 
 def get_openai_client():
     """Create an OpenAI client only when the task is executed.
@@ -94,29 +138,30 @@ def process_audio_to_hls(clip_id):
     
     # 2. AUDIO TO TEXT (Whisper)
     try:
-        segments, info = whisper_model.transcribe(input_file_path, beam_size=5)
+        # Lazy-init models to avoid startup cost during management commands
+        model = get_whisper_model()
+        segments, info = model.transcribe(input_file_path, beam_size=5)
         transcript_text = " ".join([segment.text for segment in segments]).strip()
-        
+
         # B. Semantic Vector via sentence-transformers
         if transcript_text:
-            # encode() returns a numpy array
-            vector = embedding_model.encode(transcript_text)
+            embed_model = get_embedding_model()
+            vector = embed_model.encode(transcript_text)
             clip.semantic_vector = vector.tolist()
-        # Extracts top 3 unigrams (single words)
-            keywords = kw_model.extract_keywords(
-                transcript_text, 
-                keyphrase_ngram_range=(1, 1), 
-                stop_words='english', 
-                top_n=3
+            # Extracts top 3 unigrams (single words)
+            keywords = get_kw_model().extract_keywords(
+                transcript_text,
+                keyphrase_ngram_range=(1, 1),
+                stop_words='english',
+                top_n=3,
             )
-            # kw_model returns a list of tuples: [('music', 0.8), ('study', 0.6)]
             clip.tags = [kw[0] for kw in keywords]
         else:
             # Fallback for purely instrumental tracks with no vocals
             clip.semantic_vector = [0.0] * 384
             clip.tags = ["instrumental"]
     except Exception as e:
-        print(f"Local AI Processing Failed: {e}")
+        logger.exception("Local AI Processing Failed: %s", e)
         clip.status = 'failed'
         clip.save()
         return

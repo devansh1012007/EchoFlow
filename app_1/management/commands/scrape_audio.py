@@ -34,9 +34,10 @@ class Command(BaseCommand):
         User = get_user_model()
         user = User.objects.filter(is_superuser=True).first()
         if not user:
-            user = User.objects.create_user(username='scraper')
-            user.set_unusable_password()
-            user.save()
+            user, created = User.objects.get_or_create(username='scraper', defaults={'is_active': False})
+            if created:
+                user.set_unusable_password()
+                user.save()
 
         items = module.fetch_audio(limit=limit)
         self.stdout.write(f'Found {len(items)} items from {source}')
@@ -45,7 +46,14 @@ class Command(BaseCommand):
             url = item.get('url')
             title = item.get('title') or 'scraped audio'
             page = item.get('page_url') or ''
-            license = item.get('license') or 'unknown'
+            lic_raw = item.get('license')
+            license = lic_raw or 'unknown'
+            # License enforcement: skip if license is present and not in allowed list
+            allowed = [s.upper() for s in getattr(settings, 'SCRAPER_ALLOW_LICENSES', [])]
+            lic_upper = str(lic_raw).upper() if lic_raw else ''
+            if lic_upper and lic_upper != 'UNKNOWN' and not any(a in lic_upper for a in allowed):
+                self.stdout.write(self.style.WARNING(f'Skipping {url}: license "{lic_raw}" not allowed'))
+                continue
             original_id = item.get('id')
 
             local_input = None
