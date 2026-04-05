@@ -18,7 +18,7 @@ ALLOWED_HOSTS = ['*']
 
 
 # Application definition
-
+SITE_ID = 1
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     
     # Local Apps
     'app_1',
+    'django_filters'
     'django_redis',
     'django.contrib.sites',
     'allauth',

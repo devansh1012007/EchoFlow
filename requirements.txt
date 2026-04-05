@@ -21,3 +21,7 @@ djangorestframework-simplejwt
 requests
 django_redis
 dj_database_url
+django-filter
+django-redis 
+redis 
+celery
