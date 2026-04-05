@@ -68,8 +68,10 @@ services:
     depends_on:
       - db
       - redis
+    environment:
+      - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
+      - REDIS_URL=redis://redis:6379/1
 
-  # Worker dedicated to CPU-heavy AI audio extraction
   celery_media:
     build: .
     command: celery -A EchoFlow worker -Q heavy_media --concurrency=2 --loglevel=info
@@ -78,6 +80,10 @@ services:
     depends_on:
       - db
       - redis
+    environment:
+      - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
+      - REDIS_URL=redis://redis:6379/1
+      - OPENAI_API_KEY=${OPENAI_API_KEY} # Must be passed for tasks
 
 # Define persistent storage
 volumes:

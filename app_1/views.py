@@ -75,20 +75,18 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
 from django.core.cache import cache
 from rest_framework.response import Response
 
-# app_1/views.py
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, permissions, status, parsers
+from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
+from django.db.models import F, Exists, OuterRef, Case, When
 from django.core.cache import cache
-from django.db.models import Case, When
-from .models import AudioClip
-from .serializers import FeedClipSerializer
-from .tasks import process_audio_to_hls
+from pgvector.django import CosineDistance # Fixed import
+from .models import AudioClip, UserInteraction, SharedClips, Comment
+from .serializers import FeedClipSerializer, SkipActionSerializer
+from .tasks import process_audio_to_hls, refill_user_feed
 
 class FastFeedViewSet(viewsets.ViewSet):
-    """
-    Endpoint: GET /api/v1/feed/
-    Delivers the feed in < 20ms using Redis Hot Queues.
-    """
     permission_classes = [permissions.IsAuthenticated]
 
     def list(self, request):
@@ -96,49 +94,33 @@ class FastFeedViewSet(viewsets.ViewSet):
         redis_key = f"user_feed:{user_id}"
         redis_client = cache.client.get_client()
 
-        # 1. Pop the next 10 clip IDs from the front of the Redis queue
-        # lpop removes them from Redis so they aren't shown again
         clip_ids_bytes = redis_client.lpop(redis_key, 10)
         
-        # If queue is completely empty (e.g., first login or heavy usage)
         if not clip_ids_bytes:
-            # Force a synchronous refill for 10 items, then async the rest
-            process_audio_to_hls(user_id, count=10) # Synchronous call
-            process_audio_to_hls.delay(user_id, count=40) # Async background call
+            # Fixed: Calling the correct feed refill task
+            refill_user_feed(user_id, count=10) 
+            refill_user_feed.delay(user_id, count=40) 
             clip_ids_bytes = redis_client.lpop(redis_key, 10)
             
-            # If still empty, they've consumed all content on the app
             if not clip_ids_bytes:
                 return Response({"results": [], "message": "You've caught up!"})
 
-        # Decode bytes from Redis into standard Python strings
         clip_ids = [vid.decode('utf-8') for vid in clip_ids_bytes]
 
-        # 2. Trigger background refill if queue is running low (< 15 items)
         queue_length = redis_client.llen(redis_key)
         if queue_length < 15:
-            process_audio_to_hls.delay(user_id)
+            refill_user_feed.delay(user_id) # Fixed task
 
-        # 3. Fetch from DB and PRESERVE THE REDIS ORDER
-        # Using id__in loses the strict algorithmic order from Redis. 
-        # We use Case/When to force PostgreSQL to return them in the exact order requested.
         preserved_order = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(clip_ids)])
-        
-        # Fetch the clips. Because we pre-filtered "seen" clips in Celery, 
-        # we can safely assume 'is_liked' is False for this fresh batch, 
-        # saving us a massive DB join operation.
         clips = AudioClip.objects.filter(id__in=clip_ids).order_by(preserved_order)
 
-        # 4. Serialize and send
         serializer = FeedClipSerializer(clips, many=True, context={'request': request})
         
-        # We simulate CursorPagination behavior so the frontend doesn't break
         return Response({
-            "next": "auto_trigger", # Frontend knows to just call /feed/ again when ready
+            "next": "auto_trigger",
             "queue_health": queue_length,
             "results": serializer.data
         })
-
 class FeedViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Endpoint: GET /api/v1/feed/
@@ -164,13 +146,8 @@ class FeedViewSet(viewsets.ReadOnlyModelViewSet):
 # ---------------------------------------------------------
 # 4. INTERACTION LAYER (Likes & Skips)
 # ---------------------------------------------------------
+
 class ClipInteractionViewSet(viewsets.GenericViewSet):
-    """
-    Consolidated viewset for Likes and Skips.
-    Endpoints: 
-    - POST /api/v1/interactions/{id}/toggle-like/
-    - POST /api/v1/interactions/{id}/register-skip/
-    """
     queryset = AudioClip.objects.all()
     permission_classes = [permissions.IsAuthenticated]
 
@@ -182,33 +159,41 @@ class ClipInteractionViewSet(viewsets.GenericViewSet):
         interaction, created = UserInteraction.objects.get_or_create(
             user=user, 
             clip=clip, 
-            interaction_type='like'
+            interaction_type='like',
+            defaults={'is_active': True}
         )
 
         if not created:
-            interaction.delete()
-            AudioClip.objects.filter(pk=pk).update(likes=F('likes') - 1)
-            return Response({'status': 'unliked'}, status=status.HTTP_200_OK)
+            # Fixed: Toggle is_active instead of deleting to preserve history & metrics accurately
+            interaction.is_active = not interaction.is_active
+            interaction.save()
 
-        # Note: Model save() override handles the +1 increment automatically
-        return Response({'status': 'liked'}, status=status.HTTP_201_CREATED)
+        status_text = 'liked' if interaction.is_active else 'unliked'
+        return Response({'status': status_text}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='register-skip')
     def register_skip(self, request, pk=None):
         clip = self.get_object()
-        user = request.user
-        
         serializer = SkipActionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        UserInteraction.objects.create(
-            user=user,
-            clip=clip,
-            interaction_type='skip'
-        )
-        # Model save() override handles the +1 increment automatically
+        listen_duration = serializer.validated_data['listen_duration_ms']
+        reel_position = serializer.validated_data['reel_position_ms']
+        
+        # Calculate completion rate. Assuming max clip length 60s for fallback
+        expected_duration = reel_position if reel_position > 0 else 60000 
+        completion_rate = min(listen_duration / expected_duration, 1.0)
 
-        return Response({"status": "skip registered"}, status=status.HTTP_201_CREATED)
+        UserInteraction.objects.update_or_create(
+            user=request.user,
+            clip=clip,
+            interaction_type='view', # Store explicit view/completion data
+            defaults={
+                'completion_rate': completion_rate,
+                'is_active': True
+            }
+        )
+        return Response({"status": "skip/view registered"}, status=status.HTTP_201_CREATED)
 
 # ---------------------------------------------------------
 # 5. COMMUNITY LAYER (Sharing & Inbox)
