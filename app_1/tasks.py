@@ -1,42 +1,34 @@
 import os
 import subprocess
-from celery import shared_task
-from django.conf import settings
-from .models import AudioClip
-import numpy as np
-import subprocess
-from celery import shared_task
-from openai import OpenAI
-import librosa
+import random
 import json
-from .models import AudioClip
-from .models import UserInteraction, User
 import math
 import numpy as np
-from datetime import timedelta
+import librosa
 from celery import shared_task
-from django.utils import timezone
-from django.db.models import F, FloatField, ExpressionWrapper
-from django.db.models.functions import ExtractEpoch, Now
-from django.core.cache import cache
-from pgvector.django import CosineDistance
-from .models import AudioClip, UserInteraction, User
-import random
-from django.utils import timezone
-from django.db.models import F, ExpressionWrapper, FloatField
-from pgvector.django import CosineDistance
-from celery import shared_task
-from django.core.cache import cache
-from .models import User, AudioClip, UserInteraction
-from celery import shared_task
-from .models import AudioClip, UserInteraction
-from pgvector.django import CosineDistance
-from django.db.models import Avg
-import numpy as np
+from django.conf import settings
 from django.db import connection
+from django.db.models import F, FloatField, ExpressionWrapper, Avg
+from django.db.models.functions import Now
+from django.utils import timezone
+from datetime import timedelta
+from django.core.cache import cache
+from pgvector.django import CosineDistance
+from openai import OpenAI
+from .models import AudioClip, UserInteraction, User
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+def get_openai_client():
+    """Create an OpenAI client only when the task is executed.
+
+    This avoids import-time failures during Django management commands when the
+    OpenAI API key is not configured in the environment.
+    """
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is not set. OpenAI calls require this environment variable.")
+    return OpenAI(api_key=OPENAI_API_KEY)
+
 
 def extract_acoustic_vector(file_path):
     """
@@ -95,6 +87,7 @@ def process_audio_to_hls(clip_id):
     clip.save(update_fields=['acoustic_vector', 'duration_ms'])
     # 1. AUDIO TO TEXT (Whisper)
     try:
+        client = get_openai_client()
         with open(input_file_path, "rb") as audio_file:
             transcript_response = client.audio.transcriptions.create(
                 model="whisper-1", 

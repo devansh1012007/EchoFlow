@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import AudioClip, UserInteraction, ShareEvent, Comment
+from rest_framework.validators import UniqueValidator
+
 
 User = get_user_model()
 
@@ -89,3 +91,26 @@ class ShareEventSerializer(serializers.ModelSerializer):
     class Meta:
         model = ShareEvent
         fields = ['id', 'sender_name', 'clip', 'created_at', 'is_read']
+
+
+class RegisterSerializer(serializers.ModelSerializer):
+    # Ensure email is unique and required
+    email = serializers.EmailField(
+        required=True,
+        validators=[UniqueValidator(queryset=User.objects.all())]
+    )
+
+    class Meta:
+        model = User #built-in User model
+        fields = ('username', 'password', 'email')
+        # Ensure password is never returned in a GET request
+        extra_kwargs = {'password': {'write_only': True}, 'email': {'write_only': True}}
+
+    def create(self, validated_data):
+        # .create_user() handles password hashing automatically
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            email=validated_data['email'],
+            password=validated_data['password']
+        )
+        return user

@@ -7,6 +7,7 @@ from django.db.models import F
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from pgvector.django import VectorField
+#from django.contrib.auth.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +19,13 @@ else:
     cipher_suite = None
     logger.critical("CRITICAL: FIELD_ENCRYPTION_KEY is missing. PII (emails) will not be encrypted.")
 
+
 class User(AbstractUser):
     encrypted_email = models.TextField(unique=True, null=True, blank=True)
     following = models.ManyToManyField('self', symmetrical=False, related_name='followers', blank=True)
-
     long_term_semantic = VectorField(dimensions=1536, null=True, blank=True)
     long_term_acoustic = VectorField(dimensions=128, null=True, blank=True)
+    
     # nOT SURE ABOUT THIS, MAYBE FOR FUTURE USE?
     def save(self, *args, **kwargs):
         if self.email and cipher_suite:
@@ -32,6 +34,8 @@ class User(AbstractUser):
             logger.warning(f"WARNING: Saving email in plaintext for user {self.username} due to missing encryption key.")
             self.encrypted_email = self.email
         super().save(*args, **kwargs)
+
+
 
 class AudioClip(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

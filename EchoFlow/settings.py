@@ -23,6 +23,7 @@ INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
+    'django_filters',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
@@ -30,10 +31,11 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'rest_framework_simplejwt', 
     'corsheaders',#for frontend
+    ##
     
     # Local Apps
     'app_1',
-    'django_filters',
+    ##
     'django_redis',
     'django.contrib.sites',
     'allauth',
@@ -43,6 +45,7 @@ INSTALLED_APPS = [
     'dj_rest_auth',
     #'rest_framework_simplejwt',
     'dj_rest_auth.registration',
+    
     
 ]
 
@@ -159,3 +162,16 @@ USE_TZ = True
 STATIC_URL = 'static/'
 AUTH_USER_MODEL = 'app_1.User'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+}
+# lets set lifetimes for tokens
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+}

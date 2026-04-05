@@ -1,4 +1,4 @@
-from rest_framework import viewsets, permissions, status, parsers
+from rest_framework import viewsets, permissions, status, parsers, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import CursorPagination
@@ -14,6 +14,7 @@ import time
 import logging
 import uuid
 import os
+from rest_framework.permissions import AllowAny
 from django.core.cache import cache
 from rest_framework.response import Response
 
@@ -36,7 +37,8 @@ from .models import (
 )
 from .serializers import (
     AudioUploadSerializer, FeedClipSerializer, 
-    CommentSerializer, ShareEventSerializer, SkipActionSerializer,InteractionTelemetrySerializer
+    CommentSerializer, ShareEventSerializer, SkipActionSerializer,
+    InteractionTelemetrySerializer,RegisterSerializer
 )
 
 
@@ -769,3 +771,9 @@ class TagsViewSet(viewsets.ViewSet):
         refill_user_feed.delay(user.id, count=30)
         
         return Response({"status": "Algorithm initialized. Feed is ready."}, status=200)
+
+class RegisterView(generics.CreateAPIView): # generic view for user registration built-in create behavior
+    queryset = User.objects.all() # queryset set to all users so that we can create new ones
+    # Everyone must be able to hit this endpoint to sign up!
+    permission_classes = (AllowAny,)
+    serializer_class = RegisterSerializer
