@@ -48,7 +48,7 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
         clip = serializer.save()
 
         # TODO: Trigger Celery Task here
-        process_new_audio.delay(clip.id)
+        process_audio_to_hls.delay(clip.id)
 
         headers = self.get_success_headers(serializer.data)
         return Response(

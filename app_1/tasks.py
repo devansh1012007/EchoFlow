@@ -11,6 +11,7 @@ from openai import OpenAI
 import librosa
 import json
 from .models import AudioClip
+from .models import UserInteraction, User
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -178,54 +179,6 @@ def calculate_dynamic_user_vector(user_id):
         
     return centroid_vector.tolist()
 
-@shared_task
-def refill_user_feed(user_id, count=50):
-    redis_key = f"user_feed:{user_id}"
-    redis_client = cache.client.get_client()
-
-    if redis_client.llen(redis_key) >= 20:
-        return "Queue sufficient."
-
-    # 1. Get the clips they have already seen
-    seen_clip_ids = list(UserInteraction.objects.filter(
-        user_id=user_id
-    ).values_list('clip_id', flat=True))
-    
-    # Fetch the clips currently sitting in their Redis queue so we don't duplicate them
-    queued_bytes = redis_client.lrange(redis_key, 0, -1)
-    queued_ids = [vid.decode('utf-8') for vid in queued_bytes]
-    seen_clip_ids.extend(queued_ids)
-
-    # 2. Get their current mood vector
-    target_vector = calculate_dynamic_user_vector(user_id)
-
-    if target_vector:
-        # ALGORITHM A: Vector Similarity Search
-        # Order by closest mathematical distance to their current mood
-        new_clips = AudioClip.objects.filter(
-            status='ready'
-        ).exclude(
-            id__in=seen_clip_ids
-        ).order_by(
-            CosineDistance('vibe_vector', target_vector)
-        )[:count]
-    else:
-        # ALGORITHM B: The Cold Start (New Users)
-        # If they have no history, serve highly-shared global content
-        new_clips = AudioClip.objects.filter(
-            status='ready'
-        ).exclude(
-            id__in=seen_clip_ids
-        ).order_by('-shares', '-created_at')[:count]
-
-    if not new_clips:
-        return "No new clips."
-
-    # Push to Redis
-    clip_ids_to_push = [str(clip.id) for clip in new_clips]
-    redis_client.rpush(redis_key, *clip_ids_to_push)
-
-    return f"Added {len(clip_ids_to_push)} vector-matched clips."
 
 
 
@@ -269,8 +222,12 @@ def calculate_blended_query_vectors(user):
         final_ac.tolist() if final_ac is not None else None
     )
 
+
+
 @shared_task
 def refill_user_feed(user_id, count=50):
+    redis_key = f"user_feed:{user_id}"
+    redis_client = cache.client.get_client()
     user = User.objects.get(id=user_id)
     seen_ids = list(UserInteraction.objects.filter(user=user).values_list('clip_id', flat=True))
     
@@ -289,5 +246,9 @@ def refill_user_feed(user_id, count=50):
         ).order_by('combined_distance')
     
     new_clips = queryset[:count]
-    
-    # ... [Push IDs to Redis Queue] ...
+    # Push to Redis
+    clip_ids_to_push = [str(clip.id) for clip in new_clips]
+    redis_client.rpush(redis_key, *clip_ids_to_push)
+
+    return f"Added {len(clip_ids_to_push)} vector-matched clips."
+
