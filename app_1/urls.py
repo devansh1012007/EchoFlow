@@ -1,26 +1,21 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    LikeViewSet,NextViewSet,PreloadViewSet,
-    Save2ListViewSet,ShareViewSet,SuggestionViewSet,
-    CreatingAudioViewSet,PrevViewSet,FollowViewSet,
-    TagsAndSuggestionsViewSet,ChatInterfaceViewSet,
-    CommentsViewSet,
+    AudioUploadViewSet, FastFeedViewSet, ClipInteractionViewSet,
+    ShareViewSet, CommentViewSet, FollowViewSet, 
+    TagsViewSet, SuggestionViewSet
 )
+
 router = DefaultRouter()
-router.register(r'Like',LikeViewSet, basename='Like')
-router.register(r'Next',NextViewSet, basename='Next')
-router.register(r'Prev',PrevViewSet, basename='Prev')
-router.register(r'Follow',FollowViewSet, basename='Follow')
-router.register(r'TagsAndSuggestions',TagsAndSuggestionsViewSet, basename='TagsAndSuggestions')
-router.register(r'ChatInterface',ChatInterfaceViewSet, basename='ChatInterface')
-router.register(r'Comments',CommentsViewSet, basename='Comments')
-router.register(r'Preload', PreloadViewSet, basename='Preload')
-router.register(r'Save2List', Save2ListViewSet, basename='Save2List')
-router.register(r'Share', ShareViewSet, basename='Share')
-router.register(r'Suggestion', SuggestionViewSet, basename='Suggestion')
-router.register(r'CreatingAudio', CreatingAudioViewSet, basename='CreatingAudio')
+router.register(r'feed', FastFeedViewSet, basename='feed')
+router.register(r'clips', AudioUploadViewSet, basename='clips')
+router.register(r'interactions', ClipInteractionViewSet, basename='interactions')
+router.register(r'share', ShareViewSet, basename='share')
+router.register(r'comments', CommentViewSet, basename='comments')
+router.register(r'follow', FollowViewSet, basename='follow')
+router.register(r'tags', TagsViewSet, basename='tags')
+router.register(r'suggestions', SuggestionViewSet, basename='suggestions')
+
 urlpatterns = [
-    path('', include(router.urls))
-    
-    ]
+    path('', include(router.urls)),
+]

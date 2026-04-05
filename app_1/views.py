@@ -74,7 +74,7 @@ from django.core.cache import cache
 from django.db.models import Case, When
 from .models import AudioClip
 from .serializers import FeedClipSerializer
-from .tasks import refill_user_feed
+from .tasks import process_audio_to_hls
 
 class FastFeedViewSet(viewsets.ViewSet):
     """
@@ -95,8 +95,8 @@ class FastFeedViewSet(viewsets.ViewSet):
         # If queue is completely empty (e.g., first login or heavy usage)
         if not clip_ids_bytes:
             # Force a synchronous refill for 10 items, then async the rest
-            refill_user_feed(user_id, count=10) # Synchronous call
-            refill_user_feed.delay(user_id, count=40) # Async background call
+            process_audio_to_hls(user_id, count=10) # Synchronous call
+            process_audio_to_hls.delay(user_id, count=40) # Async background call
             clip_ids_bytes = redis_client.lpop(redis_key, 10)
             
             # If still empty, they've consumed all content on the app
@@ -109,7 +109,7 @@ class FastFeedViewSet(viewsets.ViewSet):
         # 2. Trigger background refill if queue is running low (< 15 items)
         queue_length = redis_client.llen(redis_key)
         if queue_length < 15:
-            refill_user_feed.delay(user_id)
+            process_audio_to_hls.delay(user_id)
 
         # 3. Fetch from DB and PRESERVE THE REDIS ORDER
         # Using id__in loses the strict algorithmic order from Redis. 

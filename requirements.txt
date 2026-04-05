@@ -25,3 +25,6 @@ django-filter
 django-redis 
 redis 
 celery
+gunicorn
+django-storages
+boto3
