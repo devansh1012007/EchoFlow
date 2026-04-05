@@ -78,3 +78,11 @@ class CommentSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data['author'] = self.context['request'].user
         return super().create(validated_data)
+    
+class InteractionTelemetrySerializer(serializers.Serializer):
+    """
+    Replaces SkipActionSerializer. The frontend must POST to this 
+    every time a clip goes out of view.
+    """
+    action_type = serializers.ChoiceField(choices=['view', 'like', 'share', 'skip'])
+    watch_time_ms = serializers.IntegerField(min_value=0, required=True)

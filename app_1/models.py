@@ -69,6 +69,10 @@ class AudioClip(models.Model):
     status = models.CharField(max_length=20, default='processing')
     created_at = models.DateTimeField(auto_now_add=True)
 
+    duration_ms = models.IntegerField(default=0) # Extract via FFmpeg during upload
+    avg_completion_rate = models.FloatField(default=0.0) # Updated via Celery Beat
+    engagement_velocity = models.FloatField(default=0.0) # Updated via Celery Beat
+    
     def __str__(self):
         return f"{self.title} by {self.creator.username}"
 

@@ -15,7 +15,7 @@ import logging
 import uuid
 import os
 from .tasks import process_audio_to_hls, calculate_blended_query_vectors
-from .utils import CosineDistance
+
 # Import Models and Serializers
 from .models import (
     AudioClip, UserInteraction, SharedClips, Comment
@@ -194,7 +194,34 @@ class ClipInteractionViewSet(viewsets.GenericViewSet):
             }
         )
         return Response({"status": "skip/view registered"}, status=status.HTTP_201_CREATED)
+    @action(detail=True, methods=['post'], url_path='log-telemetry')
+    def log_telemetry(self, request, pk=None):
+        clip = self.get_object()
+        user = request.user
+        
+        serializer = InteractionTelemetrySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        watch_time_ms = serializer.validated_data['watch_time_ms']
+        action_type = serializer.validated_data['action_type']
+        
+        # Calculate completion rate securely on the backend
+        clip_duration = max(clip.duration_ms, 1) # Prevent division by zero
+        completion_rate = min(watch_time_ms / clip_duration, 1.0)
 
+        # Log or update the interaction with telemetry
+        interaction, created = UserInteraction.objects.update_or_create(
+            user=user,
+            clip=clip,
+            interaction_type=action_type,
+            defaults={
+                'watch_time_ms': watch_time_ms,
+                'completion_rate': completion_rate,
+                'is_active': True 
+            }
+        )
+
+        return Response({"status": "telemetry logged"}, status=status.HTTP_201_CREATED)
 # ---------------------------------------------------------
 # 5. COMMUNITY LAYER (Sharing & Inbox)
 # ---------------------------------------------------------
@@ -299,6 +326,7 @@ class FollowViewSet(viewsets.ViewSet):
 # ---------------------------------------------------------
 # 8. ALGORITHM & SUGGESTION LAYER (Placeholders)
 # ---------------------------------------------------------
+# for searh and explore feed
 class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Endpoint: GET /api/v1/suggestions/explore/?category=comedy
@@ -332,6 +360,7 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
         )
         return queryset.annotate(user_has_liked=Exists(user_like_subquery))
 
+# mood based feed initialization and refresh
 class TagsViewSet(viewsets.ViewSet):
     """
     Endpoint: POST /api/v1/tags/initialize/
