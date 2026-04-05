@@ -24,16 +24,14 @@ class User(AbstractUser):
 
     long_term_semantic = VectorField(dimensions=1536, null=True, blank=True)
     long_term_acoustic = VectorField(dimensions=128, null=True, blank=True)
-
-class OwnedModel(models.Model):
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL, 
-        on_delete=models.CASCADE,
-        related_name="%(class)s_objects"
-    )
-    
-    class Meta:
-        abstract = True
+    # nOT SURE ABOUT THIS, MAYBE FOR FUTURE USE?
+    def save(self, *args, **kwargs):
+        if self.email and cipher_suite:
+            self.encrypted_email = cipher_suite.encrypt(self.email.encode()).decode()
+        elif self.email and not cipher_suite:
+            logger.warning(f"WARNING: Saving email in plaintext for user {self.username} due to missing encryption key.")
+            self.encrypted_email = self.email
+        super().save(*args, **kwargs)
 
 class AudioClip(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

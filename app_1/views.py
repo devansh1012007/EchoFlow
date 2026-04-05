@@ -14,6 +14,20 @@ import time
 import logging
 import uuid
 import os
+from django.core.cache import cache
+from rest_framework.response import Response
+
+from rest_framework import viewsets, permissions, status, parsers
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
+from django.db.models import F, Exists, OuterRef, Case, When
+from django.core.cache import cache
+from pgvector.django import CosineDistance # Fixed import
+from .models import AudioClip, UserInteraction, ShareEvent, Comment
+from .serializers import FeedClipSerializer, SkipActionSerializer, InteractionTelemetrySerializer, CommentSerializer, ShareEventSerializer
+from .tasks import process_audio_to_hls, refill_user_feed
+
 from .tasks import process_audio_to_hls, calculate_time_decayed_vectors
 
 # Import Models and Serializers
@@ -22,8 +36,10 @@ from .models import (
 )
 from .serializers import (
     AudioUploadSerializer, FeedClipSerializer, 
-    CommentSerializer, ShareEventSerializer, SkipActionSerializer
+    CommentSerializer, ShareEventSerializer, SkipActionSerializer,InteractionTelemetrySerializer
 )
+
+
 
 User = get_user_model()
 
@@ -105,19 +121,6 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
 # ---------------------------------------------------------
 # 3. FEED & PLAYBACK LAYER
 # ---------------------------------------------------------
-from django.core.cache import cache
-from rest_framework.response import Response
-
-from rest_framework import viewsets, permissions, status, parsers
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from django.shortcuts import get_object_or_404
-from django.db.models import F, Exists, OuterRef, Case, When
-from django.core.cache import cache
-from pgvector.django import CosineDistance # Fixed import
-from .models import AudioClip, UserInteraction, ShareEvent, Comment
-from .serializers import FeedClipSerializer, SkipActionSerializer
-from .tasks import process_audio_to_hls, refill_user_feed
 
 class FastFeedViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
@@ -467,11 +470,9 @@ class ShareViewSet(viewsets.ModelViewSet):
             "date": now.strftime("%Y-%m-%d"),
             "time": now.strftime("%H:%M"),
         }
-        ShareEvent.objects.create(sender=request.user, receiver=receiver, clip=clip)
-        
-        # 2. Log the algorithmic interaction
+        ShareEvent.objects.create(sender=user, receiver=receiver, clip=clip)
         UserInteraction.objects.update_or_create(
-            user=request.user, clip=clip, interaction_type='share',
+            user=user, clip=clip, interaction_type='share',
             defaults={'is_active': True}
         )
         
@@ -485,14 +486,7 @@ class ShareViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['delete'], url_path='share-delete')
     def share_delete(self, request, pk=None):
         user = request.user
-        shared_data = get_object_or_404(ShareEvent, owner=user)
-        
-        current_list = shared_data.received or []
-        updated_list = [item for item in current_list if str(item.get('clip_id')) != str(pk)]
-        
-        shared_data.received = updated_list
-        shared_data.save()
-        
+        ShareEvent.objects.filter(pk=pk, receiver=request.user).delete()
         # We DO NOT decrement AudioClip shares here. Inbox cleanup does not undo the share action.
         return Response({'status': 'deleted from inbox'}, status=status.HTTP_204_NO_CONTENT)
     

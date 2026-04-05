@@ -6,7 +6,6 @@ from .models import AudioClip
 import numpy as np
 import subprocess
 from celery import shared_task
-from django.conf import settings
 from openai import OpenAI
 import librosa
 import json
@@ -22,16 +21,19 @@ from django.db.models.functions import ExtractEpoch, Now
 from django.core.cache import cache
 from pgvector.django import CosineDistance
 from .models import AudioClip, UserInteraction, User
-import math
 import random
-import numpy as np
 from django.utils import timezone
 from django.db.models import F, ExpressionWrapper, FloatField
 from pgvector.django import CosineDistance
 from celery import shared_task
 from django.core.cache import cache
 from .models import User, AudioClip, UserInteraction
-
+from celery import shared_task
+from .models import AudioClip, UserInteraction
+from pgvector.django import CosineDistance
+from django.db.models import Avg
+import numpy as np
+from django.db import connection
 
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -85,12 +87,12 @@ def process_audio_to_hls(clip_id):
 
     # 1. Acoustic Vector Extraction
     y, sr = librosa.load(input_file_path)
-    clip.acoustic_vector = extract_acoustic_vector(y)
+    clip.acoustic_vector = extract_acoustic_vector(input_file_path)
     
     # CRITICAL FIX: Extract exact duration for completion_rate math
     clip.duration_ms = int(librosa.get_duration(y=y, sr=sr) * 1000)
 
-
+    clip.save(update_fields=['acoustic_vector', 'duration_ms'])
     # 1. AUDIO TO TEXT (Whisper)
     try:
         with open(input_file_path, "rb") as audio_file:
@@ -114,7 +116,7 @@ def process_audio_to_hls(clip_id):
             ]
         )
         clip.tags = json.loads(tag_response.choices[0].message.content)
-        clip.save()############## not sure
+    
 
     except Exception as e:
         print(f"AI Processing Failed: {e}")
@@ -173,15 +175,7 @@ def process_audio_to_hls(clip_id):
         print(f"FFmpeg Error: {e.stderr.decode()}")
 
 
-# app_1/tasks.py
-from celery import shared_task
-from django.core.cache import cache
-from .models import AudioClip, UserInteraction
-from pgvector.django import CosineDistance
-from django.core.cache import cache
 
-from django.db.models import Avg
-import numpy as np
 
 def calculate_dynamic_user_vector(user_id):
     """
@@ -281,7 +275,7 @@ def refill_user_feed(user_id, count=50):
     if redis_client.llen(redis_key) >= 20:
         return "Queue sufficient."
 
-    seen_ids = list(UserInteraction.objects.filter(user=user).values_list('clip_id', flat=True, created_at__gte=timezone.now() - timedelta(days=30)))
+    seen_ids = list(UserInteraction.objects.filter(user=user,created_at__gte=timezone.now() - timedelta(days=30)).values_list('clip_id', flat=True))
     queued_ids = [vid.decode('utf-8') for vid in redis_client.lrange(redis_key, 0, -1)]
     seen_ids.extend(queued_ids)
 
@@ -299,9 +293,9 @@ def refill_user_feed(user_id, count=50):
                 output_field=FloatField()
             ),
             composite_score=ExpressionWrapper(
-                (F('vector_similarity') * 0.40) +
+                (F('vector_similarity') * 0.45) +
                 (F('avg_completion_rate') * 0.30) +
-                (F('engagement_velocity') * 0.20),
+                (F('engagement_velocity') * 0.25),
                 output_field=FloatField()
             )
         ).order_by('-composite_score')
@@ -376,10 +370,11 @@ def calculate_time_decayed_vectors(user, limit=50):
     sum_weights = sum(weights)
     if sum_weights == 0:
         return user.long_term_semantic, user.long_term_acoustic
-
-    weighted_sem = np.sum(sem_vectors, axis=0) / sum_weights
-    weighted_ac = np.sum(ac_vectors, axis=0) / sum_weights
-
+    if sem_vectors and ac_vectors:
+        weighted_sem = np.sum(sem_vectors, axis=0) / sum_weights
+        weighted_ac = np.sum(ac_vectors, axis=0) / sum_weights
+    else:
+        return user.long_term_semantic, user.long_term_acoustic
     # Blend context with baseline
     ALPHA = 0.7
     if user.long_term_semantic:
@@ -400,14 +395,12 @@ def update_global_metrics():
     Run every 10 minutes via Celery Beat to recalculate global clip performance.
     Formula punishes older videos that stop accumulating engagement.
     """
-    from django.db import connection
     
     query = """
     UPDATE app_1_audioclip 
     SET engagement_velocity = 
-        (likes + (shares * 2)) / POWER(EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 + 2.0, 1.5)
+        LEAST((likes + (shares * 2)) / POWER(EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 + 2.0, 1.5)/100.0, 1.0) -- Normalize to 0-1 range
     WHERE status = 'ready';
-    SET engagement_velocity = LEAST(engagement_velocity / 100.0, 1.0); -- Normalize to 0-1 range
     """
     query2 = """    
     UPDATE app_1_audioclip SET avg_completion_rate = (
