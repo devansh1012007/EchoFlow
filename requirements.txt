@@ -1,4 +1,4 @@
-djando
+django
 djangorestframework
 psycopg2-binary
 pgvector
