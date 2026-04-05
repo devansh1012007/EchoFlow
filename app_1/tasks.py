@@ -22,6 +22,15 @@ from django.db.models.functions import ExtractEpoch, Now
 from django.core.cache import cache
 from pgvector.django import CosineDistance
 from .models import AudioClip, UserInteraction, User
+import math
+import random
+import numpy as np
+from django.utils import timezone
+from django.db.models import F, ExpressionWrapper, FloatField
+from pgvector.django import CosineDistance
+from celery import shared_task
+from django.core.cache import cache
+from .models import User, AudioClip, UserInteraction
 
 
 
@@ -75,8 +84,8 @@ def process_audio_to_hls(clip_id):
     input_file_path = clip.original_file.path
 
     # 1. Acoustic Vector Extraction
-    y, sr = librosa.load(input_file_path, sr=22050)
-    clip.acoustic_vector = extract_acoustic_vector(y, sr)
+    y, sr = librosa.load(input_file_path)
+    clip.acoustic_vector = extract_acoustic_vector(y)
     
     # CRITICAL FIX: Extract exact duration for completion_rate math
     clip.duration_ms = int(librosa.get_duration(y=y, sr=sr) * 1000)
@@ -105,7 +114,8 @@ def process_audio_to_hls(clip_id):
             ]
         )
         clip.tags = json.loads(tag_response.choices[0].message.content)
-        
+        clip.save()############## not sure
+
     except Exception as e:
         print(f"AI Processing Failed: {e}")
         # In production, you would log this to Sentry and potentially retry
@@ -188,9 +198,9 @@ def calculate_dynamic_user_vector(user_id):
 
     # Extract the vectors
     vectors = [
-        np.array(interaction.clip.vibe_vector) 
+        np.array(interaction.clip.semantic_vector)
         for interaction in recent_positive_interactions 
-        if interaction.clip.vibe_vector is not None
+        if interaction.clip.semantic_vector is not None
     ]
     
     if not vectors:
@@ -271,7 +281,7 @@ def refill_user_feed(user_id, count=50):
     if redis_client.llen(redis_key) >= 20:
         return "Queue sufficient."
 
-    seen_ids = list(UserInteraction.objects.filter(user=user).values_list('clip_id', flat=True))
+    seen_ids = list(UserInteraction.objects.filter(user=user).values_list('clip_id', flat=True, created_at__gte=timezone.now() - timedelta(days=30)))
     queued_ids = [vid.decode('utf-8') for vid in redis_client.lrange(redis_key, 0, -1)]
     seen_ids.extend(queued_ids)
 
@@ -327,43 +337,6 @@ def refill_user_feed(user_id, count=50):
     redis_client.rpush(redis_key, *clip_ids_to_push)
 
     return f"Added {len(clip_ids_to_push)} composite-ranked clips."
-
-@shared_task
-def update_long_term_vectors():
-    """Run this periodically (e.g., daily) via celery-beat to prevent vector stagnation."""
-    active_users = User.objects.filter(
-        userinteraction__created_at__gte=timezone.now() - timedelta(days=1)
-    ).distinct()
-
-    for user in active_users:
-        interactions = UserInteraction.objects.filter(
-            user=user, 
-            interaction_type__in=['like', 'share'], 
-            is_active=True
-        ).select_related('clip').order_by('-updated_at')[:100]
-
-        if not interactions:
-            continue
-            
-        sem_vectors = [np.array(i.clip.semantic_vector) for i in interactions if i.clip.semantic_vector]
-        ac_vectors = [np.array(i.clip.acoustic_vector) for i in interactions if i.clip.acoustic_vector]
-
-        if sem_vectors:
-            user.long_term_semantic = np.mean(sem_vectors, axis=0).tolist()
-        if ac_vectors:
-            user.long_term_acoustic = np.mean(ac_vectors, axis=0).tolist()
-        
-        user.save(update_fields=['long_term_semantic', 'long_term_acoustic'])
-
-import math
-import random
-import numpy as np
-from django.utils import timezone
-from django.db.models import F, ExpressionWrapper, FloatField
-from pgvector.django import CosineDistance
-from celery import shared_task
-from django.core.cache import cache
-from .models import User, AudioClip, UserInteraction
 
 def calculate_time_decayed_vectors(user, limit=50):
     recent_interactions = UserInteraction.objects.filter(
@@ -434,9 +407,17 @@ def update_global_metrics():
     SET engagement_velocity = 
         (likes + (shares * 2)) / POWER(EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 + 2.0, 1.5)
     WHERE status = 'ready';
+    SET engagement_velocity = LEAST(engagement_velocity / 100.0, 1.0); -- Normalize to 0-1 range
+    """
+    query2 = """    
+    UPDATE app_1_audioclip SET avg_completion_rate = (
+    SELECT AVG(completion_rate) FROM app_1_userinteraction
+    WHERE clip_id = app_1_audioclip.id AND interaction_type = 'view'
+) WHERE status = 'ready';
     """
     with connection.cursor() as cursor:
         cursor.execute(query)
+        cursor.execute(query2)
 
 @shared_task
 def evolve_long_term_user_baselines():
@@ -444,10 +425,12 @@ def evolve_long_term_user_baselines():
     Run every 24 hours at 3:00 AM.
     Prevents the user's long-term vector from stagnating indefinitely.
     """
-    for user in User.objects.filter(is_active=True).iterator():
+    users_to_update = []
+    for user in User.objects.filter(is_active=True).iterator(chunk_size=100):
         new_sem, new_ac = calculate_time_decayed_vectors(user, limit=500)
         user.long_term_semantic = new_sem
         user.long_term_acoustic = new_ac
-        user.save(update_fields=['long_term_semantic', 'long_term_acoustic'])
+        users_to_update.append(user)
+    User.objects.bulk_update(users_to_update, ['long_term_semantic', 'long_term_acoustic'], batch_size=100)
 
 

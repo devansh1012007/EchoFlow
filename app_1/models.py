@@ -111,13 +111,11 @@ class UserInteraction(models.Model):
     
     # New fields to fix re-likes and track completion
     is_active = models.BooleanField(default=True)
-    completion_rate = models.FloatField(null=True, blank=True) 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     watch_time_ms = models.IntegerField(default=0)
-    completion_rate = models.FloatField(default=0.0) 
-    is_active = models.BooleanField(default=True)
+    completion_rate = models.FloatField(default=0.0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -14,7 +14,7 @@ import time
 import logging
 import uuid
 import os
-from .tasks import process_audio_to_hls, calculate_blended_query_vectors
+from .tasks import process_audio_to_hls, calculate_time_decayed_vectors
 
 # Import Models and Serializers
 from .models import (
@@ -22,7 +22,7 @@ from .models import (
 )
 from .serializers import (
     AudioUploadSerializer, FeedClipSerializer, 
-    CommentSerializer, SharedClipsSerializer, SkipActionSerializer
+    CommentSerializer, ShareEventSerializer, SkipActionSerializer
 )
 
 User = get_user_model()
@@ -202,7 +202,8 @@ class FeedViewSet(viewsets.ReadOnlyModelViewSet):
         user_like_subquery = UserInteraction.objects.filter(
             clip=OuterRef('pk'),
             user=user,
-            interaction_type='like'
+            interaction_type='like',
+            is_active=True
         )
 
         return AudioClip.objects.filter(status='ready').annotate(
@@ -399,11 +400,11 @@ class ShareViewSet(viewsets.ModelViewSet):
     - Each entry: {sender_id, sender_name, clip_id, date, time}
     - Enables efficient inbox queries without separate join tables
     """
-    serializer_class = SharedClipsSerializer
+    serializer_class = ShareEventSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return ShareEvent.objects.filter(owner=self.request.user)
+        return ShareEvent.objects.filter(sender=self.request.user)
 
     @action(detail=True, methods=['post'], url_path='send-share')
     def send_share(self, request, pk=None):
@@ -456,7 +457,7 @@ class ShareViewSet(viewsets.ModelViewSet):
         )
         # Model save() override handles the +1 increment automatically
 
-        target_data, _ = ShareEvent.objects.get_or_create(owner=receiver)
+        target_data, _ = ShareEvent.objects.get_or_create(receiver=receiver)
         
         now = timezone.now()
         new_share = {
@@ -474,8 +475,6 @@ class ShareViewSet(viewsets.ModelViewSet):
             defaults={'is_active': True}
         )
         
-        # 3. Update global clip velocity metric
-        AudioClip.objects.filter(pk=pk).update(shares=F('shares') + 1)
         current_received = target_data.received or []
         current_received.append(new_share)
         target_data.received = current_received
@@ -677,7 +676,7 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
         queryset = AudioClip.objects.filter(status='ready', category__iexact=category)
         
         # Get their highly personalized blended vector
-        sem_query, ac_query = calculate_blended_query_vectors(user)
+        sem_query, ac_query = calculate_time_decayed_vectors(user)
         
         if sem_query and ac_query:
             # Sort the category by their specific AI vector preference
