@@ -30,6 +30,21 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 def extract_acoustic_vector(file_path):
     """
     Extracts exactly 128 acoustic features representing the "vibe" of the audio.
+    
+    ALGORITHM: Acoustic Feature Extraction for Audio "Vibe" Matching
+    This function uses librosa to extract multi-dimensional audio characteristics:
+    - MFCC (40 dims): Captures timbre and voice texture for speaker/instrument recognition
+    - Chroma (12 dims): Captures harmonic content and musical pitch characteristics
+    - Mel Spectrogram (76 dims): Captures energy distribution across frequency ranges
+    
+    These 128 dimensions create a normalized vector used for finding audio with similar acoustic properties.
+    The normalization ensures consistent cosine similarity calculations across the platform.
+    
+    Args:
+        file_path (str): Path to the audio file to process
+        
+    Returns:
+        list: 128-dimensional normalized audio feature vector
     """
     # Load audio (downsample to 22050Hz for faster processing)
     y, sr = librosa.load(file_path, sr=22050)
