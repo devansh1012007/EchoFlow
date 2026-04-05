@@ -28,9 +28,8 @@ from pgvector.django import CosineDistance # Fixed import
 from .models import AudioClip, UserInteraction, ShareEvent, Comment
 from .serializers import FeedClipSerializer, SkipActionSerializer, InteractionTelemetrySerializer, CommentSerializer, ShareEventSerializer
 from .tasks import process_audio_to_hls, refill_user_feed
-
 from .tasks import process_audio_to_hls, calculate_time_decayed_vectors
-
+from django.db import transaction
 # Import Models and Serializers
 from .models import (
     AudioClip, UserInteraction, ShareEvent, Comment
@@ -107,7 +106,8 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
         clip = serializer.save()
 
         # TODO: Trigger Celery Task here
-        process_audio_to_hls.delay(clip.id)
+        #process_audio_to_hls.delay(clip.id)
+        transaction.on_commit(lambda: process_audio_to_hls.delay(clip.id))
 
         headers = self.get_success_headers(serializer.data)
         return Response(

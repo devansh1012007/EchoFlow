@@ -7,6 +7,7 @@ from django.db.models import F
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from pgvector.django import VectorField
+from pgvector.django import HnswIndex
 #from django.contrib.auth.models import User
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,28 @@ class AudioClip(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     def __str__(self):
         return f"{self.title} by {self.creator.username}"
+    class Meta:
+        indexes = [
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['status', '-engagement_velocity']),
+            models.Index(fields=['category', '-likes']),
+            HnswIndex(
+                name='semantic_vector_index',
+                fields=['semantic_vector'],
+                m=16,
+                ef_construction=64,
+                opclasses=['vector_cosine_ops']
+            ),
+
+            # Repeat for acoustic_vector
+            HnswIndex(
+                name='acoustic_vector_index',
+                fields=['acoustic_vector'],
+                m=16,
+                ef_construction=64,
+                opclasses=['vector_cosine_ops']
+            ),
+        ]   
 
 class Comment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
