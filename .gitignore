@@ -1,2 +1,6 @@
 *.env
 /hidden folder
+/app_1/__pycache__
+/app_1/migrations
+/media
+/EchoFlow/__pycache__
