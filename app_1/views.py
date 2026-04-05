@@ -99,6 +99,8 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
     serializer_class = AudioUploadSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [parsers.MultiPartParser, parsers.FormParser]
+    def get_queryset(self):
+        return AudioClip.objects.filter(creator=self.request.user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -136,7 +138,7 @@ class FastFeedViewSet(viewsets.ViewSet):
         
         if not clip_ids_bytes:
             # Fixed: Calling the correct feed refill task
-            refill_user_feed(user_id, count=10) 
+            refill_user_feed.delay(user_id, count=10) 
             refill_user_feed.delay(user_id, count=40) 
             clip_ids_bytes = redis_client.lpop(redis_key, 10)
             
@@ -409,7 +411,7 @@ class ShareViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return ShareEvent.objects.filter(sender=self.request.user)
+        return ShareEvent.objects.filter(receiver=self.request.user)
 
     @action(detail=True, methods=['post'], url_path='send-share')
     def send_share(self, request, pk=None):
@@ -461,7 +463,7 @@ class ShareViewSet(viewsets.ModelViewSet):
             interaction_type='share'
         )
         # Model save() override handles the +1 increment automatically
-
+        '''    
         target_data, _ = ShareEvent.objects.get_or_create(receiver=receiver)
         
         now = timezone.now()
@@ -482,7 +484,7 @@ class ShareViewSet(viewsets.ModelViewSet):
         current_received.append(new_share)
         target_data.received = current_received
         target_data.save()
-        
+        '''
         return Response({'status': 'shared successfully'}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['delete'], url_path='share-delete')
@@ -750,7 +752,7 @@ class TagsViewSet(viewsets.ViewSet):
         
         # Find the top 100 most liked clips across those selected tags
         baseline_clips = AudioClip.objects.filter(
-            category__in=selected_tags,
+            tags__overlap=selected_tags,
             semantic_vector__isnull=False,
             acoustic_vector__isnull=False
         ).order_by('-likes')[:100]

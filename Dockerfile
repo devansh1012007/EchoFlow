@@ -1,22 +1,24 @@
+# Start with your chosen Python base image
 FROM python:3.11-slim
 
-# Install system dependencies
-# ffmpeg: for HLS streaming
-# libpq-dev: for PostgreSQL connection
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    libpq-dev \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+# Prevent Python from writing pyc files and buffer stdout/stderr
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
 
+# Set the working directory
 WORKDIR /app
 
-# Install Python requirements
-COPY requirements.txt .
+# CRITICAL SYSTEM DEPENDENCIES
+# Update the package list and install ffmpeg and libsndfile1
+# The -y flag automatically answers 'yes' to the installation prompts
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/* # Note: rm -rf /var/lib/apt/lists/* is a standard Docker optimization to keep the image size small
+
+# Install Python dependencies
+COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the code
-COPY . .
-
-# Expose port 8000 for Django
-EXPOSE 8000
+# Copy the rest of the application code
+COPY . /app/

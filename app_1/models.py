@@ -47,6 +47,13 @@ class AudioClip(models.Model):
     
     original_file = models.FileField(upload_to='uploads/%Y/%m/%d/', null=True)
     hls_playlist_url = models.CharField(max_length=500, blank=True, null=True)
+    # Provenance and licensing metadata for scraper imports
+    source_name = models.CharField(max_length=100, blank=True, null=True)
+    source_url = models.CharField(max_length=500, blank=True, null=True)
+    license = models.CharField(max_length=100, blank=True, null=True)
+    attribution_text = models.CharField(max_length=500, blank=True, null=True)
+    imported_via_scraper = models.BooleanField(default=False)
+    original_source_id = models.CharField(max_length=255, blank=True, null=True)
     
     # Global Metrics & Telemetry Context
     duration_ms = models.IntegerField(default=0) 
@@ -138,7 +145,7 @@ class UserInteraction(models.Model):
     
     # New fields to fix re-likes and track completion
     is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    #created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     watch_time_ms = models.IntegerField(default=0)

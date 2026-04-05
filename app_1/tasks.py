@@ -36,7 +36,7 @@ def get_openai_client():
     return OpenAI(api_key=OPENAI_API_KEY)
 
 
-def extract_acoustic_vector(file_path):
+def extract_acoustic_vector(y,sr):
     """
     Extracts exactly 128 acoustic features representing the "vibe" of the audio.
     
@@ -56,7 +56,7 @@ def extract_acoustic_vector(file_path):
         list: 128-dimensional normalized audio feature vector
     """
     # Load audio (downsample to 22050Hz for faster processing)
-    y, sr = librosa.load(file_path, sr=22050)
+    #y, sr = librosa.load(file_path, sr=22050)
     
     # 1. Mel-frequency cepstral coefficients (Timbre/Voice texture) - 40 dims
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40).mean(axis=1)
@@ -84,15 +84,15 @@ def process_audio_to_hls(clip_id):
     input_file_path = clip.original_file.path
 
     # 1. Acoustic Vector Extraction
-    y, sr = librosa.load(input_file_path)
-    clip.acoustic_vector = extract_acoustic_vector(input_file_path)
+    y, sr = librosa.load(input_file_path, sr=22050)
+    clip.acoustic_vector = extract_acoustic_vector(y, sr)
     
     # CRITICAL FIX: Extract exact duration for completion_rate math
     clip.duration_ms = int(librosa.get_duration(y=y, sr=sr) * 1000)
 
     clip.save(update_fields=['acoustic_vector', 'duration_ms'])
     
-    # 1. AUDIO TO TEXT (Whisper)
+    # 2. AUDIO TO TEXT (Whisper)
     try:
         segments, info = whisper_model.transcribe(input_file_path, beam_size=5)
         transcript_text = " ".join([segment.text for segment in segments]).strip()
@@ -416,9 +416,10 @@ def calculate_time_decayed_vectors(user, limit=50):
             intent_weight = -0.5 
 
         final_weight = time_weight * comp_weight * intent_weight
-
-        sem_vectors.append(np.array(interaction.clip.semantic_vector) * final_weight)
-        ac_vectors.append(np.array(interaction.clip.acoustic_vector) * final_weight)
+        if ac_vectors:
+            ac_vectors.append(np.array(interaction.clip.acoustic_vector) * final_weight)
+        if sem_vectors:
+            sem_vectors.append(np.array(interaction.clip.semantic_vector) * final_weight)
         weights.append(final_weight)
 
     sum_weights = sum(weights)
@@ -449,19 +450,25 @@ def update_global_metrics():
     Run every 10 minutes via Celery Beat to recalculate global clip performance.
     Formula punishes older videos that stop accumulating engagement.
     """
-    
+    # convert to orm
+    AudioClip._meta.db_table ######## # Just to ensure the table name is correct for raw SQL, but we will convert to ORM below
     query = """
     UPDATE app_1_audioclip 
     SET engagement_velocity = 
         LEAST((likes + (shares * 2)) / POWER(EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 + 2.0, 1.5)/100.0, 1.0) -- Normalize to 0-1 range
     WHERE status = 'ready';
     """
+    UserInteraction._meta.db_table ######### just to ensure the table name is correct for raw SQL, but we will convert to ORM below
+    # convert to orm 
+
     query2 = """    
     UPDATE app_1_audioclip SET avg_completion_rate = (
     SELECT AVG(completion_rate) FROM app_1_userinteraction
     WHERE clip_id = app_1_audioclip.id AND interaction_type = 'view'
 ) WHERE status = 'ready';
     """
+    
+
     with connection.cursor() as cursor:
         cursor.execute(query)
         cursor.execute(query2)
@@ -475,9 +482,79 @@ def evolve_long_term_user_baselines():
     users_to_update = []
     for user in User.objects.filter(is_active=True).iterator(chunk_size=100):
         new_sem, new_ac = calculate_time_decayed_vectors(user, limit=500)
-        user.long_term_semantic = new_sem
-        user.long_term_acoustic = new_ac
+        if new_sem is not None:            
+            user.long_term_semantic = new_sem 
+            user.long_term_acoustic = new_ac
         users_to_update.append(user)
     User.objects.bulk_update(users_to_update, ['long_term_semantic', 'long_term_acoustic'], batch_size=100)
+
+
+@shared_task
+def scrape_and_import(source_name, limit=5, clip_length=300):
+    """Celery task wrapper to run a scraper source and import clips.
+
+    This task delegates to the source connectors and uses the local
+    downloader/normalizer/uploader to create `AudioClip` records and
+    then triggers `process_audio_to_hls` for each created clip.
+    """
+    from app_1.scrapers.sources import SOURCES
+    module = SOURCES.get(source_name)
+    if not module:
+        raise RuntimeError(f"Unknown source: {source_name}")
+
+    from django.contrib.auth import get_user_model
+    UserModel = get_user_model()
+    user = UserModel.objects.filter(is_superuser=True).first()
+    if not user:
+        user = UserModel.objects.create_user(username='scraper')
+        user.set_unusable_password()
+        user.save()
+
+    from app_1.scrapers import downloader, normalizer, uploader
+    import tempfile
+
+    items = module.fetch_audio(limit=limit)
+    for item in items:
+        url = item.get('url')
+        title = item.get('title') or 'scraped audio'
+        page = item.get('page_url') or ''
+        license = item.get('license') or 'unknown'
+        original_id = item.get('id')
+
+        local_input = None
+        tmp_out = None
+        try:
+            if url.startswith('file://'):
+                local_input = url[len('file://'):]
+            else:
+                local_input = downloader.download_audio(url)
+
+            tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3').name
+            normalizer.normalize_and_trim(local_input, tmp_out, max_seconds=clip_length, target_format='mp3')
+
+            clip = uploader.save_clip(
+                user=user,
+                title=title,
+                source_name=source_name,
+                source_url=page,
+                license=license,
+                attribution_text=page,
+                local_file_path=tmp_out,
+                original_source_id=original_id,
+            )
+
+            process_audio_to_hls.delay(str(clip.id))
+            print(f'Imported clip {clip.id} from {source_name}')
+
+        except Exception as e:
+            print(f'Failed to import {url}: {e}')
+
+        finally:
+            for p in (local_input, tmp_out):
+                try:
+                    if p and os.path.exists(p) and not p.startswith(settings.MEDIA_ROOT):
+                        os.remove(p)
+                except Exception:
+                    pass
 
 
