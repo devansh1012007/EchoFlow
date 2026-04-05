@@ -16,7 +16,13 @@ from django.core.cache import cache
 from pgvector.django import CosineDistance
 from openai import OpenAI
 from .models import AudioClip, UserInteraction, User
+from faster_whisper import WhisperModel
+from sentence_transformers import SentenceTransformer
+from keybert import KeyBERT
 
+whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+kw_model = KeyBERT()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 def get_openai_client():
@@ -85,8 +91,62 @@ def process_audio_to_hls(clip_id):
     clip.duration_ms = int(librosa.get_duration(y=y, sr=sr) * 1000)
 
     clip.save(update_fields=['acoustic_vector', 'duration_ms'])
+    
     # 1. AUDIO TO TEXT (Whisper)
     try:
+        segments, info = whisper_model.transcribe(input_file_path, beam_size=5)
+        transcript_text = " ".join([segment.text for segment in segments]).strip()
+        
+        # B. Semantic Vector via sentence-transformers
+        if transcript_text:
+            # encode() returns a numpy array
+            vector = embedding_model.encode(transcript_text)
+            clip.semantic_vector = vector.tolist()
+        # Extracts top 3 unigrams (single words)
+            keywords = kw_model.extract_keywords(
+                transcript_text, 
+                keyphrase_ngram_range=(1, 1), 
+                stop_words='english', 
+                top_n=3
+            )
+            # kw_model returns a list of tuples: [('music', 0.8), ('study', 0.6)]
+            clip.tags = [kw[0] for kw in keywords]
+        else:
+            # Fallback for purely instrumental tracks with no vocals
+            clip.semantic_vector = [0.0] * 384
+            clip.tags = ["instrumental"]
+    except Exception as e:
+        print(f"Local AI Processing Failed: {e}")
+        clip.status = 'failed'
+        clip.save()
+        return
+    
+    output_dir = os.path.join(settings.MEDIA_ROOT, 'hls', str(clip.id))
+    os.makedirs(output_dir, exist_ok=True)
+    
+    command = [
+        'ffmpeg', '-y', '-i', input_file_path,
+        '-c:a', 'aac', '-ar', '44100',
+        '-map', '0:a', '-map', '0:a', '-map', '0:a',
+        '-b:a:0', '192k', '-b:a:1', '128k', '-b:a:2', '64k',
+        '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod',
+        '-var_stream_map', 'a:0,agroup:audio,default:yes a:1,agroup:audio a:2,agroup:audio',
+        '-master_pl_name', 'master.m3u8',
+        os.path.join(output_dir, '%v', 'index.m3u8')
+    ]
+
+    try:
+        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        clip.hls_playlist_url = f"/media/hls/{clip.id}/master.m3u8"
+        clip.status = 'ready'
+        clip.save()
+    except subprocess.CalledProcessError as e:
+        clip.status = 'failed'
+        clip.save()
+        print(f"FFmpeg Error: {e.stderr.decode()}")
+    
+    # for when i will have money for API
+    '''try:
         client = get_openai_client()
         with open(input_file_path, "rb") as audio_file:
             transcript_response = client.audio.transcriptions.create(
@@ -166,6 +226,7 @@ def process_audio_to_hls(clip_id):
         clip.status = 'failed'
         clip.save()
         print(f"FFmpeg Error: {e.stderr.decode()}")
+    '''
 
 
 

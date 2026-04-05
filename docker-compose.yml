@@ -77,6 +77,7 @@ services:
     command: celery -A EchoFlow worker -Q heavy_media --concurrency=2 --loglevel=info
     volumes:
       - media_data:/app/media
+      - huggingface_cache:/root/.cache/huggingface
     depends_on:
       - db
       - redis

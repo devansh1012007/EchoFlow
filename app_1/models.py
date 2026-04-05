@@ -23,7 +23,8 @@ else:
 class User(AbstractUser):
     encrypted_email = models.TextField(unique=True, null=True, blank=True)
     following = models.ManyToManyField('self', symmetrical=False, related_name='followers', blank=True)
-    long_term_semantic = VectorField(dimensions=1536, null=True, blank=True)
+    #long_term_semantic = VectorField(dimensions=1536, null=True, blank=True)
+    long_term_semantic = VectorField(dimensions=384, null=True, blank=True)
     long_term_acoustic = VectorField(dimensions=128, null=True, blank=True)
     
     # nOT SURE ABOUT THIS, MAYBE FOR FUTURE USE?
@@ -58,7 +59,8 @@ class AudioClip(models.Model):
     
     # AI Intelligence (vibe_vector completely removed)
     tags = models.JSONField(default=list, blank=True)
-    semantic_vector = VectorField(dimensions=1536, null=True, blank=True)
+    #semantic_vector = VectorField(dimensions=1536, null=True, blank=True)
+    semantic_vector = VectorField(dimensions=384, null=True, blank=True)
     acoustic_vector = VectorField(dimensions=128, null=True, blank=True)
 
     status = models.CharField(max_length=20, default='processing')

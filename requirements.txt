@@ -30,3 +30,6 @@ django-storages
 boto3
 librosa
 numpy
+faster-whisper
+sentence-transformers
+keybert
