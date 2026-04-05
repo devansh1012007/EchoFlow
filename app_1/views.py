@@ -7,7 +7,15 @@ from django.shortcuts import get_object_or_404
 from django.db.models import F, Exists, OuterRef
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-
+import numpy as np
+import json
+import redis
+import time
+import logging
+import uuid
+import os
+from .tasks import process_audio_to_hls, calculate_blended_query_vectors
+from .utils import CosineDistance
 # Import Models and Serializers
 from .models import (
     AudioClip, UserInteraction, SharedClips, Comment

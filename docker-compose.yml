@@ -61,6 +61,23 @@ services:
     environment:
       - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
       - REDIS_URL=redis://redis:6379/1
+  
+  celery_feed:
+    build: .
+    command: celery -A EchoFlow worker -Q fast_feed --concurrency=4 --loglevel=info
+    depends_on:
+      - db
+      - redis
+
+  # Worker dedicated to CPU-heavy AI audio extraction
+  celery_media:
+    build: .
+    command: celery -A EchoFlow worker -Q heavy_media --concurrency=2 --loglevel=info
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      - db
+      - redis
 
 # Define persistent storage
 volumes:

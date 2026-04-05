@@ -108,7 +108,10 @@ CACHES = {
         }
     }
 }
-
+CELERY_TASK_ROUTES = {
+    'app_1.tasks.process_audio_to_hls': {'queue': 'heavy_media'},
+    'app_1.tasks.refill_user_feed': {'queue': 'fast_feed'},
+}
 # 3. CELERY CONFIGURATION
 CELERY_BROKER_URL = os.getenv("REDIS_URL")
 CELERY_RESULT_BACKEND = os.getenv("REDIS_URL")

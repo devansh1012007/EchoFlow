@@ -224,31 +224,56 @@ def calculate_blended_query_vectors(user):
 
 
 
+import random
+
 @shared_task
 def refill_user_feed(user_id, count=50):
+    user = User.objects.get(id=user_id)
     redis_key = f"user_feed:{user_id}"
     redis_client = cache.client.get_client()
-    user = User.objects.get(id=user_id)
-    seen_ids = list(UserInteraction.objects.filter(user=user).values_list('clip_id', flat=True))
-    
-    sem_query, ac_query = calculate_blended_query_vectors(user)
 
-    # The Addictive Query: Combining Semantic (Meaning) and Acoustic (Vibe) distances
-    queryset = AudioClip.objects.filter(status='ready').exclude(id__in=seen_ids)
-    
+    if redis_client.llen(redis_key) >= 20:
+        return "Queue sufficient."
+
+    seen_ids = list(UserInteraction.objects.filter(user=user).values_list('clip_id', flat=True))
+    queued_ids = [vid.decode('utf-8') for vid in redis_client.lrange(redis_key, 0, -1)]
+    seen_ids.extend(queued_ids)
+
+    sem_query, ac_query = calculate_blended_query_vectors(user)
+    base_queryset = AudioClip.objects.filter(status='ready').exclude(id__in=seen_ids)
+
+    clip_ids_to_push = []
+
     if sem_query and ac_query:
-        # We calculate the combined distance in PostgreSQL natively
-        queryset = queryset.annotate(
+        # 80% EXPLOIT: Highly personalized vector matching
+        exploit_count = int(count * 0.8)
+        exploit_clips = base_queryset.annotate(
             combined_distance=(
                 CosineDistance('semantic_vector', sem_query) + 
                 CosineDistance('acoustic_vector', ac_query)
             )
-        ).order_by('combined_distance')
-    
-    new_clips = queryset[:count]
-    # Push to Redis
-    clip_ids_to_push = [str(clip.id) for clip in new_clips]
+        ).order_by('combined_distance')[:exploit_count]
+        
+        clip_ids_to_push.extend([str(c.id) for c in exploit_clips])
+
+        # 20% EXPLORE: Globally viral content outside their vector neighborhood
+        explore_count = count - exploit_count
+        explore_clips = base_queryset.exclude(
+            id__in=[c.id for c in exploit_clips]
+        ).order_by('-shares', '-likes')[:explore_count]
+
+        clip_ids_to_push.extend([str(c.id) for c in explore_clips])
+    else:
+        # Cold Start: 100% Viral
+        cold_clips = base_queryset.order_by('-shares', '-created_at')[:count]
+        clip_ids_to_push.extend([str(c.id) for c in cold_clips])
+
+    if not clip_ids_to_push:
+        return "No new clips."
+
+    # Shuffle the final array so the user doesn't realize the last 10 clips are random
+    random.shuffle(clip_ids_to_push)
     redis_client.rpush(redis_key, *clip_ids_to_push)
 
-    return f"Added {len(clip_ids_to_push)} vector-matched clips."
+    return f"Added {len(clip_ids_to_push)} blended clips."
 
