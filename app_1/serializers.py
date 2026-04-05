@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import AudioClip, UserInteraction, SharedClips, Comment
+from .models import AudioClip, UserInteraction, ShareEvent, Comment
 
 User = get_user_model()
 
@@ -54,12 +54,12 @@ class SkipActionSerializer(serializers.Serializer):
 
 class ShareActionSerializer(serializers.Serializer):
     receiver_id = serializers.IntegerField(required=True)
-
+'''
 class SharedClipsSerializer(serializers.ModelSerializer):
     received_clips = serializers.JSONField(source='received', read_only=True)
     class Meta:
         model = SharedClips
-        fields = ['received_clips']
+        fields = ['received_clips']'''
 
 class CommentSerializer(serializers.ModelSerializer):
     author_username = serializers.CharField(source='author.username', read_only=True)
@@ -80,9 +80,12 @@ class CommentSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
     
 class InteractionTelemetrySerializer(serializers.Serializer):
-    """
-    Replaces SkipActionSerializer. The frontend must POST to this 
-    every time a clip goes out of view.
-    """
     action_type = serializers.ChoiceField(choices=['view', 'like', 'share', 'skip'])
     watch_time_ms = serializers.IntegerField(min_value=0, required=True)
+
+class ShareEventSerializer(serializers.ModelSerializer):
+    sender_name = serializers.CharField(source='sender.username', read_only=True)
+    
+    class Meta:
+        model = ShareEvent
+        fields = ['id', 'sender_name', 'clip', 'created_at', 'is_read']

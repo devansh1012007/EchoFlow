@@ -73,8 +73,15 @@ def extract_acoustic_vector(file_path):
 def process_audio_to_hls(clip_id):
     clip = AudioClip.objects.get(id=clip_id)
     input_file_path = clip.original_file.path
-    # 1. Acoustic Vector Extraction (Local CPU)
-    clip.acoustic_vector = extract_acoustic_vector(input_file_path)
+
+    # 1. Acoustic Vector Extraction
+    y, sr = librosa.load(input_file_path, sr=22050)
+    clip.acoustic_vector = extract_acoustic_vector(y, sr)
+    
+    # CRITICAL FIX: Extract exact duration for completion_rate math
+    clip.duration_ms = int(librosa.get_duration(y=y, sr=sr) * 1000)
+
+
     # 1. AUDIO TO TEXT (Whisper)
     try:
         with open(input_file_path, "rb") as audio_file:
@@ -83,19 +90,13 @@ def process_audio_to_hls(clip_id):
                 file=audio_file
             )
         transcript_text = transcript_response.text
+        # 2. SEMANTIC VECTOR EXTRACTION (OpenAI Text Embeddings)
         clip.semantic_vector = client.embeddings.create(
         input=transcript_text, model="text-embedding-3-small"
     ).data[0].embedding
-        # 2. TEXT TO VECTOR (Embeddings)
-        # text-embedding-3-small generates exactly 1536 dimensions
-        embedding_response = client.embeddings.create(
-            input=transcript_text,
-            model="text-embedding-3-small"
-        )
-        clip.vibe_vector = embedding_response.data[0].embedding
-        
         # 3. AUTOMATED TAGGING (LLM Extraction)
         # We ask a lightweight model to categorize the transcript
+        # add pydentic model for validation in production
         tag_response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -298,7 +299,14 @@ def refill_user_feed(user_id, count=50):
         # 80% EXPLOIT: Serve highest scoring algorithmic matches
         exploit_count = int(count * 0.8)
         exploit_clips = composite_query[:exploit_count]
+        # The Follow Graph Wedge: Pull recent content from followed creators
+        followed_creators = user.following.all()
+        network_clips = base_queryset.filter(
+            creator__in=followed_creators
+        ).order_by('-created_at')[:5] # Force 5 network clips into the mix
         clip_ids_to_push.extend([str(c.id) for c in exploit_clips])
+        clip_ids_to_push.extend([str(c.id) for c in network_clips])
+        
 
         # 20% EXPLORE: Serve high velocity clips outside their vector neighborhood
         explore_count = count - exploit_count

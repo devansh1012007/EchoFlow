@@ -25,15 +25,6 @@ class User(AbstractUser):
     long_term_semantic = VectorField(dimensions=1536, null=True, blank=True)
     long_term_acoustic = VectorField(dimensions=128, null=True, blank=True)
 
-    def set_email(self, raw_email):
-        if cipher_suite:
-            self.encrypted_email = cipher_suite.encrypt(raw_email.encode()).decode()
-
-    def get_email(self):
-        if self.encrypted_email and cipher_suite:
-            return cipher_suite.decrypt(self.encrypted_email.encode()).decode()
-        return None
-
 class OwnedModel(models.Model):
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
@@ -46,33 +37,30 @@ class OwnedModel(models.Model):
 
 class AudioClip(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    # Changed to match serializer expectation, or adjust serializer. Using creator.
     creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='audio_clips')
-    
     title = models.CharField(max_length=255)
     category = models.CharField(max_length=50, blank=True)
     
     original_file = models.FileField(upload_to='uploads/%Y/%m/%d/', null=True)
     hls_playlist_url = models.CharField(max_length=500, blank=True, null=True)
     
-    # Telemetry Data
+    # Global Metrics & Telemetry Context
+    duration_ms = models.IntegerField(default=0) 
+    avg_completion_rate = models.FloatField(default=0.0) 
+    engagement_velocity = models.FloatField(default=0.0) 
+    
     likes = models.BigIntegerField(default=0)
     shares = models.BigIntegerField(default=0)
     skips = models.BigIntegerField(default=0)
-    comment_count = models.BigIntegerField(default=0) # Added to fix FieldError
+    comment_count = models.BigIntegerField(default=0)
     
-    # Intelligence Engine - Removed duplicate vibe_vector
+    # AI Intelligence (vibe_vector completely removed)
     tags = models.JSONField(default=list, blank=True)
     semantic_vector = VectorField(dimensions=1536, null=True, blank=True)
     acoustic_vector = VectorField(dimensions=128, null=True, blank=True)
 
     status = models.CharField(max_length=20, default='processing')
     created_at = models.DateTimeField(auto_now_add=True)
-
-    duration_ms = models.IntegerField(default=0) # Extract via FFmpeg during upload
-    avg_completion_rate = models.FloatField(default=0.0) # Updated via Celery Beat
-    engagement_velocity = models.FloatField(default=0.0) # Updated via Celery Beat
-    
     def __str__(self):
         return f"{self.title} by {self.creator.username}"
 
@@ -99,9 +87,15 @@ class Comment(models.Model):
             AudioClip.objects.filter(pk=self.clip.pk).update(comment_count=F('comment_count') - 1)
         super().delete(*args, **kwargs)
 
-class SharedClips(OwnedModel):
-    sent = models.JSONField(default=list, blank=True)
-    received = models.JSONField(default=list, blank=True)
+class ShareEvent(models.Model):
+    sender = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='sent_shares', on_delete=models.CASCADE)
+    receiver = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='received_shares', on_delete=models.CASCADE)
+    clip = models.ForeignKey(AudioClip, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [models.Index(fields=['receiver', '-created_at', 'is_read'])]
 
 class UserInteraction(models.Model):
     TYPES = [
@@ -120,6 +114,11 @@ class UserInteraction(models.Model):
     completion_rate = models.FloatField(null=True, blank=True) 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    watch_time_ms = models.IntegerField(default=0)
+    completion_rate = models.FloatField(default=0.0) 
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ('user', 'clip', 'interaction_type')

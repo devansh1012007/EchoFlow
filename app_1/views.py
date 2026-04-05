@@ -18,7 +18,7 @@ from .tasks import process_audio_to_hls, calculate_blended_query_vectors
 
 # Import Models and Serializers
 from .models import (
-    AudioClip, UserInteraction, SharedClips, Comment
+    AudioClip, UserInteraction, ShareEvent, Comment
 )
 from .serializers import (
     AudioUploadSerializer, FeedClipSerializer, 
@@ -115,7 +115,7 @@ from django.shortcuts import get_object_or_404
 from django.db.models import F, Exists, OuterRef, Case, When
 from django.core.cache import cache
 from pgvector.django import CosineDistance # Fixed import
-from .models import AudioClip, UserInteraction, SharedClips, Comment
+from .models import AudioClip, UserInteraction, ShareEvent, Comment
 from .serializers import FeedClipSerializer, SkipActionSerializer
 from .tasks import process_audio_to_hls, refill_user_feed
 
@@ -403,7 +403,7 @@ class ShareViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return SharedClips.objects.filter(owner=self.request.user)
+        return ShareEvent.objects.filter(owner=self.request.user)
 
     @action(detail=True, methods=['post'], url_path='send-share')
     def send_share(self, request, pk=None):
@@ -456,7 +456,7 @@ class ShareViewSet(viewsets.ModelViewSet):
         )
         # Model save() override handles the +1 increment automatically
 
-        target_data, _ = SharedClips.objects.get_or_create(owner=receiver)
+        target_data, _ = ShareEvent.objects.get_or_create(owner=receiver)
         
         now = timezone.now()
         new_share = {
@@ -466,7 +466,16 @@ class ShareViewSet(viewsets.ModelViewSet):
             "date": now.strftime("%Y-%m-%d"),
             "time": now.strftime("%H:%M"),
         }
+        ShareEvent.objects.create(sender=request.user, receiver=receiver, clip=clip)
         
+        # 2. Log the algorithmic interaction
+        UserInteraction.objects.update_or_create(
+            user=request.user, clip=clip, interaction_type='share',
+            defaults={'is_active': True}
+        )
+        
+        # 3. Update global clip velocity metric
+        AudioClip.objects.filter(pk=pk).update(shares=F('shares') + 1)
         current_received = target_data.received or []
         current_received.append(new_share)
         target_data.received = current_received
@@ -477,7 +486,7 @@ class ShareViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['delete'], url_path='share-delete')
     def share_delete(self, request, pk=None):
         user = request.user
-        shared_data = get_object_or_404(SharedClips, owner=user)
+        shared_data = get_object_or_404(ShareEvent, owner=user)
         
         current_list = shared_data.received or []
         updated_list = [item for item in current_list if str(item.get('clip_id')) != str(pk)]
@@ -487,7 +496,11 @@ class ShareViewSet(viewsets.ModelViewSet):
         
         # We DO NOT decrement AudioClip shares here. Inbox cleanup does not undo the share action.
         return Response({'status': 'deleted from inbox'}, status=status.HTTP_204_NO_CONTENT)
-
+    
+    @action(detail=True, methods=['post'], url_path='mark-read')
+    def mark_read(self, request, pk=None):
+        ShareEvent.objects.filter(pk=pk, receiver=request.user).update(is_read=True)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 # ---------------------------------------------------------
 # 6. COMMENTS LAYER
 # ---------------------------------------------------------
