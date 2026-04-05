@@ -4,7 +4,8 @@ psycopg2-binary
 pgvector
 celery
 redis
-#openai-whisper
+openai-whisper
+openai
 librosa
 django-cors-headers
 django-apscheduler
@@ -28,3 +29,5 @@ celery
 gunicorn
 django-storages
 boto3
+librosa
+numpy

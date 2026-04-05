@@ -306,10 +306,71 @@ class FollowViewSet(viewsets.ViewSet):
 # ---------------------------------------------------------
 # 8. ALGORITHM & SUGGESTION LAYER (Placeholders)
 # ---------------------------------------------------------
-class SuggestionViewSet(viewsets.ViewSet):
-    # To be implemented with pgvector and GNN integration
-    pass
+class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Endpoint: GET /api/v1/suggestions/explore/?category=comedy
+    """
+    serializer_class = FeedClipSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = FeedCursorPagination
 
-class TagsViewSet(viewsets.ModelViewSet):
-    # To be implemented for static genre tag selections
-    pass
+    def get_queryset(self):
+        user = self.request.user
+        category = self.request.query_params.get('category')
+        
+        # Base filter by exact category
+        queryset = AudioClip.objects.filter(status='ready', category__iexact=category)
+        
+        # Get their highly personalized blended vector
+        sem_query, ac_query = calculate_blended_query_vectors(user)
+        
+        if sem_query and ac_query:
+            # Sort the category by their specific AI vector preference
+            queryset = queryset.annotate(
+                combined_distance=(
+                    CosineDistance('semantic_vector', sem_query) + 
+                    CosineDistance('acoustic_vector', ac_query)
+                )
+            ).order_by('combined_distance')
+            
+        # Add the 'user_has_liked' annotation to solve the N+1 query problem
+        user_like_subquery = UserInteraction.objects.filter(
+            clip=OuterRef('pk'), user=user, interaction_type='like'
+        )
+        return queryset.annotate(user_has_liked=Exists(user_like_subquery))
+
+class TagsViewSet(viewsets.ViewSet):
+    """
+    Endpoint: POST /api/v1/tags/initialize/
+    Payload: {"selected_tags": ["science", "motivation", "lo-fi"]}
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    @action(detail=False, methods=['post'], url_path='initialize')
+    def initialize_vectors(self, request):
+        user = request.user
+        selected_tags = request.data.get('selected_tags', [])
+        
+        # Find the top 100 most liked clips across those selected tags
+        baseline_clips = AudioClip.objects.filter(
+            category__in=selected_tags,
+            semantic_vector__isnull=False,
+            acoustic_vector__isnull=False
+        ).order_by('-likes')[:100]
+        
+        if not baseline_clips:
+            return Response({"error": "Not enough data to build baseline."}, status=400)
+            
+        sem_vectors = [np.array(clip.semantic_vector) for clip in baseline_clips]
+        ac_vectors = [np.array(clip.acoustic_vector) for clip in baseline_clips]
+        
+        # Set the user's Long-Term baseline to the average of their selected tags
+        user.long_term_semantic = (np.mean(sem_vectors, axis=0)).tolist()
+        user.long_term_acoustic = (np.mean(ac_vectors, axis=0)).tolist()
+        user.save()
+        
+        # Trigger an immediate Redis feed refill using this new baseline
+        from .tasks import refill_user_feed
+        refill_user_feed.delay(user.id, count=30)
+        
+        return Response({"status": "Algorithm initialized. Feed is ready."}, status=200)

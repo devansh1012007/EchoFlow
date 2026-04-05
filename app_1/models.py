@@ -27,6 +27,9 @@ class User(AbstractUser):
     # symmetrical=False means if A follows B, B doesn't automatically follow A.
     following = models.ManyToManyField('self', symmetrical=False, related_name='followers', blank=True)
 
+    long_term_semantic = VectorField(dimensions=1536, null=True, blank=True)
+    long_term_acoustic = VectorField(dimensions=128, null=True, blank=True)
+
     def set_email(self, raw_email):
         if cipher_suite:
             self.encrypted_email = cipher_suite.encrypt(raw_email.encode()).decode()
@@ -70,7 +73,9 @@ class AudioClip(models.Model):
     # 1536 dimensions matches standard OpenAI Whisper embeddings
     vibe_vector = VectorField(dimensions=1536, null=True, blank=True)
     tags = models.JSONField(default=list, blank=True)
-    
+    semantic_vector = VectorField(dimensions=1536, null=True, blank=True)
+    acoustic_vector = VectorField(dimensions=128, null=True, blank=True)
+
     status = models.CharField(max_length=20, default='processing')
     created_at = models.DateTimeField(auto_now_add=True)
 
