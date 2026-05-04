@@ -3,3 +3,7 @@
 /media
 /pycache
 *.log
+/staticfiles
+*.db
+/__pycache__/
+*.pyc
