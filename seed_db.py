@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 # --- CONFIGURATION ---
 # Replace with a valid token from a test user you created in the Django admin
-AUTH_TOKEN = "your_test_user_auth_token_here" 
+AUTH_TOKEN = "" 
 API_ENDPOINT = "http://localhost:8005/clips/"
 
 # Seed data: List of dictionaries containing the source URL and metadata
@@ -46,7 +46,7 @@ def upload_to_echoflow(file_path, title, category):
     
     # Check your settings.py to confirm if you are using Token or Bearer auth
     headers = {
-        "Authorization": f"Token {AUTH_TOKEN}" 
+        "Authorization": AUTH_TOKEN
     }
     
     data = {

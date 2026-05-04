@@ -107,6 +107,7 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         clip = serializer.save()
         # fist v need to make sure the clip is on small size
+        
         transaction.on_commit(lambda: process_audio_to_hls.delay(clip.id))
 
         headers = self.get_success_headers(serializer.data)
@@ -159,7 +160,7 @@ class FastFeedViewSet(viewsets.ViewSet):
             "queue_health": queue_length,
             "results": serializer.data
         })
-class FeedViewSet(viewsets.ReadOnlyModelViewSet):
+'''class FeedViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Fallback slow-but-reliable feed endpoint for traditional pagination.
     
@@ -214,7 +215,7 @@ class FeedViewSet(viewsets.ReadOnlyModelViewSet):
         return AudioClip.objects.filter(status='ready').annotate(
             user_has_liked=Exists(user_like_subquery)
         )
-
+'''
 # ---------------------------------------------------------
 # 4. INTERACTION LAYER (Likes & Skips)
 # ---------------------------------------------------------
