@@ -15,8 +15,12 @@ SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY','django-insecure-637(8wp&#7+g)u&
 DEBUG = True # False
 
 ALLOWED_HOSTS = ['*'] # limit this 
-
-
+'''
+MIGRATION_MODULES = {
+    'account': None,
+    'socialaccount': None,
+}
+'''
 # Application definition
 SITE_ID = 1
 INSTALLED_APPS = [
@@ -45,6 +49,7 @@ INSTALLED_APPS = [
     'dj_rest_auth',
     #'rest_framework_simplejwt',
     'dj_rest_auth.registration',
+    'django_celery_beat',
     
     
 ]
@@ -52,6 +57,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',##
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -171,7 +177,11 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
-AUTH_USER_MODEL = 'app_1.User'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# Enable WhiteNoise's compression and caching features
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+AUTH_USER_MODEL = 'app_1.User' # for Custom user model
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {

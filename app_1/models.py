@@ -13,7 +13,7 @@ from pgvector.django import HnswIndex
 logger = logging.getLogger(__name__)
 
 # Safe Fernet Initialization with Production Warning
-FERNET_KEY = os.getenv('FIELD_ENCRYPTION_KEY')
+FERNET_KEY = 'OWltmTxL3T9Bw7nN-WCDyyb84DEcOLrZEpcWXsfJCjM='
 if FERNET_KEY:
     cipher_suite = Fernet(FERNET_KEY.encode() if isinstance(FERNET_KEY, str) else FERNET_KEY)
 else:

@@ -9,7 +9,7 @@ librosa
 django-cors-headers
 django-apscheduler
 django-allauth
-dj-rest-auth[Google]
+dj-rest-auth
 cryptography
 dotenv
 httpx
@@ -30,3 +30,5 @@ numpy
 faster-whisper
 sentence-transformers
 keybert
+django-celery-beat
+whitenoise

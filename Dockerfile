@@ -14,8 +14,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libsndfile1 \
+    libpq-dev \
+    gcc \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/* # Note: rm -rf /var/lib/apt/lists/* is a standard Docker optimization to keep the image size small
-
 # Install Python dependencies
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt

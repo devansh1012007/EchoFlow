@@ -14,3 +14,5 @@ python uvicorn ai_server:app --host 0.0.0.0 --port 8001
 docker run --rm -v db:/source -v "${PWD}:/backup" alpine tar cvf /backup/db_backup.tar /source→ for backup db 
 docker-compose up --build --force-recreate ## bulds from start
 docker-compose build --no-cache
+python manage.py migrate account zero
+docker compose exec db psql -U devansh -d echoflow_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
