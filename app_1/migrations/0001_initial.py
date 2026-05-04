@@ -5,6 +5,7 @@ import pgvector.django
 from django.conf import settings
 from django.db import migrations, models
 import uuid
+from pgvector.django import HnswIndex
 
 
 class Migration(migrations.Migration):
@@ -38,13 +39,15 @@ class Migration(migrations.Migration):
                 ('date_joined', models.DateTimeField(default=django.utils.timezone.now)),
                 ('email', models.EmailField(blank=True, max_length=254, verbose_name='email address')),
                 ('encrypted_email', models.TextField(blank=True, null=True, unique=True)),
-                ('long_term_semantic', pgvector.django.VectorField(blank=True, dimensions=1536, null=True)),
+                ('long_term_semantic', pgvector.django.VectorField(blank=True, dimensions=384, null=True)),
                 ('long_term_acoustic', pgvector.django.VectorField(blank=True, dimensions=128, null=True)),
                 ('groups', models.ManyToManyField(blank=True, related_name='user_set', to='auth.group')),
                 ('user_permissions', models.ManyToManyField(blank=True, related_name='user_set', to='auth.permission')),
                 ('following', models.ManyToManyField(blank=True, related_name='followers', to=settings.AUTH_USER_MODEL)),
             ],
-            options={'abstract': False},
+            options={'verbose_name': 'user',
+                'verbose_name_plural': 'users',
+                'abstract': False},
             managers=[('objects', django.contrib.auth.models.UserManager())],
         ),
         migrations.CreateModel(
@@ -55,6 +58,14 @@ class Migration(migrations.Migration):
                 ('category', models.CharField(blank=True, max_length=50)),
                 ('original_file', models.FileField(null=True, upload_to='uploads/%Y/%m/%d/')),
                 ('hls_playlist_url', models.CharField(blank=True, max_length=500, null=True)),
+                
+                ('source_name', models.CharField(blank=True, max_length=100, null=True)),
+                ('source_url', models.CharField(blank=True, max_length=500, null=True)),
+                ('license', models.CharField(blank=True, max_length=100, null=True)),
+                ('attribution_text', models.CharField(blank=True, max_length=500, null=True)),
+                ('imported_via_scraper', models.BooleanField(default=False)),
+                ('original_source_id', models.CharField(blank=True, max_length=255, null=True)),
+
                 ('duration_ms', models.IntegerField(default=0)),
                 ('avg_completion_rate', models.FloatField(default=0.0)),
                 ('engagement_velocity', models.FloatField(default=0.0)),
@@ -63,7 +74,7 @@ class Migration(migrations.Migration):
                 ('skips', models.BigIntegerField(default=0)),
                 ('comment_count', models.BigIntegerField(default=0)),
                 ('tags', models.JSONField(blank=True, default=list)),
-                ('semantic_vector', pgvector.django.VectorField(blank=True, dimensions=1536, null=True)),
+                ('semantic_vector', pgvector.django.VectorField(blank=True, dimensions=384, null=True)),
                 ('acoustic_vector', pgvector.django.VectorField(blank=True, dimensions=128, null=True)),
                 ('status', models.CharField(default='processing', max_length=20)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
@@ -124,4 +135,41 @@ class Migration(migrations.Migration):
             name='userinteraction',
             unique_together={('user', 'clip', 'interaction_type')},
         ),
+
+
+
+        migrations.AddIndex(
+            model_name='audioclip',
+            index=models.Index(fields=['status', '-created_at'], name='audioclip_status_created_idx'),
+        ),
+        migrations.AddIndex(
+            model_name='audioclip',
+            index=models.Index(fields=['status', '-engagement_velocity'], name='audioclip_status_eng_vel_idx'),
+        ),
+        migrations.AddIndex(
+            model_name='audioclip',
+            index=models.Index(fields=['category', '-likes'], name='audioclip_cat_likes_idx'),
+        ),
+        ## chages for vector indexing
+        migrations.AddIndex(
+            model_name='audioclip',
+            index=pgvector.django.HnswIndex(
+                ef_construction=64, 
+                m=16, 
+                name='semantic_vector_index', 
+                opclasses=['vector_cosine_ops'], 
+                fields=['semantic_vector']
+            ),
+        ),
+        migrations.AddIndex(
+            model_name='audioclip',
+            index=pgvector.django.HnswIndex(
+                ef_construction=64, 
+                m=16, 
+                name='acoustic_vector_index', 
+                opclasses=['vector_cosine_ops'], 
+                fields=['acoustic_vector']
+            ),
+        ),
+
     ]

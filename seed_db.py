@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 # --- CONFIGURATION ---
 # Replace with a valid token from a test user you created in the Django admin
 AUTH_TOKEN = "your_test_user_auth_token_here" 
-API_ENDPOINT = "http://localhost:8005/api/v1/clips/"
+API_ENDPOINT = "http://localhost:8005/clips/"
 
 # Seed data: List of dictionaries containing the source URL and metadata
 SEED_CLIPS = [

@@ -1,0 +1,4 @@
+- add logs
+- add a function to verify that the clip is under certain storage limit
+- add a frontend 
+- setup scalper 

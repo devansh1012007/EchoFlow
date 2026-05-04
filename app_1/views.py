@@ -62,7 +62,7 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
     """
     REST API endpoint for uploading new audio clips.
     
-    ENDPOINT: POST /api/v1/clips/
+    ENDPOINT: POST /clips/
     
     PURPOSE:
     - Accepts audio files from authenticated users
@@ -85,7 +85,7 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
     {
         "title": "My Audio Clip",
         "category": "music",
-        "original_file": <binary audio file>
+        "original_file": <audio file>
     }
     
     RESPONSE (202 Accepted - async processing):

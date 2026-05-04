@@ -1,3 +1,5 @@
 *.env
 /hidden folder
 /media
+/pycache
+*.log

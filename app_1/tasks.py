@@ -124,9 +124,12 @@ def extract_acoustic_vector(y,sr):
 
 @shared_task
 def process_audio_to_hls(clip_id):
+    if not clip.original_file:
+        # Log the error and exit gracefully or mark as failed
+        logger.error(f"Clip {clip_id} has no file associated. Aborting HLS process.")
+        return
     clip = AudioClip.objects.get(id=clip_id)
     input_file_path = clip.original_file.path
-
     # 1. Acoustic Vector Extraction
     y, sr = librosa.load(input_file_path, sr=22050)
     clip.acoustic_vector = extract_acoustic_vector(y, sr)
