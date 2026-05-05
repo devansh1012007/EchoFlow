@@ -17,7 +17,7 @@ import os
 from rest_framework.permissions import AllowAny
 from django.core.cache import cache
 from rest_framework.response import Response
-
+from django.db.models import Count
 from rest_framework import viewsets, permissions, status, parsers
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -37,7 +37,8 @@ from .models import (
 from .serializers import (
     AudioUploadSerializer, FeedClipSerializer, 
     CommentSerializer, ShareEventSerializer, SkipActionSerializer,
-    InteractionTelemetrySerializer,RegisterSerializer
+    InteractionTelemetrySerializer,RegisterSerializer,PublicProfileSerializer, 
+    OwnProfileSerializer, ProfileUpdateSerializer
 )
 
 
@@ -488,15 +489,42 @@ class ShareViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['delete'], url_path='share-delete')
     def share_delete(self, request, pk=None):
+        ShareEvent.objects.filter(
+            pk=pk, 
+            receiver=request.user
+        ).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    """
+    @action(detail=True, methods=['delete'], url_path='share-delete')
+    def share_delete(self, request, pk=None):
         user = request.user
         ShareEvent.objects.filter(pk=pk, receiver=request.user).delete()
         # We DO NOT decrement AudioClip shares here. Inbox cleanup does not undo the share action.
         return Response({'status': 'deleted from inbox'}, status=status.HTTP_204_NO_CONTENT)
-    
+    """
+
     @action(detail=True, methods=['post'], url_path='mark-read')
     def mark_read(self, request, pk=None):
         ShareEvent.objects.filter(pk=pk, receiver=request.user).update(is_read=True)
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=False, methods=['get'], url_path='inbox')
+    def inbox(self, request):
+        shares = ShareEvent.objects.filter(
+            receiver=request.user
+        ).select_related('sender', 'clip').order_by('-created_at')
+
+        serializer = ShareEventSerializer(shares, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], url_path='unread-count')
+    def unread_count(self, request):
+        count = ShareEvent.objects.filter(
+            receiver=request.user, 
+            is_read=False
+        ).count()
+        return Response({'unread': count})
 # ---------------------------------------------------------
 # 6. COMMENTS LAYER
 # ---------------------------------------------------------
@@ -646,7 +674,7 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
     Suggestions: Category-scoped ranking (semantic + acoustic only, no velocity)
     
     REQUEST:
-    GET /api/v1/suggestions/explore/?category=music&cursor=xyz
+    GET /suggestions/?category=music&cursor=xyz
     
     RESPONSE (paginated):
     {
@@ -670,7 +698,7 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
         category = self.request.query_params.get('category')
         
         # Base filter by exact category
-        queryset = AudioClip.objects.filter(status='ready', category__iexact=category)
+        queryset = AudioClip.objects.filter(status='ready', category=category)
         
         # Get their highly personalized blended vector
         sem_query, ac_query = calculate_time_decayed_vectors(user)
@@ -695,7 +723,7 @@ class TagsViewSet(viewsets.ViewSet):
     """
     Cold-start onboarding: Initialize user preferences from tag selection.
     
-    ENDPOINT: POST /api/v1/tags/initialize/
+    ENDPOINT: POST /tags/
     
     PURPOSE:
     - First-time user onboarding: "Pick your favorite genres"
@@ -778,3 +806,66 @@ class RegisterView(generics.CreateAPIView): # generic view for user registration
     # Everyone must be able to hit this endpoint to sign up!
     permission_classes = (AllowAny,)
     serializer_class = RegisterSerializer
+
+
+class ProfileViewSet(viewsets.ViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _annotate_user(self, user):
+        return User.objects.annotate(
+            followers_count=Count('followers', distinct=True),
+            following_count=Count('following', distinct=True),
+            uploads_count=Count('audio_clips', distinct=True)
+        ).get(pk=user.pk)
+
+    # GET /profile/me/
+    @action(detail=False, methods=['get'], url_path='me')
+    def me(self, request):
+        user = self._annotate_user(request.user)
+        serializer = OwnProfileSerializer(user, context={'request': request})
+        return Response(serializer.data)
+
+    # PATCH /profile/me/update/
+    @action(
+        detail=False,
+        methods=['patch'],
+        url_path='me/update',
+        parser_classes=[parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser]
+    )
+    def update_me(self, request):
+        serializer = ProfileUpdateSerializer(
+            request.user,
+            data=request.data,
+            partial=True,
+            context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    # GET /profile/{user_id}/
+    def retrieve(self, request, pk=None):
+        target = get_object_or_404(
+            User.objects.annotate(
+                followers_count=Count('followers', distinct=True),
+                following_count=Count('following', distinct=True),
+                uploads_count=Count('audio_clips', distinct=True)
+            ),
+            pk=pk
+        )
+        serializer = PublicProfileSerializer(target, context={'request': request})
+        return Response(serializer.data)
+
+    # GET /profile/{user_id}/clips/
+    @action(detail=True, methods=['get'], url_path='clips')
+    def user_clips(self, request, pk=None):
+        target = get_object_or_404(User, pk=pk)
+        clips = AudioClip.objects.filter(
+            creator=target,
+            status='ready'
+        ).order_by('-created_at')
+
+        paginator = FeedCursorPagination()
+        page = paginator.paginate_queryset(clips, request)
+        serializer = FeedClipSerializer(page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)

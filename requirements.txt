@@ -32,3 +32,4 @@ sentence-transformers
 keybert
 django-celery-beat
 whitenoise
+Pillow

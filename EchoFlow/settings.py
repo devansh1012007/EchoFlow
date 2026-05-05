@@ -21,6 +21,39 @@ MIGRATION_MODULES = {
     'socialaccount': None,
 }
 '''
+'''CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",   # your frontend dev
+    "http://localhost:5173",   # if using Vite
+    # "https://yourproductiondomain.com"
+]'''
+
+# Allow HLS media files specifically
+CORS_URLS_REGEX = r'^.*$'  # all URLs, or narrow to r'^/media/.*$' for HLS only
+
+CORS_ALLOW_METHODS = [
+    'GET',
+    'POST',
+    'PUT',
+    'PATCH',
+    'DELETE',
+    'OPTIONS',  # required for preflight requests
+]
+
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'authorization',
+    'content-type',
+    'origin',
+    'range',   # ← critical for HLS: browsers send Range headers for partial content
+]
+
+CORS_EXPOSE_HEADERS = [
+    'Content-Range',   # ← browser needs this to know segment boundaries
+    'Accept-Ranges',
+]
+
+# Only set True in dev — in prod use CORS_ALLOWED_ORIGINS
+CORS_ALLOW_ALL_ORIGINS = True
 # Application definition
 SITE_ID = 1
 INSTALLED_APPS = [

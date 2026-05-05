@@ -63,6 +63,7 @@ class SharedClipsSerializer(serializers.ModelSerializer):
         model = SharedClips
         fields = ['received_clips']'''
 
+
 class CommentSerializer(serializers.ModelSerializer):
     author_username = serializers.CharField(source='author.username', read_only=True)
     reply_count = serializers.SerializerMethodField()
@@ -87,10 +88,20 @@ class InteractionTelemetrySerializer(serializers.Serializer):
 
 class ShareEventSerializer(serializers.ModelSerializer):
     sender_name = serializers.CharField(source='sender.username', read_only=True)
+    clip_title = serializers.CharField(source='clip.title', read_only=True)
+    clip_hls_url = serializers.CharField(source='clip.hls_playlist_url', read_only=True)
     
     class Meta:
         model = ShareEvent
-        fields = ['id', 'sender_name', 'clip', 'created_at', 'is_read']
+        fields = [
+            'id', 
+            'sender_name', 
+            'clip',
+            'clip_title',
+            'clip_hls_url',
+            'created_at', 
+            'is_read'
+        ]
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -114,3 +125,56 @@ class RegisterSerializer(serializers.ModelSerializer):
             password=validated_data['password']
         )
         return user
+
+class PublicProfileSerializer(serializers.ModelSerializer):
+    """For viewing any user's profile"""
+    followers_count = serializers.IntegerField(read_only=True)
+    following_count = serializers.IntegerField(read_only=True)
+    uploads_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'profile_picture',
+            'followers_count', 'following_count', 'uploads_count',
+            'date_joined'
+        ]
+
+class OwnProfileSerializer(serializers.ModelSerializer):
+    """For the logged-in user's own profile — includes private data"""
+    followers_count = serializers.IntegerField(read_only=True)
+    following_count = serializers.IntegerField(read_only=True)
+    uploads_count = serializers.IntegerField(read_only=True)
+    liked_clips = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'profile_picture',
+            'followers_count', 'following_count', 'uploads_count',
+            'liked_clips', 'date_joined'
+        ]
+
+    def get_liked_clips(self, obj):
+        liked = UserInteraction.objects.filter(
+            user=obj,
+            interaction_type='like',
+            is_active=True
+        ).select_related('clip').order_by('-updated_at')[:50]
+        return FeedClipSerializer(
+            [i.clip for i in liked],
+            many=True,
+            context=self.context
+        ).data
+
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    """For PATCH — only editable fields exposed"""
+    class Meta:
+        model = User
+        fields = ['username', 'profile_picture']
+
+    def validate_username(self, value):
+        user = self.context['request'].user
+        if User.objects.exclude(pk=user.pk).filter(username=value).exists():
+            raise serializers.ValidationError("Username already taken.")
+        return value

@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     AudioUploadViewSet, FastFeedViewSet, ClipInteractionViewSet,
     ShareViewSet, CommentViewSet, FollowViewSet, 
-    TagsViewSet, SuggestionViewSet,RegisterView
+    TagsViewSet, SuggestionViewSet,RegisterView,ProfileViewSet
 )
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -16,6 +16,7 @@ router.register(r'comments', CommentViewSet, basename='comments')
 router.register(r'follow', FollowViewSet, basename='follow')
 router.register(r'tags', TagsViewSet, basename='tags')
 router.register(r'suggestions', SuggestionViewSet, basename='suggestions')
+router.register(r'profile', ProfileViewSet, basename='profile')
 
 
 urlpatterns = [

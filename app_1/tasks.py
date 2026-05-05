@@ -146,7 +146,7 @@ def process_audio_to_hls(clip_id):
     clip.duration_ms = int(librosa.get_duration(y=y, sr=sr) * 1000)
 
     clip.save(update_fields=['acoustic_vector', 'duration_ms'])
-    
+    logger.info(f"Extracted acoustic vector and duration for clip {clip_id}")
     # 2. AUDIO TO TEXT (Whisper)
     try:
         # Lazy-init models to avoid startup cost during management commands
@@ -166,6 +166,7 @@ def process_audio_to_hls(clip_id):
                 stop_words='english',
                 top_n=3,
             )
+            logger.info(f"Extracted keywords for clip {clip_id}: {keywords}")
             clip.tags = [kw[0] for kw in keywords]
         else:
             # Fallback for purely instrumental tracks with no vocals

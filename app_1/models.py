@@ -27,6 +27,8 @@ class User(AbstractUser):
     #long_term_semantic = VectorField(dimensions=1536, null=True, blank=True)
     long_term_semantic = VectorField(dimensions=384, null=True, blank=True)
     long_term_acoustic = VectorField(dimensions=128, null=True, blank=True)
+    profile_picture = models.ImageField(upload_to='avatars/', null=True, blank=True)
+    
     
     # nOT SURE ABOUT THIS, MAYBE FOR FUTURE USE?
     def save(self, *args, **kwargs):
