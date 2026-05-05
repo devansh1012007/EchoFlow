@@ -165,7 +165,7 @@ class FastFeedViewSet(viewsets.ViewSet):
     """
     Fallback slow-but-reliable feed endpoint for traditional pagination.
     
-    ENDPOINT: GET /api/v1/feed/?cursor=xxx
+    ENDPOINT: GET /feed/
     
     DIFFERENCE FROM FastFeedViewSet:
     - Uses database queries (NOT Redis cache)
@@ -251,7 +251,7 @@ class ClipInteractionViewSet(viewsets.GenericViewSet):
         """
         Register skip or view completion data.
         
-        ENDPOINT: POST /api/v1/interactions/{clip_id}/register-skip/
+        ENDPOINT: POST /interactions/{clip_id}/register-skip/
         
         PURPOSE:
         - Records how far user listened before skipping
@@ -387,9 +387,9 @@ class ShareViewSet(viewsets.ModelViewSet):
     Social sharing system: Users can send clips to each other and track sent/received clips.
     
     ENDPOINTS:
-    - GET /api/v1/share/ - Get user's shared clips inbox
-    - POST /api/v1/share/{clip_id}/send-share/ - Send a clip to another user
-    - DELETE /api/v1/share/{clip_id}/share-delete/ - Remove from inbox
+    - GET /share/ - Get user's shared clips inbox
+    - POST /share/{clip_id}/send-share/ - Send a clip to another user
+    - DELETE /share/{clip_id}/share-delete/ - Remove from inbox
     
     PURPOSE:
     - Enables peer-to-peer content discovery and viral growth
@@ -418,7 +418,7 @@ class ShareViewSet(viewsets.ModelViewSet):
         """
         Send a clip to another user (friend share).
         
-        ENDPOINT: POST /api/v1/share/{clip_id}/send-share/
+        ENDPOINT: POST /share/{clip_id}/send-share/
         
         LOGIC:
         1. Sender creates a 'share' UserInteraction (triggers share count increment)
@@ -533,9 +533,9 @@ class CommentViewSet(viewsets.ModelViewSet):
     REST API for creating, viewing, and managing nested comments on clips.
     
     ENDPOINTS:
-    - GET /api/v1/comments/?clip={clip_id} - Fetch all comments for a clip
-    - POST /api/v1/comments/ - Create new comment
-    - DELETE /api/v1/comments/{comment_id}/ - Delete a comment
+    - GET /comments/?clip={clip_id} - Fetch all comments for a clip
+    - POST /comments/ - Create new comment
+    - DELETE /comments/{comment_id}/ - Delete a comment
     
     PURPOSE:
     - Community engagement: Users discuss and share opinions on clips
@@ -549,8 +549,8 @@ class CommentViewSet(viewsets.ModelViewSet):
     - Currently collected for analytics, not ML
     
     FILTERING:
-    - Filter by clip: GET /api/v1/comments/?clip={uuid}
-    - Filter by parent: GET /api/v1/comments/?parent={comment_id} (get replies)
+    - Filter by clip: GET /comments/?clip={uuid}
+    - Filter by parent: GET /comments/?parent={comment_id} (get replies)
     
     OPTIMIZATION:
     - Uses .select_related('author') to prevent N+1 queries
@@ -579,7 +579,7 @@ class FollowViewSet(viewsets.ViewSet):
     """
     Social graph management: Users can follow/unfollow other users.
     
-    ENDPOINT: POST /api/v1/follow/{user_id}/toggle-follow/
+    ENDPOINT: POST /follow/{user_id}/toggle-follow/
     
     PURPOSE:
     - Enables users to subscribe to specific creators
@@ -635,7 +635,7 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Category-specific recommendations using user's blended preference vectors.
     
-    ENDPOINT: GET /api/v1/suggestions/explore/?category=comedy
+    ENDPOINT: GET /suggestions/explore/?category=comedy
     
     PURPOSE:
     - "Explore by Category" feature: Give user personalized picks within a category
