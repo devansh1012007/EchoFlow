@@ -1,11 +1,14 @@
 from django.urls import path, include
+from EchoFlow import settings
 from rest_framework.routers import DefaultRouter
 from .views import (
     AudioUploadViewSet, FastFeedViewSet, ClipInteractionViewSet,
     ShareViewSet, CommentViewSet, FollowViewSet, 
     TagsViewSet, SuggestionViewSet,RegisterView,ProfileViewSet
 )
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from django.conf import settings
+from django.conf.urls.static import static
 
 router = DefaultRouter()
 router.register(r'feed', FastFeedViewSet, basename='feed')
@@ -21,7 +24,8 @@ router.register(r'profile', ProfileViewSet, basename='profile')
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('register/', RegisterView.as_view(), name='register'),
-
+    path('auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('auth/register/', RegisterView.as_view(), name='register'),
+    path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    *static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT),
 ]

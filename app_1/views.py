@@ -413,6 +413,19 @@ class ShareViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return ShareEvent.objects.filter(receiver=self.request.user)
 
+    @action(detail=False, methods=['get'], url_path='find-user')
+    def find_user(self, request):
+        username = request.query_params.get('username', '').strip()
+        if not username:
+            return Response({'error': 'Username required'}, status=400)
+        try:
+            user = User.objects.get(username__iexact=username)
+            if user == request.user:
+                return Response({'error': "You can't share with yourself"}, status=400)
+            return Response({'id': user.id, 'username': user.username})
+        except User.DoesNotExist:
+            return Response({'error': f'No user found: @{username}'}, status=404)
+
     @action(detail=True, methods=['post'], url_path='send-share')
     def send_share(self, request, pk=None):
         """
@@ -457,34 +470,21 @@ class ShareViewSet(viewsets.ModelViewSet):
             
         receiver = get_object_or_404(User, id=receiver_id)
 
+        # 1. Log the interaction for the algorithm (increments global share count)
         UserInteraction.objects.get_or_create(
             user=user, 
             clip=clip, 
             interaction_type='share'
         )
-        # Model save() override handles the +1 increment automatically
-        '''    
-        target_data, _ = ShareEvent.objects.get_or_create(receiver=receiver)
         
-        now = timezone.now()
-        new_share = {
-            "sender_id": user.id,
-            "sender_name": user.username,
-            "clip_id": str(clip.id),
-            "date": now.strftime("%Y-%m-%d"),
-            "time": now.strftime("%H:%M"),
-        }
-        ShareEvent.objects.create(sender=user, receiver=receiver, clip=clip)
-        UserInteraction.objects.update_or_create(
-            user=user, clip=clip, interaction_type='share',
-            defaults={'is_active': True}
+        # 2. CRITICAL FIX: Actually create the peer-to-peer inbox event!
+        # This was previously commented out inside the ''' block
+        ShareEvent.objects.create(
+            sender=user, 
+            receiver=receiver, 
+            clip=clip
         )
         
-        current_received = target_data.received or []
-        current_received.append(new_share)
-        target_data.received = current_received
-        target_data.save()
-        '''
         return Response({'status': 'shared successfully'}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['delete'], url_path='share-delete')
@@ -511,6 +511,7 @@ class ShareViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'], url_path='inbox')
     def inbox(self, request):
+        
         shares = ShareEvent.objects.filter(
             receiver=request.user
         ).select_related('sender', 'clip').order_by('-created_at')
@@ -826,12 +827,7 @@ class ProfileViewSet(viewsets.ViewSet):
         return Response(serializer.data)
 
     # PATCH /profile/me/update/
-    @action(
-        detail=False,
-        methods=['patch'],
-        url_path='me/update',
-        parser_classes=[parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser]
-    )
+    @action(detail=False,methods=['patch'],url_path='me/update',parser_classes=[parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser])
     def update_me(self, request):
         serializer = ProfileUpdateSerializer(
             request.user,

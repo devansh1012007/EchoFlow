@@ -5,7 +5,7 @@ services:
   db:
     image: pgvector/pgvector:pg16
     container_name: echoflow_db
-    restart: always
+    restart: no # Don't restart automatically to avoid issues with migrations and data integrity # try --> on-failure:5
     environment:
       POSTGRES_DB: echoflow_db
       POSTGRES_USER: devansh
@@ -19,7 +19,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: echoflow_redis
-    restart: always
+    restart: no
     ports:
       - "6379:6379"
   # until pg_isready -h db -U devansh; do sleep 1; done && --> cmd for waiting for db to be ready before running migrations and starting server
@@ -55,14 +55,23 @@ services:
       sh -c "sleep 10 && 
              celery -A EchoFlow worker --loglevel=info"
     volumes:
+      - media_data:/app/media
+      - huggingface_cache:/root/.cache/huggingface
       - .:/app
-      - media_data:/app/media # Shared volume to write HLS segments
     depends_on:
       - db
       - redis
     environment:
       - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
       - REDIS_URL=redis://redis:6379/1
+      - huggingface_cache=/root/.cache/huggingface
+      - HOME=/tmp
+      - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
+      - TRITON_CACHE_DIR=/tmp/triton_cache
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN}
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
   
   celery_feed:
     build: .
@@ -73,34 +82,55 @@ services:
     environment:
       - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
       - REDIS_URL=redis://redis:6379/1
+      - huggingface_cache=/root/.cache/huggingface
+      - HOME=/tmp
+      - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
+      - TRITON_CACHE_DIR=/tmp/triton_cache
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN}
+    volumes:
+      - .:/app
+      - huggingface_cache:/root/.cache/huggingface
+      - media_data:/app/media
+
 
   celery_media:
     build: .
-    command: celery -A EchoFlow worker -Q heavy_media --concurrency=2 --loglevel=info
+    command: celery -A EchoFlow worker -Q heavy_media --pool=solo --loglevel=info
     volumes:
       - media_data:/app/media
       - huggingface_cache:/root/.cache/huggingface
+      - .:/app
     depends_on:
       - db
       - redis
     environment:
       - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
       - REDIS_URL=redis://redis:6379/1
-      #- OPENAI_API_KEY=${OPENAI_API_KEY} # Must be passed for tasks
-  
+      - huggingface_cache=/root/.cache/huggingface
+      - HOME=/tmp
+      - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
+      - TRITON_CACHE_DIR=/tmp/triton_cache
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN}
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+
   celery_beat:
     build: .
-    command: >
-      sh -c "python wait_for_db.py &&
-           sleep 15 &&
-           celery -A EchoFlow beat --loglevel=info
-           --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+    command: sh -c "python wait_for_db.py && sleep 15 && celery -A EchoFlow beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     depends_on:
       - db
       - redis
     environment:
       - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
       - REDIS_URL=redis://redis:6379/1
+      - huggingface_cache=/root/.cache/huggingface
+      - HOME=/tmp
+      - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
+      - TRITON_CACHE_DIR=/tmp/triton_cache
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN}
 
 # Define persistent storage
 volumes:

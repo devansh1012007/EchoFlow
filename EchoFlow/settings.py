@@ -38,6 +38,8 @@ CORS_ALLOW_METHODS = [
     'DELETE',
     'OPTIONS',  # required for preflight requests
 ]
+CELERY_BROKER_HEARTBEAT = 120 # Increase to 2 minutes
+CELERY_BROKER_HEARTBEAT_CHECKRATE = 2
 
 CORS_ALLOW_HEADERS = [
     'accept',

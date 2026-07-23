@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 # --- CONFIGURATION ---
 # Replace with a valid token from a test user you created in the Django admin
-AUTH_TOKEN = "" 
+AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc5MjAyMDgzLCJpYXQiOjE3NzkxMTU2ODMsImp0aSI6Ijk2OTYzZjkxZDg3ZjRhZGM5N2QwMGQzYjFlNDFhZjM0IiwidXNlcl9pZCI6IjIifQ.QlL88iqzpM0CJh9Txv9e2cpiJvJXhPgu1CEAGtWzjDY" 
 API_ENDPOINT = "http://localhost:8005/clips/"
 
 # Seed data: List of dictionaries containing the source URL and metadata

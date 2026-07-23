@@ -7,6 +7,12 @@ ENV PYTHONUNBUFFERED 1
 
 # Set the working directory
 WORKDIR /app
+# Create a dedicated non-root user matching UID 1000
+RUN groupadd -g 1000 appgroup && \
+    useradd -u 1000 -g appgroup -s /bin/bash -m appuser
+
+# Set permissions for the working directory and any cache directories
+RUN chown -R appuser:appgroup /app /root/.cache || true
 
 # CRITICAL SYSTEM DEPENDENCIES
 # Update the package list and install ffmpeg and libsndfile1

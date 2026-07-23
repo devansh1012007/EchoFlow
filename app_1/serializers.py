@@ -26,6 +26,7 @@ class AudioUploadSerializer(serializers.ModelSerializer):
 class FeedClipSerializer(serializers.ModelSerializer):
     # Fixed from owner.username to creator.username
     creator_name = serializers.CharField(source='creator.username', read_only=True)
+    creator_id = serializers.IntegerField(source='creator.id', read_only=True)
     is_liked = serializers.SerializerMethodField()
 
     class Meta:
@@ -33,7 +34,7 @@ class FeedClipSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'creator_name', 'category',
             'hls_playlist_url', 'likes', 'shares', 'skips', 
-            'comment_count', 'is_liked'
+            'comment_count', 'is_liked','creator_id'
         ]
         read_only_fields = [
             'likes', 'shares', 'skips', 'comment_count', 'hls_playlist_url', 'is_liked'
@@ -90,6 +91,7 @@ class ShareEventSerializer(serializers.ModelSerializer):
     sender_name = serializers.CharField(source='sender.username', read_only=True)
     clip_title = serializers.CharField(source='clip.title', read_only=True)
     clip_hls_url = serializers.CharField(source='clip.hls_playlist_url', read_only=True)
+    clip = FeedClipSerializer(read_only=True)
     
     class Meta:
         model = ShareEvent

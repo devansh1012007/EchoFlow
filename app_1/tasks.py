@@ -20,19 +20,12 @@ from .models import AudioClip, UserInteraction, User
 from celery.utils.log import get_task_logger
 
 logger = get_task_logger(__name__)
-#from faster_whisper import WhisperModel
-#from sentence_transformers import SentenceTransformer
-#from keybert import KeyBERT
-
-#whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
-#embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-#kw_model = KeyBERT()
 
 whisper_model = None
 embedding_model = None
 kw_model = None
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+#OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +33,10 @@ logger = logging.getLogger(__name__)
 def get_whisper_model():
     global whisper_model
     if whisper_model is None:
+        from faster_whisper import WhisperModel
         try:
-            from faster_whisper import WhisperModel
             whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+            logger.info("WhisperModel initialized successfully.")
         except Exception as e:
             logger.exception("Failed to initialize WhisperModel: %s", e)
             raise
@@ -52,9 +46,10 @@ def get_whisper_model():
 def get_embedding_model():
     global embedding_model
     if embedding_model is None:
+        from sentence_transformers import SentenceTransformer
         try:
-            from sentence_transformers import SentenceTransformer
             embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            logger.info("Embedding model initialized successfully.")
         except Exception as e:
             logger.exception("Failed to initialize embedding model: %s", e)
             raise
@@ -64,9 +59,10 @@ def get_embedding_model():
 def get_kw_model():
     global kw_model
     if kw_model is None:
+        from keybert import KeyBERT
         try:
-            from keybert import KeyBERT
             kw_model = KeyBERT()
+            logger.info("KeyBERT initialized successfully.")
         except Exception as e:
             logger.exception("Failed to initialize KeyBERT: %s", e)
             raise
@@ -298,7 +294,7 @@ def calculate_dynamic_user_vector(user_id):
         interaction_type__in=['like', 'share']
     ).select_related('clip').order_by('-created_at')[:15]
     
-    if not recent_positive_interactions:
+    if recent_positive_interactions is None or len(recent_positive_interactions) == 0:
         return None
 
     # Extract the vectors
@@ -308,7 +304,7 @@ def calculate_dynamic_user_vector(user_id):
         if interaction.clip.semantic_vector is not None
     ]
     
-    if not vectors:
+    if vectors is None:
         return None
         
     # Calculate the centroid (average) of these vectors
@@ -334,7 +330,7 @@ def calculate_blended_query_vectors(user):
         updated_at__gte=cutoff
     ).select_related('clip')
     
-    if not recent_interactions:
+    if recent_interactions is None:
         return user.long_term_semantic, user.long_term_acoustic
 
     sem_vectors = []
@@ -350,11 +346,10 @@ def calculate_blended_query_vectors(user):
         if interaction.completion_rate:
             weight *= (interaction.completion_rate + 0.5)
 
-        if interaction.clip.semantic_vector:
+        if interaction.clip.semantic_vector is not None:
             sem_vectors.append(np.array(interaction.clip.semantic_vector) * weight)
-        if interaction.clip.acoustic_vector:
+        if interaction.clip.acoustic_vector is not None:
             ac_vectors.append(np.array(interaction.clip.acoustic_vector) * weight)
-        weights.append(weight)
 
     total_weight = sum(weights) if weights else 1
     context_sem = np.sum(sem_vectors, axis=0) / total_weight if sem_vectors else None
@@ -362,12 +357,12 @@ def calculate_blended_query_vectors(user):
 
     ALPHA = 0.75 # 75% short term mood, 25% long term baseline
     
-    if user.long_term_semantic and context_sem is not None:
+    if user.long_term_semantic is not None and context_sem is not None:
         final_sem = (ALPHA * context_sem) + ((1 - ALPHA) * np.array(user.long_term_semantic))
     else:
         final_sem = context_sem or user.long_term_semantic
 
-    if user.long_term_acoustic and context_ac is not None:
+    if user.long_term_acoustic is not None and context_ac is not None:
         final_ac = (ALPHA * context_ac) + ((1 - ALPHA) * np.array(user.long_term_acoustic))
     else:
         final_ac = context_ac or user.long_term_acoustic
@@ -436,7 +431,7 @@ def refill_user_feed(user_id, count=50):
         clip_ids_to_push.extend([str(c.id) for c in cold_clips])
 
     if not clip_ids_to_push:
-        return "No new clips."
+        return "No new clips to push."
 
     random.shuffle(clip_ids_to_push)
     redis_client.rpush(redis_key, *clip_ids_to_push)
@@ -448,15 +443,14 @@ def calculate_time_decayed_vectors(user, limit=50):
         user=user
     ).select_related('clip').order_by('-created_at')[:limit]
     
-    if not recent_interactions:
+    if recent_interactions is None or len(recent_interactions) == 0:
         return user.long_term_semantic, user.long_term_acoustic
 
     now = timezone.now()
     sem_vectors, ac_vectors, weights = [], [], []
 
     for interaction in recent_interactions:
-        if not interaction.clip.semantic_vector:
-            continue
+        if interaction.clip.semantic_vector is None:continue
 
         # 1. Time Decay: A like from today is worth more than a like from last month
         hours_ago = (now - interaction.created_at).total_seconds() / 3600.0
@@ -473,11 +467,12 @@ def calculate_time_decayed_vectors(user, limit=50):
             intent_weight = -0.5 
 
         final_weight = time_weight * comp_weight * intent_weight
-        if ac_vectors:
+        
+        if interaction.clip.acoustic_vector is not None:
             ac_vectors.append(np.array(interaction.clip.acoustic_vector) * final_weight)
-        if sem_vectors:
+            
+        if interaction.clip.semantic_vector is not None:
             sem_vectors.append(np.array(interaction.clip.semantic_vector) * final_weight)
-        weights.append(final_weight)
 
     sum_weights = sum(weights)
     if sum_weights == 0:
@@ -489,14 +484,24 @@ def calculate_time_decayed_vectors(user, limit=50):
         return user.long_term_semantic, user.long_term_acoustic
     # Blend context with baseline
     ALPHA = 0.7
-    if user.long_term_semantic:
+    if user.long_term_semantic is not None:
         final_sem = (ALPHA * weighted_sem) + ((1 - ALPHA) * np.array(user.long_term_semantic))
         final_ac = (ALPHA * weighted_ac) + ((1 - ALPHA) * np.array(user.long_term_acoustic))
     else:
         final_sem, final_ac = weighted_sem, weighted_ac
 
-    final_sem = final_sem / np.linalg.norm(final_sem)
-    final_ac = final_ac / np.linalg.norm(final_ac)
+    norm_sem = np.linalg.norm(final_sem)
+    if norm_sem > 0:
+        final_sem = final_sem / norm_sem
+    else:
+        # Fallback to long term baseline if norm is non-computable
+        final_sem = np.array(user.long_term_semantic) if user.long_term_semantic else final_sem
+
+    norm_ac = np.linalg.norm(final_ac)
+    if norm_ac > 0:
+        final_ac = final_ac / norm_ac
+    else:
+        final_ac = np.array(user.long_term_acoustic) if user.long_term_acoustic else final_ac
 
     return final_sem.tolist(), final_ac.tolist()
 
@@ -611,7 +616,8 @@ def scrape_and_import(source_name, limit=5, clip_length=300):
                 try:
                     if p and os.path.exists(p) and not p.startswith(settings.MEDIA_ROOT):
                         os.remove(p)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Failed to clean up temp file {p}: {e}")
+                    
 
 
