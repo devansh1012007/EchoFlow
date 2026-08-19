@@ -37,7 +37,7 @@
 ### Issue 1.2 — HuggingFace token in .env file committed to repo
 
 - **File:** `.env:10`
-- **Code:** `HF_TOKEN='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'`
+- **Code:** `HF_TOKEN='hf_PUcKKg*****************'`
 - **Problem:** The `.gitignore` lists `*.env` but the file is clearly committed (or was committed previously). Even if it was removed from git, the token is still visible in git history. The same HuggingFace token is duplicated in `docker-compose.yml` env vars.
 - **Impact:** Token theft, unauthorized API usage, billing abuse.
 - **Fix:** Rotate the token immediately. Ensure `.env` is in `.gitignore` and never committed. Use Docker secrets or a secret manager.
