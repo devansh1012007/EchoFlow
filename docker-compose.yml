@@ -7,9 +7,9 @@ services:
     container_name: echoflow_db
     restart: no # Don't restart automatically to avoid issues with migrations and data integrity # try --> on-failure:5
     environment:
-      POSTGRES_DB: echoflow_db
-      POSTGRES_USER: devansh
-      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -38,9 +38,9 @@ services:
     ports:
       - "8005:8000"
     environment:
-      - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
-      - REDIS_URL=redis://redis:6379/1
-      #- SECRET_KEY="django-insecure-637(8wp&#7+g)u&10xs!=2dwutofwh1my9la12$ogu9lm$^3ye"
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
     depends_on:
       - db
       - redis
@@ -62,8 +62,8 @@ services:
       - db
       - redis
     environment:
-      - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
-      - REDIS_URL=redis://redis:6379/1
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
       - huggingface_cache=/root/.cache/huggingface
       - HOME=/tmp
       - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
@@ -80,8 +80,8 @@ services:
       - db
       - redis
     environment:
-      - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
-      - REDIS_URL=redis://redis:6379/1
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
       - huggingface_cache=/root/.cache/huggingface
       - HOME=/tmp
       - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
@@ -105,8 +105,8 @@ services:
       - db
       - redis
     environment:
-      - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
-      - REDIS_URL=redis://redis:6379/1
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
       - huggingface_cache=/root/.cache/huggingface
       - HOME=/tmp
       - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
@@ -123,8 +123,8 @@ services:
       - db
       - redis
     environment:
-      - DATABASE_URL=postgres://devansh:password@db:5432/echoflow_db
-      - REDIS_URL=redis://redis:6379/1
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
       - huggingface_cache=/root/.cache/huggingface
       - HOME=/tmp
       - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
