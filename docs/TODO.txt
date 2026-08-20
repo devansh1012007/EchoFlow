@@ -37,3 +37,9 @@ Personal TODO :
 - check on business side and shit 
 - add features 
 - work on recommandation engine
+
+- make audit and planning docs on following :
+    - * Stateful media storage in a horizontally scaling environment.
+    - * Database write-contention from high-velocity telemetry.
+    - * Memory and CPU exhaustion from collocated ML inference and media transcoding.
+    - * The transition from a relational architecture to an event-driven architecture.
