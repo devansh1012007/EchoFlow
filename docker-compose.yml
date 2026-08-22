@@ -27,20 +27,22 @@ services:
     build: .
     container_name: echoflow_web
     working_dir: /app
-    command: >
-      sh -c "python wait_for_db.py &&
-         python manage.py migrate &&
-         python manage.py collectstatic --noinput &&
-         gunicorn EchoFlow.wsgi:application --bind 0.0.0.0:8000 --workers 4 --threads 2"
-    volumes:
-      - .:/app
-      - media_data:/app/media # Shared volume for audio segments
-    ports:
-      - "8005:8000"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - GUNICORN_WORKERS=${GUNICORN_WORKERS:-4}
+      - GUNICORN_THREADS=${GUNICORN_THREADS:-4}
+    command: >
+      sh -c "python wait_for_db.py &&
+         python manage.py migrate &&
+         python manage.py collectstatic --noinput &&
+         gunicorn EchoFlow.wsgi:application --bind 0.0.0.0:8000 --workers $$GUNICORN_WORKERS --threads $$GUNICORN_THREADS"
+    volumes:
+      - .:/app
+      - media_data:/app/media
+    ports:
+      - "8005:8000"
     depends_on:
       - db
       - redis
