@@ -33,3 +33,5 @@ keybert
 django-celery-beat
 whitenoise
 Pillow
+django-prometheus
+python-json-logger

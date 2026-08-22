@@ -5,7 +5,7 @@ services:
   db:
     image: pgvector/pgvector:pg16
     container_name: echoflow_db
-    restart: no # Don't restart automatically to avoid issues with migrations and data integrity # try --> on-failure:5
+    restart: no
     environment:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
@@ -22,9 +22,11 @@ services:
     restart: no
     ports:
       - "6379:6379"
-  # until pg_isready -h db -U devansh; do sleep 1; done && --> cmd for waiting for db to be ready before running migrations and starting server
+
   web:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     container_name: echoflow_web
     working_dir: /app
     environment:
@@ -37,7 +39,7 @@ services:
       sh -c "python wait_for_db.py &&
          python manage.py migrate &&
          python manage.py collectstatic --noinput &&
-         gunicorn EchoFlow.wsgi:application --bind 0.0.0.0:8000 --workers $$GUNICORN_WORKERS --threads $$GUNICORN_THREADS"
+         gunicorn -c gunicorn.conf.py EchoFlow.wsgi:application"
     volumes:
       - .:/app
       - media_data:/app/media
@@ -46,13 +48,30 @@ services:
     depends_on:
       - db
       - redis
+    healthcheck:
+      # HTTP health check for web service only
+      # start_period=90s accounts for DB migrations + collectstatic + gunicorn startup
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
-  # 4. The Background Worker: Celery for HLS and AI processing
   celery:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     container_name: echoflow_worker
     working_dir: /app
-    user: "1000:1000" # Run as non-root to avoid permission issues with shared volumes
+    user: "1000:1000"
     command: >
       sh -c "sleep 10 && 
              celery -A EchoFlow worker --loglevel=info"
@@ -66,17 +85,21 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
-      - huggingface_cache=/root/.cache/huggingface
-      - HOME=/tmp
-      - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
-      - TRITON_CACHE_DIR=/tmp/triton_cache
       - HF_HOME=/root/.cache/huggingface
       - HF_TOKEN=${HF_TOKEN}
-      - HF_HUB_OFFLINE=1
-      - TRANSFORMERS_OFFLINE=1
-  
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
   celery_feed:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     command: celery -A EchoFlow worker -Q fast_feed --concurrency=4 --loglevel=info
     depends_on:
       - db
@@ -84,42 +107,56 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
-      - huggingface_cache=/root/.cache/huggingface
-      - HOME=/tmp
-      - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
-      - TRITON_CACHE_DIR=/tmp/triton_cache
       - HF_HOME=/root/.cache/huggingface
       - HF_TOKEN=${HF_TOKEN}
     volumes:
       - .:/app
       - huggingface_cache:/root/.cache/huggingface
       - media_data:/app/media
-
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
   celery_media:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.media
     command: celery -A EchoFlow worker -Q heavy_media --pool=solo --loglevel=info
     volumes:
       - media_data:/app/media
-      - huggingface_cache:/root/.cache/huggingface
-      - .:/app
+      # NOTE: huggingface_cache volume is NOT mounted here because models
+      # are baked into the Docker image during build. If this volume is
+      # mounted, it will HID the baked-in models (Docker volume mount
+      # overrides the image layer directory). The models are available
+      # at /root/.cache/huggingface from the image itself.
     depends_on:
       - db
       - redis
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
-      - huggingface_cache=/root/.cache/huggingface
-      - HOME=/tmp
-      - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
-      - TRITON_CACHE_DIR=/tmp/triton_cache
-      - HF_HOME=/root/.cache/huggingface
-      - HF_TOKEN=${HF_TOKEN}
+      # HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1 ensure libraries
+      # only use the baked-in models, not attempt online downloads
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
 
   celery_beat:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     command: sh -c "python wait_for_db.py && sleep 15 && celery -A EchoFlow beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     depends_on:
       - db
@@ -127,12 +164,16 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
-      - huggingface_cache=/root/.cache/huggingface
-      - HOME=/tmp
-      - TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
-      - TRITON_CACHE_DIR=/tmp/triton_cache
       - HF_HOME=/root/.cache/huggingface
       - HF_TOKEN=${HF_TOKEN}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
 # Define persistent storage
 volumes:
