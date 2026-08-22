@@ -1,5 +1,5 @@
-FROM python:3.11-slim
-
+FROM python:3.11-slim-bookworm
+#added -bookworm to switch to the new debian version which is stable and has the latest security updates. The previous version was buster which is now oldstable and no longer supported.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
