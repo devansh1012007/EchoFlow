@@ -1,0 +1,67 @@
+# =============================================================================
+# EchoFlow API dependencies — pinned for python:3.11-slim-bookworm
+#
+# Pin policy:
+#   * Every direct dependency is == pinned. No floating versions.
+#   * Pure-python pins (py3-none-any wheels) are version-independent, so the
+#     exact same wheel works on 3.11 and installs from the local wheelhouse.
+#   * django==5.2.x because Django 6.x requires Python >= 3.12.
+#   * numpy/Pillow use ranges: only cp312 copies exist in the local
+#     wheelhouse, so pip must resolve a py311 build itself. Ranges prevent
+#     pip from ever considering an incompatible version.
+# Always install with:  -c constraints.txt   (Dockerfiles do this already)
+# =============================================================================
+
+# --- Core web framework ---
+django==5.2.17                    # 6.x needs py>=3.12 — do not bump to 6 on this image
+djangorestframework==3.18.0
+djangorestframework-simplejwt==5.5.1
+
+# --- Database ---
+psycopg2-binary==2.9.12           # cp311 wheel resolved by pip (local copy is cp312)
+pgvector==0.5.0                   # pure — installs offline from wheelhouse
+
+# --- Async / cache / tasks ---
+redis==8.1.0                      # pure
+celery==5.6.3                     # pure
+django-redis==7.0.0               # pure
+django-celery-beat==2.9.0         # pure
+
+# --- Serving / static ---
+gunicorn==26.1.0                  # pure
+whitenoise==6.12.0                # pure
+
+# --- Config / logging ---
+python-dotenv==1.2.3              # pure
+dj-database-url==3.1.2            # pure
+python-json-logger==4.2.0         # pure
+
+# --- API plumbing ---
+django-cors-headers==4.9.0        # pure
+django-filter==26.1               # pure
+starlette==1.6.0                  # pure (utility dep; DRF does not require it)
+
+# --- Auth ---
+django-allauth==65.19.1           # pure
+dj-rest-auth==7.2.0               # pure
+
+# --- Metrics ---
+django-prometheus==2.5.0          # pure
+
+# --- Crypto / HTTP clients ---
+cryptography==50.0.0              # cp311-abi3 — installs OFFLINE from wheelhouse
+requests==2.34.2                  # pure
+httpx==0.28.1                     # pure
+
+# --- Scientific / media (base-level usage) ---
+numpy>=2.0,<3                     # range: see header note
+librosa==0.11.0                   # pure; 1.x requires Python >=3.12 — do NOT bump on this image
+Pillow>=10.0,<13                  # range: local copy is cp312-only
+gtts==2.5.4                       # pure
+pydub==0.25.1                     # pure
+
+# --- Cloud SDKs ---
+boto3==1.43.78                    # pure (+ botocore/s3transfer pinned in constraints)
+
+# --- LLM client (imported by backend/app/tasks.py — must be declared) ---
+openai==3.3.1                     # pure — installs offline from wheelhouse

@@ -1,0 +1,45 @@
+- add logs
+- add a function to verify that the clip is under certain storage limit
+- add a frontend 
+- setup scalper 
+
+
+- add comments to the left 
+- add follow unfollow functionality
+- after clicking on the reel sent , the notifaction should go from the inbox but the reel should stay there
+- remove the audion bar
+
+- chage the HF token , I have deleted it form my key from website.
+- add all the keys as enviroment veriables 
+- add rate limiting on every endpoint
+- add input validation on audio upload file size/type
+- the token refresh endpoint and register endpoint are not CSRF-protected if accessed from a browser context. -- the token refresh endpoint and register endpoint are not CSRF-protected if accessed from a browser context.
+- ADD HTML sanitization or XSS protection for text = models.CharField(max_length=500)
+- fix -- Share endpoint allows sharing to any user ID 
+- add content moderation pipeline
+- No database constraints on counter fields (likes, shares, skips, comment_count) -- Add validators=[MinValueValidator(0)] and database CHECK constraints.
+- UserInteraction save() has a race condition -- Need to look into it (solve carefully)
+- add soft delete for required models 
+- ShareEvent uses BigAutoField primary key while other models use UUID --- ez fix but look into all the shit that will be iffected by that change and fix accordingly
+
+
+- continue after solving these to 4th section 
+- setup Continuous Integration (CI/CD)
+- setup Lode balancing
+- setup DB on aws and shit
+- add dash board and improve audio uploading experience 
+- Worker Auto-scaling
+
+
+Personal TODO : 
+- fix errors 
+- setup Continuous Integration (CI/CD)
+- check on business side and shit 
+- add features 
+- work on recommandation engine
+
+- make audit and planning docs on following :
+    - * Stateful media storage in a horizontally scaling environment.
+    - * Database write-contention from high-velocity telemetry.
+    - * Memory and CPU exhaustion from collocated ML inference and media transcoding.
+    - * The transition from a relational architecture to an event-driven architecture.

@@ -1,0 +1,315 @@
+services:
+
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: echoflow_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+          pids: 500
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  redis:
+    image: redis:7-alpine
+    container_name: echoflow_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+          pids: 300
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  web:
+    image: devansh1012007/echoflow:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    #container_name: echoflow_web
+    working_dir: /app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-localhost}
+      - GUNICORN_WORKERS=${GUNICORN_WORKERS:-4}
+      - GUNICORN_THREADS=${GUNICORN_THREADS:-4}
+    command: >
+      sh -c "set -e && python wait_for_db.py &&
+         python manage.py migrate &&
+         python manage.py collectstatic --noinput &&
+         gunicorn -c gunicorn.conf.py backend.EchoFlow.wsgi:application"
+    volumes:
+      - .:/app
+      - media_data:/app/media
+    ports:
+      - "8005:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+          pids: 500
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  celery:
+    image: devansh1012007/echoflow:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    #container_name: echoflow_worker
+    working_dir: /app
+    user: "1000:1000"
+    env_file:
+      - .env
+    restart: unless-stopped
+    command: >
+      sh -c "set -e && python wait_for_db.py &&
+              celery -A backend.EchoFlow worker --loglevel=info"
+    volumes:
+      - media_data:/app/media
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # This image is shared with web, whose baked HTTP probe would misfire
+    # here — override with a Celery-ping of this node.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.EchoFlow inspect ping -d \"celery@$$(hostname)\" --timeout=10 || exit 1"]
+      interval: 30s
+      timeout: 15s
+      start_period: 30s
+      retries: 3
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+          pids: 300
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  celery_feed:
+    image: devansh1012007/echoflow:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    #container_name: echoflow_feed_worker
+    restart: unless-stopped
+    command: >
+      sh -c "set -e && python wait_for_db.py &&
+              celery -A backend.EchoFlow worker -Q fast_feed --concurrency=4 --loglevel=info"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+    volumes:
+      - .:/app
+      - media_data:/app/media
+    # Same shared-image override as the default celery worker.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.EchoFlow inspect ping -d \"celery@$$(hostname)\" --timeout=10 || exit 1"]
+      interval: 30s
+      timeout: 15s
+      start_period: 30s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+          pids: 300
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  celery_media:
+    image: devansh1012007/echoflow:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: media
+      # HF_TOKEN is forwarded to the build as a BuildKit SECRET (never ARG),
+      # sourced from the HF_TOKEN variable in .env via the top-level secrets
+      # block below.
+      secrets:
+        - hf_token
+    #container_name: echoflow_media_worker
+    restart: unless-stopped
+    command: >
+      sh -c "set -e && python wait_for_db.py &&
+              celery -A backend.EchoFlow worker -Q heavy_media --pool=solo --loglevel=info"
+    volumes:
+      - media_data:/app/media
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      # Must match the bake-time path in the Dockerfile (models are baked in,
+      # NOT downloaded at runtime). Do NOT mount a cache volume over it.
+      - HF_HOME=/home/appuser/.cache/huggingface
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 1G
+          pids: 200
+        reservations:
+          cpus: '2'
+          memory: 256M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    image: devansh1012007/echoflow:${TAG:-latest}
+    #container_name: echoflow_celery_beat
+    restart: unless-stopped
+    command: >
+      sh -c "set -e && python wait_for_db.py &&
+              celery -A backend.EchoFlow beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+    # NOTE: deliberately no healthcheck — beat is a scheduler, not a worker;
+    # it never answers `celery inspect ping`, so no meaningful in-container
+    # probe exists. Liveness = restart: unless-stopped + process supervision.
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+          pids: 200
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+# Define persistent storage
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:
+
+# Build-time secrets (Compose >= 2.17 forwards these to BuildKit).
+# hf_token is consumed by the Dockerfile's --mount=type=secret,id=hf_token
+# during the HuggingFace model bake; it never becomes ARG/ENV/layer data.
+secrets:
+  hf_token:
+    environment: HF_TOKEN

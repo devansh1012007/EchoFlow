@@ -1,0 +1,22 @@
+# =============================================================================
+# EchoFlow media-worker dependencies — pinned for python:3.11-slim-bookworm
+#
+# torch is intentionally NOT listed here. sentence-transformers depends on
+# torch, and the Dockerfile passes --extra-index-url
+# https://download.pytorch.org/whl/cpu together with the torch pin in
+# constraints.txt — so pip resolves the CPU-only build and can NEVER pull
+# the multi-GB CUDA wheel from PyPI.
+#
+# Always install with:  -c constraints.txt   (Dockerfile does this already)
+# =============================================================================
+
+-r requirements-base.txt
+
+faster-whisper==1.2.1             # pure; pulls ctranslate2/onnxruntime/av
+sentence-transformers==6.0.0      # pure; pulls transformers/tokenizers (+torch via index)
+SpeechRecognition==3.17.0         # pure
+keybert==0.9.0                    # pure
+
+librosa==0.11.0                   # pure (also pinned in base); 1.x needs py>=3.12
+soundfile==0.14.0                 # manylinux py2.py3 tag — works on 3.11
+pydub==0.25.1                     # pure (also pinned in base)

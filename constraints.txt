@@ -1,0 +1,142 @@
+# =============================================================================
+# EchoFlow — dependency constraints (complete lockfile)
+#
+# Usage:
+#   pip install -r requirements-base.txt  -c constraints.txt
+#   pip install -r requirements-media.txt -c constraints.txt
+#
+# The Dockerfiles pass -c automatically.
+#
+# Contains BOTH direct and transitive pins, harvested from the known-good
+# environment that produced wheelhouse/. Direct deps are also pinned in
+# requirements-*.txt; duplicating them here is harmless and makes the file
+# a single source of truth for version ceilings.
+#
+# Scientific stack (numpy/scipy/numba/llvmlite/scikit-learn/Pillow) uses
+# ranges on purpose: local wheelhouse copies are cp312-only, so py311
+# builds must be resolved by pip at install time.
+# =============================================================================
+
+# ---- Direct deps mirrored (single source of truth) --------------------------
+django==5.2.17
+djangorestframework==3.18.0
+djangorestframework-simplejwt==5.5.1
+psycopg2-binary==2.9.12
+pgvector==0.5.0
+redis==8.1.0
+celery==5.6.3
+django-redis==7.0.0
+django-celery-beat==2.9.0
+gunicorn==26.1.0
+whitenoise==6.12.0
+python-dotenv==1.2.3
+dj-database-url==3.1.2
+python-json-logger==4.2.0
+django-cors-headers==4.9.0
+django-filter==26.1
+starlette==1.6.0
+django-allauth==65.19.1
+dj-rest-auth==7.2.0
+django-prometheus==2.5.0
+cryptography==50.0.0
+requests==2.34.2
+httpx==0.28.1
+openai==3.3.1
+librosa==0.11.0
+gtts==2.5.4
+pydub==0.25.1
+boto3==1.43.78
+faster-whisper==1.2.1
+sentence-transformers==6.0.0
+SpeechRecognition==3.17.0
+keybert==0.9.0
+soundfile==0.14.0
+
+# ---- torch: MUST come from the CPU index (see Dockerfile media stage) -------
+# "2.8.0" matches the "+cpu" local-version build served by download.pytorch.org;
+# PyPI's CUDA build also satisfies ==2.8.0 numerically, but the extra-index
+# priority plus --only-binary in the Dockerfile keeps resolution deterministic.
+torch==2.8.0
+
+# ---- Celery stack -----------------------------------------------------------
+amqp==5.3.1
+billiard==4.2.4
+kombu==5.6.2
+vine==5.1.0
+click==8.1.8
+click-didyoumean==0.3.1
+click-plugins==1.1.1.2
+click-repl==0.3.0
+prompt-toolkit==3.0.53
+wcwidth==0.8.2
+tzdata==2026.3
+tzlocal==5.4.4
+cron-descriptor==1.4.5
+python-crontab==3.3.0
+django-timezone-field==7.2.2
+
+# ---- HTTP stack -------------------------------------------------------------
+anyio==4.14.2
+sniffio==1.3.1
+h11==0.16.0
+httpcore==1.0.9
+idna==3.19
+certifi==2026.7.22
+urllib3==2.7.0
+charset-normalizer==3.5.1
+
+# ---- Django support ---------------------------------------------------------
+sqlparse==0.6.0
+asgiref==3.12.1
+prometheus-client==0.26.0
+PyJWT==2.13.0
+
+# ---- boto3 chain ------------------------------------------------------------
+botocore==1.43.78
+s3transfer==0.19.2
+jmespath==1.1.0
+
+# ---- OpenAI client chain ----------------------------------------------------
+pydantic==2.13.4
+annotated-types==0.8.0
+pydantic-core==2.46.4            # cp311 build fetched from PyPI when needed
+jiter==0.16.0                    # cp311 build fetched from PyPI when needed
+packaging==26.3
+tqdm==4.70.0
+typing-extensions==4.16.0
+
+# ---- Audio / scientific (ranges only — see header) --------------------------
+numpy>=2.0,<3
+scipy>=1.13,<2
+Pillow>=10.0,<13
+joblib==1.5.3
+threadpoolctl==3.6.0
+decorator==5.3.1
+lazy-loader==0.5
+pooch==1.9.0
+platformdirs==4.11.3
+msgpack==1.2.1
+narwhals==2.25.0
+soxr>=0.5                        # cp311/abi3 build resolved by pip
+
+# ---- HuggingFace / transformers chain ---------------------------------------
+filelock==3.32.4
+fsspec==2026.7.0
+huggingface-hub==1.16.1
+hf-xet==1.6.0                    # cp311 build fetched from PyPI when needed
+regex==2026.7.19
+safetensors==0.8.0               # cp311 build fetched from PyPI when needed
+tokenizers==0.22.2               # cp311 build fetched from PyPI when needed
+transformers==5.15.1
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+networkx==3.6.1
+sympy==1.14.0
+mpmath==1.3.0
+
+# ---- faster-whisper chain ---------------------------------------------------
+ctranslate2==4.8.1
+onnxruntime==1.29.0
+flatbuffers==25.12.19
+protobuf==7.36.0
+av==18.1.0

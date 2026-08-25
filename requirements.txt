@@ -1,0 +1,10 @@
+# Aggregate file for local development.
+# Docker builds use requirements-base.txt (api target) and
+# requirements-media.txt (media target) directly — both pinned,
+# always installed together with constraints.txt.
+#
+# Local install:
+#   pip install -r requirements.txt -c constraints.txt
+#
+-r requirements-base.txt
+-r requirements-media.txt

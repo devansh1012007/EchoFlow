@@ -1,0 +1,26 @@
+*.env
+.env
+/hidden folder
+/media
+/pycache
+*.log
+/staticfiles
+*.db
+**/__pycache__/
+*.pyc
+/Startup_related_docs
+/Seed_db_for_testing
+*.vscode
+AGENTS.md
+/wheelhouse
+/wheelhouse2
+/wheelhouse3
+/wheelhouse4-EF
+/.cache
+/cache
+/cache/pip
+/--default-timeout=120
+*.venv
+/frontend/node_modules
+/sample_frontend
+*.vite

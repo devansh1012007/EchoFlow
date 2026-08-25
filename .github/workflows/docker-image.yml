@@ -1,0 +1,89 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Docker build target (leave empty for all)'
+        required: false
+        type: choice
+        options:
+          - all
+          - api
+          - media
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  DOCKER_HUB_REPO: devansh10gaur/echoflow
+  GHCR_REPO: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # FIX 1: Robust matrix fallback. If no input or 'all', build both. Otherwise, build the specific target.
+        target: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target != 'all' && github.event.inputs.target != '' && fromJSON(format('["{0}"]', github.event.inputs.target)) || fromJSON('["api", "media"]') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: devansh10gaur
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.DOCKER_HUB_REPO }}
+            ${{ env.GHCR_REPO }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+
+      - name: Build and push ${{ matrix.target }} image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          dockerfile: Dockerfile
+          target: ${{ matrix.target }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # HF_TOKEN reaches the Dockerfile ONLY as a BuildKit secret consumed
+          # by --mount=type=secret,id=hf_token (never ARG/ENV), so it cannot
+          # leak into image layers, history, or logs. Unquoted: the action
+          # parses key=value verbatim, quotes would corrupt the token.
+          secrets: |
+            hf_token=${{ matrix.target == 'media' && secrets.HF_TOKEN || '' }}

@@ -1,0 +1,108 @@
+name: Django CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11']
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: echoflow_test
+          POSTGRES_USER: echoflow
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpq-dev \
+            gcc \
+            ffmpeg \
+            libsndfile1
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run migrations check
+        env:
+          DATABASE_URL: postgresql://echoflow:testpassword@localhost:5432/echoflow_test
+          REDIS_URL: redis://localhost:6379/1
+          DJANGO_SECRET_KEY: ci-test-secret-key-do-not-use-in-production
+          DJANGO_DEBUG: 'True'
+          DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+          FIELD_ENCRYPTION_KEY: generate-a-fernet-key-for-tests
+          HF_TOKEN: ''
+        run: |
+          python manage.py migrate --check
+
+      - name: Run Django system checks
+        env:
+          DATABASE_URL: postgresql://echoflow:testpassword@localhost:5432/echoflow_test
+          REDIS_URL: redis://localhost:6379/1
+          DJANGO_SECRET_KEY: ci-test-secret-key-do-not-use-in-production
+          DJANGO_DEBUG: 'True'
+          DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+          FIELD_ENCRYPTION_KEY: generate-a-fernet-key-for-tests
+          HF_TOKEN: ''
+        run: |
+          python manage.py check --fail-level WARNING
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://echoflow:testpassword@localhost:5432/echoflow_test
+          REDIS_URL: redis://localhost:6379/1
+          DJANGO_SECRET_KEY: ci-test-secret-key-do-not-use-in-production
+          DJANGO_DEBUG: 'True'
+          DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+          FIELD_ENCRYPTION_KEY: generate-a-fernet-key-for-tests
+          HF_TOKEN: ''
+        run: |
+          python manage.py test backend.app --verbosity 2
+
+      - name: Check static files
+        env:
+          DJANGO_SECRET_KEY: ci-test-secret-key-do-not-use-in-production
+          DJANGO_DEBUG: 'True'
+          DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+        run: |
+          python manage.py collectstatic --noinput --dry-run --check
