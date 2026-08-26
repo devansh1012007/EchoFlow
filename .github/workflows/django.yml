@@ -91,6 +91,8 @@ jobs:
         run: |
           python manage.py test backend.app --verbosity 2
 
+      # DECISION: collectstatic has no --check flag (that's migrate). --dry-run alone
+      # exercises finders + WhiteNoise storage config without writing files.
       - name: Check static files
         run: |
-          python manage.py collectstatic --noinput --dry-run --check
+          python manage.py collectstatic --noinput --dry-run
