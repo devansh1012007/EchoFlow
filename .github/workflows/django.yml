@@ -63,7 +63,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run migrations check
+      # DECISION: `migrate --check` exits 1 whenever ANY migration is unapplied and never
+      # applies them — on a fresh CI database that is always true, so it could never pass.
+      # We apply migrations instead, then use `makemigrations --check --dry-run` to catch
+      # model changes that are missing migration files.
+      - name: Run migrations
         env:
           DATABASE_URL: postgresql://echoflow:testpassword@localhost:5432/echoflow_test
           REDIS_URL: redis://localhost:6379/1
@@ -73,7 +77,8 @@ jobs:
           FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          python manage.py migrate --check
+          python manage.py migrate --noinput
+          python manage.py makemigrations --check --dry-run
 
       - name: Run Django system checks
         env:
