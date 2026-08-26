@@ -38,6 +38,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The wheelhouse can't live in git (torch-2.8.0+cpu is 176MB, exceeds
+      # GitHub's 100MB per-file limit). Generate it fresh in CI so the
+      # Dockerfile COPY wheelhouse/ always has content. Python 3.11 matches
+      # the Dockerfile's python:3.11-slim-bookworm base image.
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate wheelhouse
+        run: |
+          # dj-rest-auth is sdist-only on PyPI — must be built into a wheel.
+          pip wheel --no-deps -w wheelhouse 'dj-rest-auth==7.2.0'
+          # Everything else: download pre-built cp311 wheels (transitive deps
+          # resolved automatically). --prefer-binary avoids sdist fallback.
+          pip download --prefer-binary --retries 10 --timeout 120 \
+            --extra-index-url https://download.pytorch.org/whl/cpu \
+            -c constraints.txt -r requirements-base.txt -d wheelhouse
+          pip download --prefer-binary --retries 10 --timeout 120 \
+            --extra-index-url https://download.pytorch.org/whl/cpu \
+            -c constraints.txt -r requirements-media.txt -d wheelhouse
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
