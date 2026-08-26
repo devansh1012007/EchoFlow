@@ -1,6 +1,9 @@
 import time
+import logging
 from django.http import JsonResponse
 from django.db import connection
+
+logger = logging.getLogger(__name__)
 
 
 def health_check(request):
@@ -29,9 +32,10 @@ def readiness_check(request):
             "database": "connected",
             "timestamp": time.time(),
         })
-    except Exception as e:
+    except Exception:
+        logger.exception("Readiness check failed during database connectivity validation.")
         return JsonResponse({
             "status": "not_ready",
-            "database": f"error: {str(e)}",
+            "database": "error",
             "timestamp": time.time(),
         }, status=503)
