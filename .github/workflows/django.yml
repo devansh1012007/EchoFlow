@@ -67,11 +67,11 @@ jobs:
         env:
           DATABASE_URL: postgresql://echoflow:testpassword@localhost:5432/echoflow_test
           REDIS_URL: redis://localhost:6379/1
-          DJANGO_SECRET_KEY: ci-test-secret-key-do-not-use-in-production
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
           DJANGO_DEBUG: 'True'
           DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
-          FIELD_ENCRYPTION_KEY: generate-a-fernet-key-for-tests
-          HF_TOKEN: ''
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python manage.py migrate --check
 
@@ -79,11 +79,11 @@ jobs:
         env:
           DATABASE_URL: postgresql://echoflow:testpassword@localhost:5432/echoflow_test
           REDIS_URL: redis://localhost:6379/1
-          DJANGO_SECRET_KEY: ci-test-secret-key-do-not-use-in-production
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
           DJANGO_DEBUG: 'True'
           DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
-          FIELD_ENCRYPTION_KEY: generate-a-fernet-key-for-tests
-          HF_TOKEN: ''
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python manage.py check --fail-level WARNING
 
@@ -91,17 +91,17 @@ jobs:
         env:
           DATABASE_URL: postgresql://echoflow:testpassword@localhost:5432/echoflow_test
           REDIS_URL: redis://localhost:6379/1
-          DJANGO_SECRET_KEY: ci-test-secret-key-do-not-use-in-production
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
           DJANGO_DEBUG: 'True'
           DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
-          FIELD_ENCRYPTION_KEY: generate-a-fernet-key-for-tests
-          HF_TOKEN: ''
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python manage.py test backend.app --verbosity 2
 
       - name: Check static files
         env:
-          DJANGO_SECRET_KEY: ci-test-secret-key-do-not-use-in-production
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
           DJANGO_DEBUG: 'True'
           DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
         run: |
