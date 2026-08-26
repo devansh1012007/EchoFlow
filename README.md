@@ -109,10 +109,10 @@ source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Create your environment file (a committed `.env.example`-style file is not present, so copy `.env` and edit it):
+Copy the committed template and fill in your values:
 
 ```bash
-cp .env .env.local   # or edit .env directly
+cp .env.example .env   # then edit .env
 ```
 
 Required variables:
