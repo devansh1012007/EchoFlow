@@ -1,10 +1,11 @@
 *.env
 .env
 /hidden folder
-/media
+backend/media
 /pycache
 *.log
 /staticfiles
+/backend/staticfiles
 *.db
 **/__pycache__/
 *.pyc
@@ -24,3 +25,4 @@ AGENTS.md
 /frontend/node_modules
 /sample_frontend
 *.vite
+backend/media/
