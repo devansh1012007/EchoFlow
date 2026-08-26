@@ -7,7 +7,7 @@ from .views import (
 )
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from django.conf import settings
-from django.conf.urls.static import static
+from django.views.static import serve as static_serve
 
 router = DefaultRouter()
 router.register(r'feed', FastFeedViewSet, basename='feed')
@@ -26,5 +26,9 @@ urlpatterns = [
     path('auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/register/', RegisterView.as_view(), name='register'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    *static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT),
-]
+    # NOTE: intentionally unconditional (not gated on settings.DEBUG). Django's
+    # own static() helper returns [] when DEBUG=False, which silently killed
+    # media serving in every non-debug run. This is still a stopgap, not a
+    # production answer — see note below.
+    path('media/<path:path>', static_serve, {'document_root': settings.MEDIA_ROOT}),
+]   

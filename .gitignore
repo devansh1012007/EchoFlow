@@ -24,4 +24,6 @@ AGENTS.md
 *.venv
 /frontend/node_modules
 /sample_frontend
+*.vite
 backend/media/
+/frontend/sample_frontend/node_modules

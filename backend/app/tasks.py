@@ -1,5 +1,6 @@
 import os
 import subprocess
+import tempfile
 import random
 import json
 import math
@@ -123,6 +124,36 @@ def extract_acoustic_vector(y,sr):
     return acoustic_vector.tolist()
 
 
+def normalize_to_wav(input_file_path, sr=22050):
+    """Decode arbitrary input audio (mp3/webm/ogg/m4a/whatever a client sends)
+    into a clean mono PCM WAV via ffmpeg, up front.
+
+    This exists because librosa.load() tries soundfile (libsndfile) first and
+    silently falls back to the deprecated `audioread` path — logging a
+    UserWarning/FutureWarning — on any container/codec libsndfile can't
+    decode. Direct browser/file uploads hit this because, unlike the scraper
+    ingestion path (which already runs everything through
+    scrapers/normalizer.py), nothing normalizes user uploads before they're
+    handed to librosa. Doing one authoritative ffmpeg decode here removes the
+    audioread fallback entirely (so this doesn't silently start hard-failing
+    when librosa 1.0 drops that fallback) and gives every downstream step
+    (librosa, Whisper, ffmpeg HLS) the same known-good source file instead of
+    each re-decoding the original independently.
+
+    Raises subprocess.CalledProcessError if ffmpeg can't decode the input at
+    all (i.e. the upload is genuinely not a valid audio file).
+    """
+    fd, wav_path = tempfile.mkstemp(suffix='.wav')
+    os.close(fd)
+    command = [
+        'ffmpeg', '-y', '-i', input_file_path,
+        '-ac', '1', '-ar', str(sr),
+        '-f', 'wav', wav_path,
+    ]
+    subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return wav_path
+
+
 @shared_task
 def process_audio_to_hls(clip_id):
 
@@ -136,70 +167,91 @@ def process_audio_to_hls(clip_id):
         clip.save()
         return
     input_file_path = clip.original_file.path
-    # 1. Acoustic Vector Extraction
-    y, sr = librosa.load(input_file_path, sr=22050)
-    clip.acoustic_vector = extract_acoustic_vector(y, sr)
-    
-    # CRITICAL FIX: Extract exact duration for completion_rate math
-    clip.duration_ms = int(librosa.get_duration(y=y, sr=sr) * 1000)
 
-    clip.save(update_fields=['acoustic_vector', 'duration_ms'])
-    logger.info(f"Extracted acoustic vector and duration for clip {clip_id}")
-    # 2. AUDIO TO TEXT (Whisper)
+    # Normalize once, up front, before anything tries to decode the raw
+    # upload. See normalize_to_wav() docstring for why this exists.
     try:
-        # Lazy-init models to avoid startup cost during management commands
-        model = get_whisper_model()
-        segments, info = model.transcribe(input_file_path, beam_size=5)
-        transcript_text = " ".join([segment.text for segment in segments]).strip()
-
-        # B. Semantic Vector via sentence-transformers
-        if transcript_text:
-            embed_model = get_embedding_model()
-            vector = embed_model.encode(transcript_text)
-            clip.semantic_vector = vector.tolist()
-            # Extracts top 3 unigrams (single words)
-            keywords = get_kw_model().extract_keywords(
-                transcript_text,
-                keyphrase_ngram_range=(1, 1),
-                stop_words='english',
-                top_n=3,
-            )
-            logger.info(f"Extracted keywords for clip {clip_id}: {keywords}")
-            clip.tags = [kw[0] for kw in keywords]
-        else:
-            # Fallback for purely instrumental tracks with no vocals
-            clip.semantic_vector = [0.0] * 384
-            clip.tags = ["instrumental"]
-    except Exception as e:
-        logger.exception("Local AI Processing Failed: %s", e)
+        normalized_path = normalize_to_wav(input_file_path)
+    except subprocess.CalledProcessError as e:
+        logger.error("Failed to normalize audio for clip %s: %s", clip_id, e.stderr.decode())
         clip.status = 'failed'
         clip.save()
         return
-    
-    output_dir = os.path.join(settings.MEDIA_ROOT, 'hls', str(clip.id))
-    os.makedirs(output_dir, exist_ok=True)
-    
-    command = [
-        'ffmpeg', '-y', '-i', input_file_path,
-        '-c:a', 'aac', '-ar', '44100',
-        '-map', '0:a', '-map', '0:a', '-map', '0:a',
-        '-b:a:0', '192k', '-b:a:1', '128k', '-b:a:2', '64k',
-        '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod',
-        '-var_stream_map', 'a:0,agroup:audio,default:yes a:1,agroup:audio a:2,agroup:audio',
-        '-master_pl_name', 'master.m3u8',
-        os.path.join(output_dir, '%v', 'index.m3u8')
-    ]
 
     try:
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        clip.hls_playlist_url = f"/media/hls/{clip.id}/master.m3u8"
-        clip.status = 'ready'
-        clip.save()
-    except subprocess.CalledProcessError as e:
-        clip.status = 'failed'
-        clip.save()
-        logger.error("FFmpeg Error: %s", e.stderr.decode())
-    
+        # 1. Acoustic Vector Extraction
+        y, sr = librosa.load(normalized_path, sr=22050)
+        clip.acoustic_vector = extract_acoustic_vector(y, sr)
+
+        # CRITICAL FIX: Extract exact duration for completion_rate math
+        clip.duration_ms = int(librosa.get_duration(y=y, sr=sr) * 1000)
+
+        clip.save(update_fields=['acoustic_vector', 'duration_ms'])
+        logger.info(f"Extracted acoustic vector and duration for clip {clip_id}")
+        # 2. AUDIO TO TEXT (Whisper)
+        try:
+            # Lazy-init models to avoid startup cost during management commands
+            model = get_whisper_model()
+            segments, info = model.transcribe(normalized_path, beam_size=5)
+            transcript_text = " ".join([segment.text for segment in segments]).strip()
+
+            # B. Semantic Vector via sentence-transformers
+            if transcript_text:
+                embed_model = get_embedding_model()
+                vector = embed_model.encode(transcript_text)
+                clip.semantic_vector = vector.tolist()
+                # Extracts top 3 unigrams (single words)
+                keywords = get_kw_model().extract_keywords(
+                    transcript_text,
+                    keyphrase_ngram_range=(1, 1),
+                    stop_words='english',
+                    top_n=3,
+                )
+                logger.info(f"Extracted keywords for clip {clip_id}: {keywords}")
+                clip.tags = [kw[0] for kw in keywords]
+            else:
+                # Fallback for purely instrumental tracks with no vocals
+                clip.semantic_vector = [0.0] * 384
+                clip.tags = ["instrumental"]
+        except Exception as e:
+            logger.exception("Local AI Processing Failed: %s", e)
+            clip.status = 'failed'
+            clip.save()
+            return
+
+        output_dir = os.path.join(settings.MEDIA_ROOT, 'hls', str(clip.id))
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Encode HLS from the same normalized WAV, not the raw upload — one
+        # authoritative decode instead of ffmpeg re-decoding the original
+        # container a second time.
+        command = [
+            'ffmpeg', '-y', '-i', normalized_path,
+            '-c:a', 'aac', '-ar', '44100',
+            '-map', '0:a', '-map', '0:a', '-map', '0:a',
+            '-b:a:0', '192k', '-b:a:1', '128k', '-b:a:2', '64k',
+            '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod',
+            '-var_stream_map', 'a:0,agroup:audio,default:yes a:1,agroup:audio a:2,agroup:audio',
+            '-master_pl_name', 'master.m3u8',
+            os.path.join(output_dir, '%v', 'index.m3u8')
+        ]
+
+        try:
+            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            clip.hls_playlist_url = f"/media/hls/{clip.id}/master.m3u8"
+            clip.status = 'ready'
+            clip.save()
+        except subprocess.CalledProcessError as e:
+            clip.status = 'failed'
+            clip.save()
+            logger.error("FFmpeg Error: %s", e.stderr.decode())
+    finally:
+        # Always clean up the temp normalized file, success or failure.
+        try:
+            os.remove(normalized_path)
+        except OSError:
+            pass
+
     # for when i will have money for API
     '''try:
         client = get_openai_client()
@@ -620,6 +672,3 @@ def scrape_and_import(source_name, limit=5, clip_length=300):
                         os.remove(p)
                 except Exception as e:
                     logger.error("Failed to clean up temp file %s: %s", p, e)
-                    
-
-

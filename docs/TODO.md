@@ -50,3 +50,9 @@ Personal TODO :
     - * Database write-contention from high-velocity telemetry.
     - * Memory and CPU exhaustion from collocated ML inference and media transcoding.
     - * The transition from a relational architecture to an event-driven architecture.
+
+
+
+FIX BEFORE PRODUCTION
+- The unconditional static_serve route is a stopgap, not a production answer. It's single-threaded blocking I/O with no caching headers — every HLS segment request now parks a gunicorn thread for its full duration. Fine at hackathon scale. When you're ready to matter to real users, that's an nginx-in-front-of-gunicorn problem (or S3/R2 + CDN), not a Django-routes problem.
+- 
