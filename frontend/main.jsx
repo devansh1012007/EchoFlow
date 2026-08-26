@@ -123,7 +123,7 @@ const STYLES = `
 /* ─────────────────────────────────────────
    CONSTANTS
 ───────────────────────────────────────── */
-const API_BASE = "http://localhost:8005"
+const API_BASE = "http://100.124.196.125:800"
 const CATEGORIES = ["instrumental","funny","news","science","music"]
 const CAT_COLORS = {
   instrumental: "#00D4FF", funny: "#F59E0B",
