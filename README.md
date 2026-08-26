@@ -202,35 +202,54 @@ FFmpeg **must** be installed for scraping to work (used by audio normalization a
 
 ```
 EchoFlow/
-├── backend/                   # Django application
-│   ├── EchoFlow/              # Project config (settings, urls, celery, wsgi/asgi)
-│   │   ├── settings.py        # All config: DB, Redis, Celery, JWT, scraper, CORS
-│   │   ├── urls.py            # Root URL config (admin + app routes)
-│   │   ├── celery.py          # Celery app (Redis broker)
-│   │   └── wsgi.py
-│   ├── app/                   # Core Django app
-│   │   ├── models.py          # User, AudioClip, Comment, ShareEvent, UserInteraction
-│   │   ├── views.py           # 9 ViewSets + pagination (feed, uploads, social, profile)
-│   │   ├── serializers.py     # DRF serializers (feed, upload, comment, auth, profiles)
-│   │   ├── urls.py            # DRF router + JWT auth endpoints
-│   │   ├── tasks.py           # Celery tasks (HLS/AI, feed refill, metrics, baseline evolution)
-│   │   ├── scrapers/          # Ingestion pipeline
-│   │   │   ├── base.py        # robots.txt checker, rate limiter, HTTP session
-│   │   │   ├── downloader.py  # Safe audio download (size/content-type guards)
-│   │   │   ├── normalizer.py  # Trim + normalize audio (pydub)
-│   │   │   ├── uploader.py    # Persist clip + provenance metadata
-│   │   │   └── sources/       # wikimedia, internet_archive, freesound, kaggle
-│   │   ├── management/commands/  # scrape_audio management command
-│   │   └── migrations/
-│   └── scripts/               # Seed scripts (seed_db.py)
-├── frontend/                  # Vite/React client for the API
-├── ai-ml/                     # ML pipeline stubs (models, pipelines, eval)
-├── docker-compose.yml         # 7 services: db, redis, web, celery, feed, media, beat
-├── Dockerfile                 # python:3.11-slim + ffmpeg + libsndfile + deps
-├── requirements.txt           # All Python dependencies
-├── wait_for_db.py             # DB readiness check for container startup
-└── docs/                      # Architecture, audit, and scaling documentation
+├── .github/workflows/          # CI: django.yml (tests/migrations/static), docker-image.yml (image build+push), codeql.yml
+├── backend/                    # Django application
+│   ├── EchoFlow/               # Project package — don't confuse with the app package below
+│   │   ├── settings.py         # All config: DB, Redis, Celery, JWT, scraper, CORS
+│   │   ├── urls.py             # Root URL config (admin + app routes)
+│   │   ├── celery.py           # Celery app (Redis broker)
+│   │   ├── health.py           # /health/ liveness and /ready/ readiness probes
+│   │   ├── wsgi.py             # WSGI entrypoint (gunicorn target)
+│   │   └── asgi.py
+│   ├── app/                    # Core Django app
+│   │   ├── models.py           # User, AudioClip, Comment, ShareEvent, UserInteraction
+│   │   ├── views.py            # ViewSets: feed, uploads, interactions, comments, share, follow, tags, profile
+│   │   ├── serializers.py      # DRF serializers (feed, upload, comment, auth, profiles)
+│   │   ├── urls.py             # DRF router + JWT auth endpoints
+│   │   ├── tasks.py            # Celery tasks (HLS/AI pipeline, feed refill, metrics, vector evolution)
+│   │   ├── db_routers.py       # Multi-DB routing stub (single DB for now)
+│   │   ├── scrapers/           # License-aware ingestion pipeline
+│   │   │   ├── base.py         # robots.txt checker, rate limiter, HTTP session
+│   │   │   ├── downloader.py   # Safe audio download (size/content-type guards)
+│   │   │   ├── normalizer.py   # Trim + normalize audio (pydub)
+│   │   │   ├── uploader.py     # Persist clip + provenance metadata
+│   │   │   └── sources/        # wikimedia_commons, internet_archive, freesound, kaggle
+│   │   ├── management/
+│   │   │   └── commands/       # scrape_audio management command
+│   │   ├── migrations/
+│   │   └── tests/              # test_scraper.py
+│   ├── scripts/                # Seed scripts (seed_db.py, seed_db2.py)
+│   └── staticfiles/            # collectstatic output (generated)
+├── frontend/                   # Sample Vite/React client (HLS.js playback)
+├── ai-ml/                      # ML pipeline experiments
+│   ├── models/                 # Whisper / embedding / KeyBERT / acoustic wrappers
+│   ├── pipelines/              # audio_ingest, cold_start, recommendation
+│   └── eval/                   # feed_metrics, vector_quality
+├── docs/                       # Architecture audits, scaling analysis, deployment notes
+├── docker-compose.yml          # 7 services: db, redis, web, celery, celery_feed, celery_media, celery_beat
+├── Dockerfile                  # Multi-stage build → api + media images, offline wheelhouse installs
+├── requirements.txt            # Aggregate for local dev (-r base + media)
+├── requirements-base.txt       # Core Django/API deps (used by api image)
+├── requirements-media.txt      # ML deps: faster-whisper, sentence-transformers, librosa, keybert (media image)
+├── constraints.txt             # Shared version pins for both requirement sets
+├── manage.py
+├── gunicorn.conf.py            # preload_app + post_fork DB-connection reset
+├── wait_for_db.py              # DB readiness poll for container startup
+├── .env.example                # Template of required environment variables
+└── SECURITY.md
 ```
+
+Generated at runtime, never committed: `media/` (uploads + HLS output), `wheelhouse/` (offline pip wheels), root `staticfiles/`, `cache/`.
 
 ## Development / Future Vision
 

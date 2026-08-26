@@ -37,6 +37,13 @@ Personal TODO :
 - check on business side and shit 
 - add features 
 - work on recommandation engine
+- Media to object storage — move HLS output and uploads from local disk to S3-compatible storage (django-storages + boto3 are already dependencies)
+- CDN delivery — serve HLS segments through a CDN for global low-latency streaming
+- Real-time notifications — push events for shares/inbox via websockets or a streaming broker
+- Recommendation at scale — replace brute-force cosine scans with a candidate-generation + ANN tier as the catalog grows
+- Event-driven message bus — migrate the Celery/Redis broker to a durable event stream for idempotent, retryable processing
+- Rate limiting & throttling — add DRF throttling and distributed rate limits to the API layer
+- Observability stack — structured logging, metrics, tracing, and error tracking for production confidence
 
 - make audit and planning docs on following :
     - * Stateful media storage in a horizontally scaling environment.
