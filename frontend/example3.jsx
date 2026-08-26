@@ -8,7 +8,7 @@ import {
 // ============================================================================
 // CONFIGURATION & THEME
 // ============================================================================
-const API_BASE = 'http://100.124.196.125:800';
+const API_BASE = 'http://localhost:8005';
 const CATEGORIES = ['instrumental', 'funny', 'news', 'science', 'music'];
 
 const ThemeContext = createContext(null);
