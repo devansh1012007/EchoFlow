@@ -16,7 +16,7 @@ DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() == 'true'
 
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost').split(',')
 CORS_ALLOW_ALL_ORIGINS = os.environ.get('DJANGO_CORS_ALL', 'False').lower() == 'true'
-CORS_ALLOWED_ORIGINS = os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5173').split(',')
+CORS_ALLOWED_ORIGINS = os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5173,https://*.trycloudflare.com,http://localhost:3021,http://100.124.196.125:3021,http://100.98.153.44:3021,http://100.109.57.62:3021').split(',')
 
 # Allow HLS media files specifically
 CORS_URLS_REGEX = r'^.*$'  # all URLs, or narrow to r'^/media/.*$' for HLS only
@@ -46,7 +46,7 @@ CORS_EXPOSE_HEADERS = [
 ]
 
 # Only set True in dev — in prod use CORS_ALLOWED_ORIGINS
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS_ALLOW_ALL_ORIGINS = True # check like 19 
 # Application definition
 SITE_ID = 1
 INSTALLED_APPS = [

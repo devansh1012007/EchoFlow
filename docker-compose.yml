@@ -62,7 +62,7 @@ services:
         hard: 65536
 
   web:
-    image: devansh1012007/echoflow:${TAG:-latest}
+    image: devansh1012007/echoflow-api:${TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -87,7 +87,7 @@ services:
          gunicorn -c gunicorn.conf.py backend.EchoFlow.wsgi:application"
     volumes:
       - .:/app
-      - media_data:/app/media
+      - media_data:/app/backend/media
     ports:
       - "8005:8000"
     depends_on:
@@ -116,7 +116,7 @@ services:
         hard: 65536
 
   celery:
-    image: devansh1012007/echoflow:${TAG:-latest}
+    image: devansh1012007/echoflow-api:${TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -131,7 +131,7 @@ services:
       sh -c "set -e && python wait_for_db.py &&
               celery -A backend.EchoFlow worker --loglevel=info"
     volumes:
-      - media_data:/app/media
+      - media_data:/app/backend/media
       - .:/app
     depends_on:
       db:
@@ -166,7 +166,7 @@ services:
         hard: 65536
 
   celery_feed:
-    image: devansh1012007/echoflow:${TAG:-latest}
+    image: devansh1012007/echoflow-api:${TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -190,7 +190,7 @@ services:
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
     volumes:
       - .:/app
-      - media_data:/app/media
+      - media_data:/app/backend/media
     # Same shared-image override as the default celery worker.
     healthcheck:
       test: ["CMD-SHELL", "celery -A backend.EchoFlow inspect ping -d \"celery@$$(hostname)\" --timeout=10 || exit 1"]
@@ -213,7 +213,7 @@ services:
         hard: 65536
 
   celery_media:
-    image: devansh1012007/echoflow:${TAG:-latest}
+    image: devansh1012007/echoflow-media:${TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -229,7 +229,7 @@ services:
       sh -c "set -e && python wait_for_db.py &&
               celery -A backend.EchoFlow worker -Q heavy_media --pool=solo --loglevel=info"
     volumes:
-      - media_data:/app/media
+      - media_data:/app/backend/media
     env_file:
       - .env
     depends_on:
@@ -306,6 +306,7 @@ volumes:
   postgres_data:
   redis_data:
   media_data:
+  
 
 # Build-time secrets (Compose >= 2.17 forwards these to BuildKit).
 # hf_token is consumed by the Dockerfile's --mount=type=secret,id=hf_token

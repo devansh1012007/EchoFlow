@@ -41,7 +41,7 @@ RUN groupadd -g 1000 appgroup \
  && printf 'Acquire::Retries "10";\nAcquire::http::Timeout "120";\nAcquire::https::Timeout "120";\nAcquire::http::Pipeline-Depth "0";\n' \
       > /etc/apt/apt.conf.d/99custom-network \
  && apt-get update \
- && apt-get install -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends --fix-missing \
         libpq-dev \
         gcc \
         postgresql-client \

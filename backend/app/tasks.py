@@ -151,6 +151,7 @@ def normalize_to_wav(input_file_path, sr=22050):
         '-f', 'wav', wav_path,
     ]
     subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    logger.info("Normalizing audio to WAV: %s", wav_path)
     return wav_path
 
 
