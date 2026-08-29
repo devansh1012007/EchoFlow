@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from .media_urls import get_hls_playback_url
 from .models import AudioClip, UserInteraction, ShareEvent, Comment
 from rest_framework.validators import UniqueValidator
 
@@ -28,6 +29,13 @@ class FeedClipSerializer(serializers.ModelSerializer):
     creator_name = serializers.CharField(source='creator.username', read_only=True)
     creator_id = serializers.IntegerField(source='creator.id', read_only=True)
     is_liked = serializers.SerializerMethodField()
+    # `AudioClip.hls_playlist_url` stores a relative object-storage KEY
+    # (e.g. "hls/<clip_id>/master.m3u8"), not a servable URL — the bucket is
+    # private, so a real playable URL has to be signed fresh on every read.
+    # A signed URL persisted in the DB would silently expire after
+    # AWS_S3_QUERYSTRING_EXPIRE regardless of whether the clip is still
+    # valid, so we generate it here instead of trusting the stored field.
+    hls_playlist_url = serializers.SerializerMethodField()
 
     class Meta:
         model = AudioClip
@@ -39,6 +47,9 @@ class FeedClipSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'likes', 'shares', 'skips', 'comment_count', 'hls_playlist_url', 'is_liked'
         ]
+
+    def get_hls_playlist_url(self, obj):
+        return get_hls_playback_url(obj.hls_playlist_url)
 
     def get_is_liked(self, obj):
         if hasattr(obj, 'user_has_liked'):
@@ -90,8 +101,14 @@ class InteractionTelemetrySerializer(serializers.Serializer):
 class ShareEventSerializer(serializers.ModelSerializer):
     sender_name = serializers.CharField(source='sender.username', read_only=True)
     clip_title = serializers.CharField(source='clip.title', read_only=True)
-    clip_hls_url = serializers.CharField(source='clip.hls_playlist_url', read_only=True)
+    # See FeedClipSerializer.get_hls_playlist_url — same reasoning: the model
+    # field is a storage key, not a URL, so it must be signed here rather
+    # than passed through as a plain CharField.
+    clip_hls_url = serializers.SerializerMethodField()
     clip = FeedClipSerializer(read_only=True)
+
+    def get_clip_hls_url(self, obj):
+        return get_hls_playback_url(obj.clip.hls_playlist_url)
     
     class Meta:
         model = ShareEvent

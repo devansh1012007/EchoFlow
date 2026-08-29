@@ -62,6 +62,7 @@ pydub==0.25.1                     # pure
 
 # --- Cloud SDKs ---
 boto3==1.43.78                    # pure (+ botocore/s3transfer pinned in constraints)
+django-storages[s3]==1.14.4       # S3-compatible object storage backend for MEDIA files
 
 # --- LLM client (imported by backend/app/tasks.py — must be declared) ---
 openai==3.3.1                     # pure — installs offline from wheelhouse

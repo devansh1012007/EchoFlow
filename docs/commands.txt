@@ -22,3 +22,12 @@ git rm --cached filename.txt
 git rm -r --cached folder_name/
 
 pip install --no-cache-dir --retries 10 --index-url https://download.pytorch.org/whl/cpu torch 
+pip install -r requirements.txt --target=wheelhouse2 --find-links=wheelhouse --python-version 3.11 --only-binary=:all:
+python3.11 -m pip install -r requirements.txt --target=wheelhouse2 --find-links=wheelhouse
+pip install -r requirements.txt --target=wheelhouse2 --find-links=wheelhouse --python-version 3.11 --only-binary=:all: --retries 10 --timeout 60
+pip install -r requirements.txt --target=wheelhouse --python-version 3.11 --only-binary=:all: --retries 10 --timeout 60
+
+until pip wheel --default-timeout=300 --retries 10 -r requirements.txt --target=wheelhouse2 --find-links=wheelhouse --python-version 3.11 --only-binary=:all:; do
+  echo "Download interrupted. Retrying in 3 seconds..."
+  sleep 3
+done

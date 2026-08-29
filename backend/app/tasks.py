@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import tempfile
 import random
@@ -9,6 +10,7 @@ import logging
 import librosa
 from celery import shared_task
 from django.conf import settings
+from django.core.files.storage import default_storage
 from django.db import connection
 from django.db.models import F, FloatField, ExpressionWrapper, Avg
 from django.db.models.functions import Now
@@ -151,7 +153,6 @@ def normalize_to_wav(input_file_path, sr=22050):
         '-f', 'wav', wav_path,
     ]
     subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    logger.info("Normalizing audio to WAV: %s", wav_path)
     return wav_path
 
 
@@ -159,7 +160,7 @@ def normalize_to_wav(input_file_path, sr=22050):
 def process_audio_to_hls(clip_id):
 
     # Now 'clip' is guaranteed to exist for the following logic
-    logger.info("process_audio_to_hls Task is starting...")    
+    logger.info("process_audio_to_hls Task is starting...")
     clip = AudioClip.objects.get(id=clip_id)
     if not clip.original_file:
         # Handle missing file error
@@ -167,7 +168,20 @@ def process_audio_to_hls(clip_id):
         clip.status = 'failed'
         clip.save()
         return
-    input_file_path = clip.original_file.path
+
+    # DIAGNOSIS -> SOLUTION: `clip.original_file.path` only exists for
+    # FileSystemStorage; S3Storage (see settings.STORAGES) has no local path
+    # at all — the bytes live in the bucket, not on this container's disk.
+    # ffmpeg/librosa/Whisper all need a real local file to operate on, so we
+    # explicitly stream the object down to a local temp file once, work on
+    # that, and delete it when done. This is the same shape as
+    # normalize_to_wav() below on purpose: "pull remote bytes to a local
+    # scratch file, process, clean up" is now the *only* pattern used
+    # anywhere in this task — no code path assumes a shared filesystem.
+    fd, input_file_path = tempfile.mkstemp(suffix=os.path.splitext(clip.original_file.name)[1] or '.bin')
+    with os.fdopen(fd, 'wb') as local_copy:
+        with clip.original_file.open('rb') as remote_file:
+            shutil.copyfileobj(remote_file, local_copy)
 
     # Normalize once, up front, before anything tries to decode the raw
     # upload. See normalize_to_wav() docstring for why this exists.
@@ -177,7 +191,21 @@ def process_audio_to_hls(clip_id):
         logger.error("Failed to normalize audio for clip %s: %s", clip_id, e.stderr.decode())
         clip.status = 'failed'
         clip.save()
+        os.remove(input_file_path)
         return
+    finally:
+        # input_file_path's only job was feeding ffmpeg above; normalized_path
+        # is what every later step reads from.
+        if os.path.exists(input_file_path):
+            os.remove(input_file_path)
+
+    # Local scratch dir for the HLS segments ffmpeg is about to generate.
+    # ffmpeg needs a real filesystem to write into — it can't target S3
+    # directly — so we render locally, then upload every resulting file to
+    # object storage, then remove the local copy. Nothing under this
+    # directory is ever read by another container; it exists only for the
+    # lifetime of this task on this worker.
+    local_hls_dir = tempfile.mkdtemp(prefix=f'hls-{clip_id}-')
 
     try:
         # 1. Acoustic Vector Extraction
@@ -220,12 +248,10 @@ def process_audio_to_hls(clip_id):
             clip.save()
             return
 
-        output_dir = os.path.join(settings.MEDIA_ROOT, 'hls', str(clip.id))
-        os.makedirs(output_dir, exist_ok=True)
-
         # Encode HLS from the same normalized WAV, not the raw upload — one
         # authoritative decode instead of ffmpeg re-decoding the original
-        # container a second time.
+        # container a second time. Written to LOCAL scratch space, then
+        # uploaded to object storage below.
         command = [
             'ffmpeg', '-y', '-i', normalized_path,
             '-c:a', 'aac', '-ar', '44100',
@@ -234,12 +260,32 @@ def process_audio_to_hls(clip_id):
             '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod',
             '-var_stream_map', 'a:0,agroup:audio,default:yes a:1,agroup:audio a:2,agroup:audio',
             '-master_pl_name', 'master.m3u8',
-            os.path.join(output_dir, '%v', 'index.m3u8')
+            os.path.join(local_hls_dir, '%v', 'index.m3u8')
         ]
 
         try:
             subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            clip.hls_playlist_url = f"/media/hls/{clip.id}/master.m3u8"
+
+            # Upload every file ffmpeg just wrote locally up to object
+            # storage, under hls/<clip_id>/... — this is the step that
+            # replaces "shared volume" with "every container talks to the
+            # same bucket over the network".
+            storage_prefix = f"hls/{clip.id}"
+            for root, _dirs, files in os.walk(local_hls_dir):
+                for fname in files:
+                    local_path = os.path.join(root, fname)
+                    rel_path = os.path.relpath(local_path, local_hls_dir)
+                    storage_key = f"{storage_prefix}/{rel_path}".replace(os.sep, '/')
+                    with open(local_path, 'rb') as fh:
+                        default_storage.save(storage_key, fh)
+
+            # DECISION: store the relative object KEY, not a full URL. A
+            # signed S3 URL expires (see AWS_S3_QUERYSTRING_EXPIRE) — baking
+            # one into the database would mean playback silently breaks an
+            # hour after processing regardless of whether the clip is still
+            # valid. The serializer generates a fresh signed URL from this
+            # key on every read instead (see FeedClipSerializer).
+            clip.hls_playlist_url = f"{storage_prefix}/master.m3u8"
             clip.status = 'ready'
             clip.save()
         except subprocess.CalledProcessError as e:
@@ -247,11 +293,12 @@ def process_audio_to_hls(clip_id):
             clip.save()
             logger.error("FFmpeg Error: %s", e.stderr.decode())
     finally:
-        # Always clean up the temp normalized file, success or failure.
+        # Always clean up both local scratch areas, success or failure.
         try:
             os.remove(normalized_path)
         except OSError:
             pass
+        shutil.rmtree(local_hls_dir, ignore_errors=True)
 
     # for when i will have money for API
     '''try:
@@ -667,9 +714,16 @@ def scrape_and_import(source_name, limit=5, clip_length=300):
             logger.error("Failed to import %s: %s", url, e)
 
         finally:
+            # local_input/tmp_out are always tempfile-backed local scratch
+            # paths here (never the durable store — see uploader.save_clip,
+            # which already writes through default_storage), so there's
+            # nothing to protect against deleting; clean up unconditionally.
             for p in (local_input, tmp_out):
                 try:
-                    if p and os.path.exists(p) and not p.startswith(settings.MEDIA_ROOT):
+                    if p and os.path.exists(p):
                         os.remove(p)
                 except Exception as e:
                     logger.error("Failed to clean up temp file %s: %s", p, e)
+                    
+
+

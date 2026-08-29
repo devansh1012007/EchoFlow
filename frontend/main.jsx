@@ -261,6 +261,12 @@ function PlayerProvider({ children }) {
   const audioRef = useRef(null)
   const hlsRef   = useRef(null)
   const startRef = useRef(null)
+  // hlsReadyRef holds a promise that resolves once hls.js has actually
+  // finished loading (or immediately, if it's already on window.Hls from a
+  // previous mount / cached script). play() awaits this before branching on
+  // window.Hls, since the CDN <script> load below is async and was
+  // previously ungated — see the comment inside play() for the failure mode.
+  const hlsReadyRef = useRef(Promise.resolve())
 
   const kill = useCallback(() => {
     hlsRef.current?.destroy(); hlsRef.current = null
@@ -300,15 +306,33 @@ function PlayerProvider({ children }) {
 
     if (!src) return
 
+    // BUG FIX: hls.js loads asynchronously from a CDN (see the effect below)
+    // with no gate on it — a click that lands before the download finishes
+    // saw `window.Hls` as undefined and silently fell through to setting
+    // `a.src` directly to an .m3u8 URL, which native Chrome/Firefox <audio>
+    // elements cannot parse at all. `.catch(()=>{})` on `.play()` then
+    // swallowed the resulting rejection, so this failed with zero visible
+    // signal. Wait for the same load promise the effect creates before
+    // deciding which playback path to take.
+    await hlsReadyRef.current
+
     if (window.Hls?.isSupported()) {
       const hls = new window.Hls({ startLevel:-1 })
       hls.loadSource(src); hls.attachMedia(a)
       hls.on(window.Hls.Events.MANIFEST_PARSED, () => { a.play().catch(()=>{}); setPlaying(true) })
+      hls.on(window.Hls.Events.ERROR, (_evt, data) => {
+        console.error('hls.js playback error:', data)
+      })
       hlsRef.current = hls
     } else if (a.canPlayType("application/vnd.apple.mpegurl")) {
+      // Safari's native HLS support — the only browser path where setting
+      // .src directly to an .m3u8 URL actually works.
       a.src = src; a.play().catch(()=>{}); setPlaying(true)
     } else {
-      a.src = src; a.play().catch(()=>{}); setPlaying(true)
+      // No hls.js (failed to load / blocked) and no native support — this
+      // WILL fail to play. Surfacing it instead of silently swallowing it,
+      // since the whole point of this fix was to stop hiding this failure.
+      console.error('No HLS playback path available for this browser — hls.js failed to load and no native HLS support.')
     }
 
     a.ontimeupdate = () => {
@@ -324,9 +348,16 @@ function PlayerProvider({ children }) {
 
   useEffect(() => {
     if (!window.Hls) {
-      const s = document.createElement("script")
-      s.src = "https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"
-      document.head.appendChild(s)
+      hlsReadyRef.current = new Promise((resolve) => {
+        const s = document.createElement("script")
+        s.src = "https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"
+        s.onload = () => resolve()
+        s.onerror = () => {
+          console.error('Failed to load hls.js from CDN — HLS playback will fall back to native support only (Safari), or fail on other browsers.')
+          resolve() // resolve anyway so play() doesn't hang forever waiting
+        }
+        document.head.appendChild(s)
+      })
     }
     return kill
   }, [kill])
