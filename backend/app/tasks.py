@@ -254,13 +254,11 @@ def process_audio_to_hls(clip_id):
         # uploaded to object storage below.
         command = [
             'ffmpeg', '-y', '-i', normalized_path,
-            '-c:a', 'aac', '-ar', '44100',
-            '-map', '0:a', '-map', '0:a', '-map', '0:a',
-            '-b:a:0', '192k', '-b:a:1', '128k', '-b:a:2', '64k',
+            '-c:a', 'aac', '-ar', '44100', '-ac', '2', '-b:a', '128k',
             '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod',
-            '-var_stream_map', 'a:0,agroup:audio,default:yes a:1,agroup:audio a:2,agroup:audio',
+            '-hls_segment_type', 'fmp4',
             '-master_pl_name', 'master.m3u8',
-            os.path.join(local_hls_dir, '%v', 'index.m3u8')
+            os.path.join(local_hls_dir, 'index.m3u8')
         ]
 
         try:

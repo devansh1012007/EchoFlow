@@ -99,7 +99,8 @@ services:
       sh -c "
         mc alias set local http://minio:9000 ${AWS_ACCESS_KEY_ID:-echoflow-dev} ${AWS_SECRET_ACCESS_KEY:-echoflow-dev-secret} &&
         mc mb --ignore-existing local/${AWS_STORAGE_BUCKET_NAME:-echoflow-media} &&
-        mc anonymous set download local/${AWS_STORAGE_BUCKET_NAME:-echoflow-media}/hls
+        mc anonymous set download local/${AWS_STORAGE_BUCKET_NAME:-echoflow-media}/hls &&
+        mc admin config set local api cors_allow_origin='*'
       "
     # DIAGNOSIS: HLS is a multi-file protocol — master.m3u8 references variant
     # playlists and those reference segment files, all via RELATIVE paths.
