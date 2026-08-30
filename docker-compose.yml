@@ -68,7 +68,7 @@ services:
   # prod" class of bug from earlier this week structurally impossible now —
   # local dev IS a disconnected-storage topology, not an approximation of one.
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: echoflow_minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -91,7 +91,7 @@ services:
   # race against an empty MinIO on first boot. Exits after running; not a
   # long-lived service.
   minio-init:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on:
       minio:
         condition: service_healthy
@@ -152,10 +152,12 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
-      #interval: 30s
-      #timeout: 10s
-      #start_period: 90s
-      #retries: 3
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
     deploy:
       resources:
         limits:
