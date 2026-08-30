@@ -255,14 +255,34 @@ def process_audio_to_hls(clip_id):
         command = [
             'ffmpeg', '-y', '-i', normalized_path,
             '-c:a', 'aac', '-ar', '44100', '-ac', '2', '-b:a', '128k',
+            '-profile:a', 'aac_low',
             '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod',
-            '-hls_segment_type', 'fmp4',
+            '-hls_segment_type', 'mpegts',
             '-master_pl_name', 'master.m3u8',
             os.path.join(local_hls_dir, 'index.m3u8')
         ]
 
         try:
             subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            logger.info("HLS files generated: %s", os.listdir(local_hls_dir))
+
+            # Strip CODECS attribute from master playlist — FFmpeg adds
+            # CODECS="mp4a.40.2" by default which misleads HLS.js into
+            # creating an audio/mp4 SourceBuffer, but our segments are
+            # MPEG-TS (.ts), not fMP4.  Without the CODECS hint, HLS.js
+            # correctly defaults to video/mp2t for MPEG-TS streams.
+            master_path = os.path.join(local_hls_dir, "master.m3u8")
+            if os.path.exists(master_path):
+                with open(master_path, "r") as f:
+                    master_content = f.read()
+                import re
+                master_content = re.sub(
+                    r",CODECS=\"[^\"]+\"",
+                    "",
+                    master_content,
+                )
+                with open(master_path, "w") as f:
+                    f.write(master_content)
 
             # Upload every file ffmpeg just wrote locally up to object
             # storage, under hls/<clip_id>/... — this is the step that
@@ -274,8 +294,17 @@ def process_audio_to_hls(clip_id):
                     local_path = os.path.join(root, fname)
                     rel_path = os.path.relpath(local_path, local_hls_dir)
                     storage_key = f"{storage_prefix}/{rel_path}".replace(os.sep, '/')
+                    # Delete any previously uploaded version (S3Storage.save()
+                    # appends a random suffix to avoid collisions, which breaks
+                    # our playlist references).  Then save with the exact key
+                    # the playlists expect.
+                    try:
+                        default_storage.delete(storage_key)
+                    except FileNotFoundError:
+                        pass
                     with open(local_path, 'rb') as fh:
                         default_storage.save(storage_key, fh)
+                        logger.info("Uploaded %s", storage_key)
 
             # DECISION: store the relative object KEY, not a full URL. A
             # signed S3 URL expires (see AWS_S3_QUERYSTRING_EXPIRE) — baking
