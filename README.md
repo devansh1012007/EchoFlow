@@ -270,3 +270,4 @@ Natural next steps that follow directly from the existing architecture:
 
 ## Storage (MinIO / S3-compatible)
 Derived HLS streams live in object storage (MinIO locally / S3 in prod) with the `hls/` prefix public-read for multi-file playback; original uploads (`uploads/`) stay private via signed URLs. Full architecture, failure analysis, and verification scripts are documented in `docs/minio-s3-architecture.md`.
+# Echo-Flow
