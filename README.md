@@ -267,3 +267,6 @@ Natural next steps that follow directly from the existing architecture:
 ---
 
 **Stack at a glance:** `Django 5` · `DRF` · `PostgreSQL + pgvector` · `Redis` · `Celery` · `FFmpeg/HLS` · `faster-whisper` · `sentence-transformers` · `librosa` · `Docker Compose`
+
+## Storage (MinIO / S3-compatible)
+Derived HLS streams live in object storage (MinIO locally / S3 in prod) with the `hls/` prefix public-read for multi-file playback; original uploads (`uploads/`) stay private via signed URLs. Full architecture, failure analysis, and verification scripts are documented in `docs/minio-s3-architecture.md`.
