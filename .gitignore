@@ -326,3 +326,5 @@ zig-out/
 
 # Julia specific directories
 julia-*/
+
+/claude-diagnose.sh
