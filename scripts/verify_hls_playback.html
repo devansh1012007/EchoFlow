@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html><head><title>MinIO HLS Direct Test</title></head>
+<body>
+<h2>Direct HLS playback test (verifies data + format)</h2>
+<video id="v" controls preload="none" style="max-width:640px"></video>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
+<script>
+const url = "http://localhost:9000/echoflow-media/hls/84db4275-cc44-4ef3-8dc5-879698e56b49/master.m3u8";
+const v = document.getElementById('v');
+if (window.Hls && window.Hls.isSupported()) {
+  const hls = new window.Hls();
+  hls.loadSource(url); hls.attachMedia(v);
+  hls.on(window.Hls.Events.MANIFEST_PARSED, () => v.play());
+  hls.on(window.Hls.Events.ERROR, (evt, data) => console.error('HLS error:', data));
+  console.log('hls.js loaded; source:', url);
+} else {
+  v.src = url; v.play();
+  console.log('Using native HLS (Safari) or fallback');
+}
+</script>
+</body></html>
