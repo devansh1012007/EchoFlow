@@ -252,11 +252,16 @@ def process_audio_to_hls(clip_id):
         # authoritative decode instead of ffmpeg re-decoding the original
         # container a second time. Written to LOCAL scratch space, then
         # uploaded to object storage below.
+        # DECISION: Use standard MPEG-TS segments explicitly.
+        # Chrome's MSE decoder rejects fMP4 segments with certain AAC codec
+        # configurations, producing "DecoderStatus::kUnsupportedConfig".
+        # MPEG-TS is universally supported by hls.js and all browsers.
+        # Newer FFmpeg defaults to fMP4, so we must explicitly set mpegts.
         command = [
             'ffmpeg', '-y', '-i', normalized_path,
             '-c:a', 'aac', '-ar', '44100', '-ac', '2', '-b:a', '128k',
             '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod',
-            '-hls_segment_type', 'fmp4',
+            '-hls_segment_type', 'mpegts',
             '-master_pl_name', 'master.m3u8',
             os.path.join(local_hls_dir, 'index.m3u8')
         ]

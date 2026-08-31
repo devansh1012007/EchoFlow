@@ -75,6 +75,12 @@ services:
     environment:
       MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-echoflow-dev}
       MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-echoflow-dev-secret}
+      # CORS for browser-based HLS playback (hls.js loads segments from MinIO)
+      MINIO_CORS_ALLOW_ORIGIN: "*"
+      MINIO_CORS_ALLOW_METHODS: "GET,PUT,POST,DELETE,OPTIONS"
+      MINIO_CORS_ALLOW_HEADERS: "Origin,Accept,Content-Type,Authorization,Range"
+      MINIO_CORS_EXPOSE_HEADERS: "Date,Content-Length,Content-Range,Accept-Ranges"
+      MINIO_CORS_MAX_AGE: "3600"
     volumes:
       - minio_data:/data
     ports:
@@ -99,8 +105,7 @@ services:
       sh -c "
         mc alias set local http://minio:9000 ${AWS_ACCESS_KEY_ID:-echoflow-dev} ${AWS_SECRET_ACCESS_KEY:-echoflow-dev-secret} &&
         mc mb --ignore-existing local/${AWS_STORAGE_BUCKET_NAME:-echoflow-media} &&
-        mc anonymous set download local/${AWS_STORAGE_BUCKET_NAME:-echoflow-media}/hls &&
-        mc admin config set local api cors_allow_origin='*'
+        mc anonymous set download local/${AWS_STORAGE_BUCKET_NAME:-echoflow-media}/hls
       "
     # DIAGNOSIS: HLS is a multi-file protocol — master.m3u8 references variant
     # playlists and those reference segment files, all via RELATIVE paths.
