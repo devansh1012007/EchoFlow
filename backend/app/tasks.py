@@ -4,7 +4,6 @@ import subprocess
 import tempfile
 import random
 import json
-import math
 import threading
 import numpy as np
 import logging
@@ -536,45 +535,45 @@ def refill_user_feed(self, user_id, count=50):
         clip_ids_to_push = []
 
         if sem_query and ac_query:
-        # THE COMPOSITE FORMULA (Done natively in PostgreSQL for maximum speed)
-        composite_query = base_queryset.annotate(
-            sem_dist=CosineDistance('semantic_vector', sem_query),
-            ac_dist=CosineDistance('acoustic_vector', ac_query),
-            vector_similarity=ExpressionWrapper(
-                1.0 - ((F('sem_dist') + F('ac_dist')) / 4.0),
-                output_field=FloatField()
-            ),
-            composite_score=ExpressionWrapper(
-                (F('vector_similarity') * 0.45) +
-                (F('avg_completion_rate') * 0.30) +
-                (F('engagement_velocity') * 0.25),
-                output_field=FloatField()
-            )
-        ).order_by('-composite_score')
+            # THE COMPOSITE FORMULA (Done natively in PostgreSQL for maximum speed)
+            composite_query = base_queryset.annotate(
+                sem_dist=CosineDistance('semantic_vector', sem_query),
+                ac_dist=CosineDistance('acoustic_vector', ac_query),
+                vector_similarity=ExpressionWrapper(
+                    1.0 - ((F('sem_dist') + F('ac_dist')) / 4.0),
+                    output_field=FloatField()
+                ),
+                composite_score=ExpressionWrapper(
+                    (F('vector_similarity') * 0.45) +
+                    (F('avg_completion_rate') * 0.30) +
+                    (F('engagement_velocity') * 0.25),
+                    output_field=FloatField()
+                )
+            ).order_by('-composite_score')
 
-        # 80% EXPLOIT: Serve highest scoring algorithmic matches
-        exploit_count = int(count * 0.8)
-        exploit_clips = composite_query[:exploit_count]
-        # The Follow Graph Wedge: Pull recent content from followed creators
-        followed_creators = user.following.all()
-        network_clips = base_queryset.filter(
-            creator__in=followed_creators
-        ).order_by('-created_at')[:5] # Force 5 network clips into the mix
-        clip_ids_to_push.extend([str(c.id) for c in exploit_clips])
-        clip_ids_to_push.extend([str(c.id) for c in network_clips])
-        
+            # 80% EXPLOIT: Serve highest scoring algorithmic matches
+            exploit_count = int(count * 0.8)
+            exploit_clips = composite_query[:exploit_count]
+            # The Follow Graph Wedge: Pull recent content from followed creators
+            followed_creators = user.following.all()
+            network_clips = base_queryset.filter(
+                creator__in=followed_creators
+            ).order_by('-created_at')[:5] # Force 5 network clips into the mix
+            clip_ids_to_push.extend([str(c.id) for c in exploit_clips])
+            clip_ids_to_push.extend([str(c.id) for c in network_clips])
 
-        # 20% EXPLORE: Serve high velocity clips outside their vector neighborhood
-        explore_count = count - exploit_count
-        explore_clips = base_queryset.exclude(
-            id__in=[c.id for c in exploit_clips]
-        ).order_by('-engagement_velocity')[:explore_count]
-        
-        clip_ids_to_push.extend([str(c.id) for c in explore_clips])
+
+            # 20% EXPLORE: Serve high velocity clips outside their vector neighborhood
+            explore_count = count - exploit_count
+            explore_clips = base_queryset.exclude(
+                id__in=[c.id for c in exploit_clips]
+            ).order_by('-engagement_velocity')[:explore_count]
+
+            clip_ids_to_push.extend([str(c.id) for c in explore_clips])
         else:
-        # Cold start
-        cold_clips = base_queryset.order_by('-engagement_velocity', '-created_at')[:count]
-        clip_ids_to_push.extend([str(c.id) for c in cold_clips])
+            # Cold start
+            cold_clips = base_queryset.order_by('-engagement_velocity', '-created_at')[:count]
+            clip_ids_to_push.extend([str(c.id) for c in cold_clips])
     finally:
         # DECISION: Always release refill lock to prevent deadlock if worker
         # crashes after acquiring but before completing the task.
@@ -709,6 +708,22 @@ def evolve_long_term_user_baselines(self):
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600)
 def scrape_and_import(self, source_name, limit=5, clip_length=300):
+    """
+    Run every 24 hours at 3:00 AM.
+    Prevents the user's long-term vector from stagnating indefinitely.
+    """
+    users_to_update = []
+    for user in User.objects.filter(is_active=True).iterator(chunk_size=100):
+        new_sem, new_ac = calculate_time_decayed_vectors(user, limit=500)
+        if new_sem is not None:            
+            user.long_term_semantic = new_sem 
+            user.long_term_acoustic = new_ac
+        users_to_update.append(user)
+    User.objects.bulk_update(users_to_update, ['long_term_semantic', 'long_term_acoustic'], batch_size=100)
+
+
+@shared_task
+def scrape_and_import(source_name, limit=5, clip_length=300):
     """Celery task wrapper to run a scraper source and import clips.
 
     This task delegates to the source connectors and uses the local
