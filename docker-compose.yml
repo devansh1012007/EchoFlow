@@ -326,11 +326,14 @@ services:
       resources:
         limits:
           cpus: '4'
-          memory: 1G
+          # DECISION: 4 GB is the floor for Whisper base + SentenceTransformer
+          # + KeyBERT resident. 1 GB was OOMKill-ing on the first clip.
+          # Raise further if processing longer clips or running concurrently.
+          memory: 4G
           pids: 200
         reservations:
           cpus: '2'
-          memory: 256M
+          memory: 2G
     ulimits:
       nofile:
         soft: 65536
