@@ -291,7 +291,8 @@ replay_pid*
 *.userosscache
 *.sln.docstates
 packages/
-[Bin|Obj]*/
+Bin/
+Obj*/
 _UpgradeReport_Files/
 *.Cache
 ClientBin/
