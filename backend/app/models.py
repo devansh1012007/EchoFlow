@@ -104,7 +104,7 @@ class AudioClip(models.Model):
                 ef_construction=64,
                 opclasses=['vector_cosine_ops']
             ),
-        ],
+        ]
         # DECISION: DB-level constraints prevent negative counter values
         # even via raw SQL or ORM bulk updates. Tradeoff: Migration required.
         constraints = [
@@ -112,7 +112,7 @@ class AudioClip(models.Model):
             models.CheckConstraint(check=models.Q(shares__gte=0), name='shares_non_negative'),
             models.CheckConstraint(check=models.Q(skips__gte=0), name='skips_non_negative'),
             models.CheckConstraint(check=models.Q(comment_count__gte=0), name='comment_count_non_negative'),
-        ]   
+        ]
 
 class Comment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
