@@ -1,4 +1,5 @@
 import os
+import math
 import shutil
 import subprocess
 import tempfile
@@ -9,13 +10,11 @@ import numpy as np
 import logging
 import librosa
 from celery import shared_task
-from celery.exceptions import Retry
 from django.db import OperationalError, transaction
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import connection
-from django.db.models import F, FloatField, ExpressionWrapper, Avg
-from django.db.models.functions import Now
+from django.db.models import F, FloatField, ExpressionWrapper
 from django.utils import timezone
 from datetime import timedelta
 from django.core.cache import cache
@@ -708,22 +707,6 @@ def evolve_long_term_user_baselines(self):
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600)
 def scrape_and_import(self, source_name, limit=5, clip_length=300):
-    """
-    Run every 24 hours at 3:00 AM.
-    Prevents the user's long-term vector from stagnating indefinitely.
-    """
-    users_to_update = []
-    for user in User.objects.filter(is_active=True).iterator(chunk_size=100):
-        new_sem, new_ac = calculate_time_decayed_vectors(user, limit=500)
-        if new_sem is not None:            
-            user.long_term_semantic = new_sem 
-            user.long_term_acoustic = new_ac
-        users_to_update.append(user)
-    User.objects.bulk_update(users_to_update, ['long_term_semantic', 'long_term_acoustic'], batch_size=100)
-
-
-@shared_task
-def scrape_and_import(source_name, limit=5, clip_length=300):
     """Celery task wrapper to run a scraper source and import clips.
 
     This task delegates to the source connectors and uses the local
@@ -744,7 +727,6 @@ def scrape_and_import(source_name, limit=5, clip_length=300):
         user.save()
 
     from backend.app.scrapers import downloader, normalizer, uploader
-    import tempfile
 
     items = module.fetch_audio(limit=limit)
     for item in items:
