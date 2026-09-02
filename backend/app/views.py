@@ -1,17 +1,9 @@
-import json
-import redis
-import time
-import logging
-import uuid
-import os
-
 import numpy as np
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import F, Exists, OuterRef, Case, When, Count
+from django.db.models import Exists, OuterRef, Case, When, Count
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from pgvector.django import CosineDistance
 from rest_framework import viewsets, permissions, status, parsers, generics
@@ -148,7 +140,15 @@ class FastFeedViewSet(viewsets.ViewSet):
         # actual fix; the lock is defense in depth for cross-request races.
 
         preserved_order = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(clip_ids)])
-        clips = AudioClip.objects.filter(id__in=clip_ids).order_by(preserved_order)
+        user_like_subquery = UserInteraction.objects.filter(
+            clip=OuterRef('pk'), user=request.user, interaction_type='like'
+        )
+        clips = (
+            AudioClip.objects
+            .filter(id__in=clip_ids)
+            .annotate(user_has_liked=Exists(user_like_subquery))
+            .order_by(preserved_order)
+        )
 
         serializer = FeedClipSerializer(clips, many=True, context={'request': request})
         
