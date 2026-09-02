@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 import dj_database_url
-from django.core.management.utils import get_random_secret_key
+from django.core.exceptions import ImproperlyConfigured
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -9,12 +9,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-from django.core.management.utils import get_random_secret_key
-
 # SECURITY WARNING: keep the secret key used in production secret!
-# If DJANGO_SECRET_KEY is not set, generate a random key per process so no
-# predictable fallback is ever used for signing sessions/CSRF/password resets.
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY') or get_random_secret_key()
+# DECISION: Fail fast on missing DJANGO_SECRET_KEY, same pattern as
+# FIELD_ENCRYPTION_KEY in models.py. Generating a random key per process
+# would silently break session/CSRF/signature verification across the
+# gunicorn + Celery fleet — every worker would have a different key.
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY is not set. Application cannot start without it."
+    )
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() == 'true'

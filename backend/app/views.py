@@ -126,7 +126,11 @@ class FastFeedViewSet(viewsets.ViewSet):
         clip_ids_bytes = redis_client.lpop(redis_key, 10)
         
         if not clip_ids_bytes:
-            # Queue empty: trigger a single refill large enough to rebuild the feed
+            # DECISION: Single refill call, gated by Redis SETNX lock inside
+            # the task to prevent concurrent execution. The lock lives in the
+            # task (not here) because the third call site at line 789 also
+            # needs the same protection — keeping it in one place is cheaper
+            # than re-implementing it at every caller.
             refill_user_feed.delay(user_id, count=40)
             clip_ids_bytes = redis_client.lpop(redis_key, 10)
 
@@ -136,8 +140,12 @@ class FastFeedViewSet(viewsets.ViewSet):
         clip_ids = [vid.decode('utf-8') for vid in clip_ids_bytes]
 
         queue_length = redis_client.llen(redis_key)
-        if queue_length < 15:
-            refill_user_feed.delay(user_id) # Fixed task
+        # DECISION: Removed the second .delay() here. The previous code could
+        # enqueue two refills for the same user in a single request (one for
+        # empty queue, one for low queue). The task's SETNX lock would catch
+        # the second one as a no-op, but the Celery enqueue + broker round-trip
+        # would still happen. Merging into the empty-queue path above is the
+        # actual fix; the lock is defense in depth for cross-request races.
 
         preserved_order = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(clip_ids)])
         clips = AudioClip.objects.filter(id__in=clip_ids).order_by(preserved_order)
