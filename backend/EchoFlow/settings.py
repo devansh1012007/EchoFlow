@@ -24,8 +24,12 @@ if not SECRET_KEY:
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() == 'true'
 
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost').split(',')
-CORS_ALLOW_ALL_ORIGINS = os.environ.get('DJANGO_CORS_ALL', 'False').lower() == 'true'
 CORS_ALLOWED_ORIGINS = os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5173').split(',')
+# DECISION: CORS_ALLOW_ALL_ORIGINS is hard-coded to False; the env-driven
+# allowlist above is the single source of truth. Previously this line was
+# read from DJANGO_CORS_ALL env var but then unconditionally reassigned
+# to False on line 63, making the env var dead code. Removed for clarity.
+CORS_ALLOW_ALL_ORIGINS = False
 
 # Allow HLS media files specifically
 CORS_URLS_REGEX = r'^.*$'  # all URLs, or narrow to r'^/media/.*$' for HLS only
@@ -54,13 +58,6 @@ CORS_EXPOSE_HEADERS = [
     'Accept-Ranges',
 ]
 
-CORS_ALLOWED_ORIGINS = os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5173').split(',')
-
-# Only set True in dev — in prod use CORS_ALLOWED_ORIGINS
-# DECISION: Disabled CORS_ALLOW_ALL_ORIGINS; using explicit allowed origins
-# instead. Tradeoff: Less convenient for unknown clients, but prevents CSRF-style
-# attacks from malicious domains using JWT auth.
-CORS_ALLOW_ALL_ORIGINS = False
 # Application definition
 SITE_ID = 1
 INSTALLED_APPS = [
@@ -376,5 +373,21 @@ LOGGING = {
         },
     },
 }
+
+# SECURITY: Production-only cookie + transport hardening.
+# Wrapped in `if not DEBUG:` so the dev server (HTTP) keeps working.
+# In any environment that terminates TLS (Traefik / nginx / CloudFront),
+# SECURE_PROXY_SSL_HEADER is required or SECURE_SSL_REDIRECT will loop.
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    CSRF_COOKIE_SAMESITE = 'Lax'
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 VERSION = '1.0.0'
