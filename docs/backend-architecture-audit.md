@@ -203,3 +203,39 @@ I would be terrified of the `log_telemetry` endpoint and the `update_global_metr
 8. **Validate Audio Security:** Use `python-magic` to verify file headers before sending them to FFmpeg to prevent RCE vulnerabilities.
 9. **Rate Limit Telemetry:** Implement strict token bucket rate limiting on `log_telemetry` to prevent algorithmic manipulation.
 10. **Add Request Tracing:** Inject a `correlation_id` into every API request and pass it to Celery so you can actually debug why a specific upload failed in production.
+
+---
+
+## Post-Audit Implementation Status (2026-09-02)
+
+The 10 highest-leverage items above were reviewed against the actual codebase. Status of each, what is already done, and what remains.
+
+| # | Recommendation | Status | Evidence / Remaining work |
+|---|----------------|--------|---------------------------|
+| 1 | Stop writing media to disk; integrate S3 + CDN | **Done** | `backend/EchoFlow/settings.py:249-283` uses `storages.backends.s3.S3Storage` against MinIO locally / S3 in prod. HLS rendered to local scratch then uploaded (see `tasks.py:227-321`). CDN not yet wired in front of MinIO. |
+| 2 | Deploy PgBouncer | **Not done** | Direct PostgreSQL connections via `dj_database_url`. `conn_max_age=600` in `settings.py:127` keeps persistent connections, but no external pooler. |
+| 3 | Decouple ML onto separate worker node | **Done (partial)** | `celery_media` service is a separate container in `docker-compose.yml:286-337` with its own `target: media` build stage. Models are baked into the image at build time, not downloaded at runtime. However, all workers share the same code image and run on the same host in dev — true GPU isolation is a deployment-time concern. |
+| 4 | Batch telemetry; aggregate in Redis, flush async | **Not done** | `log_telemetry` still does synchronous `update_or_create` per request (`views.py:358-367`). This is the single biggest lock-contention risk per the verdict above. |
+| 5 | Batch `update_global_metrics` with `id > last_id` pagination | **Not done** | `tasks.py:643-668` still runs two `UPDATE ... WHERE status = 'ready'` statements on the entire table. As the table grows, this is a guaranteed table-lock event. |
+| 6 | Fallback feed when vector search fails | **Not done** | `SuggestionViewSet` has no try/except around `calculate_time_decayed_vectors`. The `FeedViewSet` fallback is commented out (`views.py:152-207`). |
+| 7 | Split Redis (Celery vs cache) | **Not done** | `REDIS_URL` is used for both broker and cache (`settings.py:131-150`). A 1M-user feed spike will evict the broker queues if `allkeys-lru` kicks in. |
+| 8 | Validate audio by magic bytes (not just extension) | **Partial** | `AudioUploadSerializer.validate_original_file` checks extension only (`serializers.py:16-37`). `python-magic` for header inspection is not yet integrated — an executable renamed to `.mp3` would still pass. |
+| 9 | Rate limit telemetry | **Partial** | DRF throttling is configured (`settings.py:310-317`) at 100/hr anon and 1000/hr user. No per-endpoint override on `log_telemetry` specifically, so a logged-in user can still spam it 1000 times per hour. |
+| 10 | Add request tracing / correlation_id | **Not done** | No correlation middleware. `LOGGING` config (`settings.py:328-364`) is JSON-formatted but does not include a request ID field. |
+
+### What the architecture audit got wrong
+
+The original audit's verdict — *"I would be terrified of `log_telemetry` and `update_global_metrics`"* — is still valid. Neither has been fixed. **These are the two items that will fail first under load and should be the next priority.**
+
+The original audit's *implementation* report (`docs/backend-audit.md`) overstated some bugs. The recommendation-algorithm `weights` claim, the `OPENAI_API_KEY` NameError, the static `FERNET_KEY`, and several others were verified against the actual source and found to be inaccurate. See `backend-audit.md` § 14 for the full false-positive list.
+
+### Where the two audits disagree
+
+| Topic | `backend-audit.md` says | `backend-architecture-audit.md` says | Reality |
+|-------|-------------------------|--------------------------------------|---------|
+| Recommendation algorithm | Broken (weights never populated) | Working but slow | **Working** (`tasks.py:582` has `weights.append`) |
+| CORS | Hardcoded to allow all | Not mentioned | **Hardcoded** on `settings.py:49` (now fixed) |
+| Secret management | Hardcoded everywhere | "key rotation missing" only | Mostly env-driven; Fernet key rotation genuinely missing |
+| Rate limiting | "No rate limiting" | Not mentioned | **DRF throttling IS configured** (but per-endpoint overrides absent) |
+
+The implementation audit was written against an older snapshot; the architecture audit was written more recently. When in conflict, defer to the architecture audit on infrastructure claims, and to verified source-code reads on implementation claims.

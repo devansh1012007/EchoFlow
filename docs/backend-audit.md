@@ -785,3 +785,71 @@
 ---
 
 *This audit covers every backend file in the repository. The most critical finding is **Issue 11.1**: the recommendation algorithm's `weights` list is never populated, meaning the entire vector-based recommendation system is non-functional — it always falls back to long-term vectors regardless of recent user behavior.*
+
+---
+
+## 14. Verification & Fix Status (post-audit, 2026-09-02)
+
+A direct code-verification pass was done after this audit was written. Several "Confirmed" findings turned out to be inaccurate against the actual source. The status below supersedes the severity table above for the issues that were re-checked.
+
+### 14.1 False positives — claim was wrong, no fix needed
+
+| Audit ID | Claimed | Actual state | Evidence |
+|----------|---------|--------------|----------|
+| 11.1 | `weights` list never populated in `calculate_time_decayed_vectors` | `weights.append(final_weight)` exists at `backend/app/tasks.py:582` inside the for-loop body | Direct read of the function |
+| 11.2 | Same bug in `calculate_blended_query_vectors` | `weights.append(weight)` exists at `backend/app/tasks.py:458` | Direct read |
+| 11.4 | `OPENAI_API_KEY` is `NameError` (commented out, referenced) | Defined at `backend/app/tasks.py:30` as `os.getenv("OPENAI_API_KEY") or ""` | Direct read |
+| 1.3 | `FERNET_KEY` hardcoded as string literal | Read from `FIELD_ENCRYPTION_KEY` env var at `backend/app/models.py:16`; fails fast via `ImproperlyConfigured` if missing | Direct read |
+| 1.4 | `POSTGRES_PASSWORD: password` hardcoded in `docker-compose.yml` | Uses `${DB_PASSWORD}` interpolation; password comes from `.env` | Direct read of compose file |
+| 1.5 | Hardcoded JWT in `seed_db.py` | `os.environ.get('SEED_AUTH_TOKEN', '')`; aborts with error if unset | Direct read |
+| 2.1 | `DEBUG = True` hardcoded | `DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() == 'true'` — env-driven, defaults to False | `backend/EchoFlow/settings.py:15` |
+| 2.2 | `ALLOWED_HOSTS = ['*']` | `os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost').split(',')` — env-driven | `settings.py:17` |
+| 2.4 | No rate limiting | DRF throttling IS configured (`'DEFAULT_THROTTLE_CLASSES'` and `'DEFAULT_THROTTLE_RATES'`) | `settings.py:310-317` |
+
+### 14.2 True positives — confirmed and fixed
+
+The following issues were confirmed against the source and fixed in commits `ef5400a` and `ac9a88a` on the `main` branch.
+
+| Audit ID | Issue | Fix location | Fix summary |
+|----------|-------|--------------|-------------|
+| 1.1 | Static `SECRET_KEY` fallback `'dev-only-temporary-key'` | `backend/EchoFlow/settings.py:12-21` | Replaced with fail-fast: `raise ImproperlyConfigured` if `DJANGO_SECRET_KEY` unset. Matches the `FERNET_KEY` pattern. A per-process random key would silently break session/CSRF signing across the gunicorn + Celery fleet because each worker would have a different key. |
+| 2.3 | `CORS_ALLOW_ALL_ORIGINS = True` hardcoded on `settings.py:49` | `backend/EchoFlow/settings.py:49` | Changed to `False` so the env-driven `DJANGO_CORS_ALL` flag controls the behavior. |
+| 3.1 | No DB constraints on counter fields | `backend/app/models.py:108-115, 128-131` | Added `CheckConstraint(likes__gte=0)` etc. to `AudioClip` and `Comment` Meta classes. **Migration required**: `python manage.py makemigrations && python manage.py migrate`. |
+| 3.2 | `UserInteraction.save()` race on `is_new` branch | `backend/app/models.py:166-191` | `is_new` branch now wrapped in `transaction.atomic()` with a pre-existence check to prevent double-increment under concurrent `get_or_create`. |
+| 4.1 | Double `refill_user_feed` enqueue in `FastFeedViewSet` | `backend/app/views.py:128-140` + `backend/app/tasks.py:518-525` | Two fixes: (1) removed the second `refill_user_feed.delay()` call at `views.py:140` (root cause was at the call site); (2) added a Redis `SETNX` lock in the task as defense-in-depth against cross-request concurrent refills. |
+| 4.3 | No retry config on any Celery task | `backend/app/tasks.py:173-178, 512, 666, 694, 710` | Added `bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600` to all 5 tasks. `RETRYABLE_ERRORS` covers `OperationalError, ConnectionError, subprocess.CalledProcessError, OSError`. |
+| 4.7 | Redis feed queue no TTL | `backend/app/tasks.py:567-571` | `redis_client.expire(redis_key, 86400)` after every `rpush` and on the queue-sufficient early-return path. |
+| 6.1 | `librosa.load()` unprotected | `backend/app/tasks.py:236-243` | Wrapped in `try/except` that sets `clip.status = 'failed'` and saves, matching the existing Whisper error-handling pattern. |
+| 6.2 | HLS scratch files leaked on early-failure paths | `backend/app/tasks.py:227-321` | The outer `try/finally` block at line 227 already cleans up `normalized_path` and `local_hls_dir` for any path that enters the try block. The audit's concern about `normalize_to_wav` failure was checked and confirmed safe — `normalized_path` is only assigned on success, so there is no leak on that path. **No code change required**, but the failure paths now route through the retry decorator instead of permanently failing. |
+| 8.1 | No file type/size validation | `backend/app/serializers.py:16-37` | Added `ALLOWED_EXT` (8 audio extensions), `MAX_SIZE = 100 MB`, and `validate_original_file()` method to `AudioUploadSerializer`. Rejects unsupported types and oversized files at the serializer boundary for fast client feedback. |
+| 12.1 | Global ML model singletons not thread-safe | `backend/app/tasks.py:8, 26, 33-78` | Added `import threading`, `_model_lock = threading.Lock()`, and refactored all three `get_*_model()` functions to use double-checked locking. Prevents duplicate model loads under concurrent first-call. |
+
+### 14.3 Confirmed but not yet fixed (deferred)
+
+These remain as known issues but were not addressed in this pass because they are out of scope for "critical bugs" or require larger architectural changes:
+
+| Audit ID | Reason deferred |
+|----------|-----------------|
+| 1.2 | Rotating secrets requires coordination with the deployer; this is an ops task, not a code change. The committed `.env` was checked — it is **not** tracked by git (`git ls-files .env` returns nothing), so the leak vector is from working copies only. |
+| 1.6 | Duplicate `app_1/.env` — minor, no code change required. |
+| 4.2 | Task idempotency needs a per-task deduplication design (Celery `task_id` or DB unique constraint); not a quick fix. |
+| 4.4 | `--pool=solo` for `celery_media` is intentional given the 1 GB memory limit per worker (see `docker-compose.yml:329`); changing concurrency requires a resource-limits review. |
+| 4.5, 4.6, 4.8, 4.9 | Operational improvements (monitoring, dead letter queue, scrape error recovery, beat health) — need a dedicated observability pass. |
+| 5.x | Performance/scalability issues — covered separately in `docs/backend-architecture-audit.md`. |
+| 6.3, 6.4, 6.5, 6.6, 6.7, 6.8 | Observability and ops gaps — see architecture audit. |
+| 7.x | Architecture cleanup (split views.py, remove dead code, rename `app_1`) — belongs in a refactor pass. |
+| 9.x | Dependency and deployment — requires regenerating `wheelhouse/`. |
+| 10.x | Testing and observability infrastructure. |
+| 11.3, 11.5, 11.6, 11.7 | Dead code / commented blocks — cleanup pass. |
+| 12.2, 12.3 | Memory/resource leak in scraper — low priority. |
+
+### 14.4 Migration required
+
+`python manage.py makemigrations && python manage.py migrate` must be run after pulling these changes to apply the new `CheckConstraint` definitions on `AudioClip` and `Comment` models. Existing rows with negative counter values (if any) will block the migration; the recommended pre-check is:
+
+```sql
+SELECT id, likes, shares, skips, comment_count FROM app_audioclip
+WHERE likes < 0 OR shares < 0 OR skips < 0 OR comment_count < 0;
+```
+
+If any rows are returned, correct them before running the migration.
