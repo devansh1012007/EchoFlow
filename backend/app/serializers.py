@@ -1,3 +1,4 @@
+import os
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .media_urls import get_hls_playback_url
@@ -14,10 +15,24 @@ class UserProfileSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'date_joined']
 
 class AudioUploadSerializer(serializers.ModelSerializer):
+    # DECISION: Added file type/size validation at serializer boundary
+    # rather than model level to provide fast feedback to client.
+    # Tradeoff: Slightly more code in serializer vs. guaranteed validation.
+    ALLOWED_EXT = {'.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.webm', '.opus'}
+    MAX_SIZE = 100 * 1024 * 1024  # 100 MB
+
     class Meta:
         model = AudioClip
         fields = ['id', 'title', 'category', 'original_file', 'status']
         read_only_fields = ['id', 'status']
+
+    def validate_original_file(self, value):
+        if value.size > self.MAX_SIZE:
+            raise serializers.ValidationError(f"File exceeds {self.MAX_SIZE//1024//1024}MB limit.")
+        ext = os.path.splitext(value.name)[1].lower()
+        if ext not in self.ALLOWED_EXT:
+            raise serializers.ValidationError(f"Unsupported file type: {ext}")
+        return value
 
     def create(self, validated_data):
         # Bound to creator as defined in models.py

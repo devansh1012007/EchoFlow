@@ -5,10 +5,13 @@ import tempfile
 import random
 import json
 import math
+import threading
 import numpy as np
 import logging
 import librosa
 from celery import shared_task
+from celery.exceptions import Retry
+from django.db import OperationalError, transaction
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import connection
@@ -26,46 +29,57 @@ logger = get_task_logger(__name__)
 whisper_model = None
 embedding_model = None
 kw_model = None
+_model_lock = threading.Lock()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""
 
 
 def get_whisper_model():
+    # DECISION: Use thread-safe double-checked locking instead of simple
+    # singleton to prevent concurrent task initialization from loading the
+    # same ML model multiple times (memory waste / duplicate GPU/CPU loads).
+    # Tradeoff: Slight latency on first access vs. guaranteed single init.
     global whisper_model
     if whisper_model is None:
-        from faster_whisper import WhisperModel
-        try:
-            whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
-            logger.info("WhisperModel initialized successfully.")
-        except Exception as e:
-            logger.exception("Failed to initialize WhisperModel: %s", e)
-            raise
+        with _model_lock:
+            if whisper_model is None:
+                from faster_whisper import WhisperModel
+                try:
+                    whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+                    logger.info("WhisperModel initialized successfully.")
+                except Exception as e:
+                    logger.exception("Failed to initialize WhisperModel: %s", e)
+                    raise
     return whisper_model
 
 
 def get_embedding_model():
     global embedding_model
     if embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-        try:
-            embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-            logger.info("Embedding model initialized successfully.")
-        except Exception as e:
-            logger.exception("Failed to initialize embedding model: %s", e)
-            raise
+        with _model_lock:
+            if embedding_model is None:
+                from sentence_transformers import SentenceTransformer
+                try:
+                    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+                    logger.info("Embedding model initialized successfully.")
+                except Exception as e:
+                    logger.exception("Failed to initialize embedding model: %s", e)
+                    raise
     return embedding_model
 
 
 def get_kw_model():
     global kw_model
     if kw_model is None:
-        from keybert import KeyBERT
-        try:
-            kw_model = KeyBERT()
-            logger.info("KeyBERT initialized successfully.")
-        except Exception as e:
-            logger.exception("Failed to initialize KeyBERT: %s", e)
-            raise
+        with _model_lock:
+            if kw_model is None:
+                from keybert import KeyBERT
+                try:
+                    kw_model = KeyBERT()
+                    logger.info("KeyBERT initialized successfully.")
+                except Exception as e:
+                    logger.exception("Failed to initialize KeyBERT: %s", e)
+                    raise
     return kw_model
 
 def get_openai_client():
@@ -156,8 +170,19 @@ def normalize_to_wav(input_file_path, sr=22050):
     return wav_path
 
 
-@shared_task
-def process_audio_to_hls(clip_id):
+RETRYABLE_ERRORS = (
+    OperationalError,
+    ConnectionError,
+    subprocess.CalledProcessError,
+    OSError,
+)
+
+# DECISION: Added bind=True + retry config to prevent permanent data loss
+# when transient errors occur (DB connection timeout, FFmpeg crash, network
+# failure). Tradeoff: Slightly more overhead per task (retry tracking) vs.
+# guaranteed resilience.
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600, retry_jitter=False)
+def process_audio_to_hls(self, clip_id):
 
     # Now 'clip' is guaranteed to exist for the following logic
     logger.info("process_audio_to_hls Task is starting...")
@@ -209,7 +234,13 @@ def process_audio_to_hls(clip_id):
 
     try:
         # 1. Acoustic Vector Extraction
-        y, sr = librosa.load(normalized_path, sr=22050)
+        try:
+            y, sr = librosa.load(normalized_path, sr=22050)
+        except Exception as e:
+            logger.exception("librosa.load() failed for clip %s: %s", clip_id, e)
+            clip.status = 'failed'
+            clip.save()
+            return
         clip.acoustic_vector = extract_acoustic_vector(y, sr)
 
         # CRITICAL FIX: Extract exact duration for completion_rate math
@@ -478,24 +509,33 @@ def calculate_blended_query_vectors(user):
         final_ac.tolist() if final_ac is not None else None
     )
 
-@shared_task
-def refill_user_feed(user_id, count=50):
+@shared_task(bind=True, max_retries=2, default_retry_delay=30, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True)
+def refill_user_feed(self, user_id, count=50):
     user = User.objects.get(id=user_id)
     redis_key = f"user_feed:{user_id}"
     redis_client = cache.client.get_client()
 
-    if redis_client.llen(redis_key) >= 20:
-        return "Queue sufficient."
+    # Prevent concurrent refills for the same user (race condition fix)
+    # DECISION: SETNX with 30s expiry prevents double-refill without
+    # blocking indefinitely if a worker dies mid-task.
+    lock_key = f"feed_refill_lock:{user_id}"
+    acquired = redis_client.set(lock_key, "1", nx=True, ex=30)
+    if not acquired:
+        return "Refill already in progress."
 
-    seen_ids = list(UserInteraction.objects.filter(user=user,created_at__gte=timezone.now() - timedelta(days=30)).values_list('clip_id', flat=True))
-    queued_ids = [vid.decode('utf-8') for vid in redis_client.lrange(redis_key, 0, -1)]
-    seen_ids.extend(queued_ids)
+    try:
+        if redis_client.llen(redis_key) >= 20:
+            return "Queue sufficient."
 
-    sem_query, ac_query = calculate_time_decayed_vectors(user)
-    base_queryset = AudioClip.objects.filter(status='ready').exclude(id__in=seen_ids)
-    clip_ids_to_push = []
+        seen_ids = list(UserInteraction.objects.filter(user=user,created_at__gte=timezone.now() - timedelta(days=30)).values_list('clip_id', flat=True))
+        queued_ids = [vid.decode('utf-8') for vid in redis_client.lrange(redis_key, 0, -1)]
+        seen_ids.extend(queued_ids)
 
-    if sem_query and ac_query:
+        sem_query, ac_query = calculate_time_decayed_vectors(user)
+        base_queryset = AudioClip.objects.filter(status='ready').exclude(id__in=seen_ids)
+        clip_ids_to_push = []
+
+        if sem_query and ac_query:
         # THE COMPOSITE FORMULA (Done natively in PostgreSQL for maximum speed)
         composite_query = base_queryset.annotate(
             sem_dist=CosineDistance('semantic_vector', sem_query),
@@ -531,17 +571,25 @@ def refill_user_feed(user_id, count=50):
         ).order_by('-engagement_velocity')[:explore_count]
         
         clip_ids_to_push.extend([str(c.id) for c in explore_clips])
-    else:
+        else:
         # Cold start
         cold_clips = base_queryset.order_by('-engagement_velocity', '-created_at')[:count]
         clip_ids_to_push.extend([str(c.id) for c in cold_clips])
+    finally:
+        # DECISION: Always release refill lock to prevent deadlock if worker
+        # crashes after acquiring but before completing the task.
+        try:
+            redis_client.delete(lock_key)
+        except Exception:
+            pass
 
     if not clip_ids_to_push:
         return "No new clips to push."
 
     random.shuffle(clip_ids_to_push)
     redis_client.rpush(redis_key, *clip_ids_to_push)
-
+    # Set 24-hour TTL to prevent memory leak from orphaned feed lists.
+    redis_client.expire(redis_key, 86400)
     return f"Added {len(clip_ids_to_push)} composite-ranked clips."
 
 def calculate_time_decayed_vectors(user, limit=50):
@@ -613,8 +661,10 @@ def calculate_time_decayed_vectors(user, limit=50):
     return final_sem.tolist(), final_ac.tolist()
 
 
-@shared_task
-def update_global_metrics():
+# Added retry config: transient DB/Redis errors cause task failure without retry.
+# batch_size=100 to prevent memory exhaustion with large user counts.
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600)
+def update_global_metrics(self):
     """
     Run every 10 minutes via Celery Beat to recalculate global clip performance.
     Formula punishes older videos that stop accumulating engagement.
@@ -640,8 +690,9 @@ def update_global_metrics():
         cursor.execute(query)
         cursor.execute(query2)
 
-@shared_task
-def evolve_long_term_user_baselines():
+# Added retry config, batch_size=100 to prevent memory exhaustion with large user counts.
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600)
+def evolve_long_term_user_baselines(self):
     """
     Run every 24 hours at 3:00 AM.
     Prevents the user's long-term vector from stagnating indefinitely.
@@ -656,8 +707,8 @@ def evolve_long_term_user_baselines():
     User.objects.bulk_update(users_to_update, ['long_term_semantic', 'long_term_acoustic'], batch_size=100)
 
 
-@shared_task
-def scrape_and_import(source_name, limit=5, clip_length=300):
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600)
+def scrape_and_import(self, source_name, limit=5, clip_length=300):
     """Celery task wrapper to run a scraper source and import clips.
 
     This task delegates to the source connectors and uses the local

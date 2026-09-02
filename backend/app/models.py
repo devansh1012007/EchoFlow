@@ -69,6 +69,9 @@ class AudioClip(models.Model):
     shares = models.BigIntegerField(default=0)
     skips = models.BigIntegerField(default=0)
     comment_count = models.BigIntegerField(default=0)
+    # DECISION: Added CheckConstraint in Meta to enforce non-negative
+    # counters at DB level, protecting against raw SQL and ORM updates. 
+    # Tradeoff: Slightly stricter DB writes vs. guaranteed data integrity.
     
     # AI Intelligence (vibe_vector completely removed)
     tags = models.JSONField(default=list, blank=True)
@@ -101,6 +104,14 @@ class AudioClip(models.Model):
                 ef_construction=64,
                 opclasses=['vector_cosine_ops']
             ),
+        ],
+        # DECISION: DB-level constraints prevent negative counter values
+        # even via raw SQL or ORM bulk updates. Tradeoff: Migration required.
+        constraints = [
+            models.CheckConstraint(check=models.Q(likes__gte=0), name='likes_non_negative'),
+            models.CheckConstraint(check=models.Q(shares__gte=0), name='shares_non_negative'),
+            models.CheckConstraint(check=models.Q(skips__gte=0), name='skips_non_negative'),
+            models.CheckConstraint(check=models.Q(comment_count__gte=0), name='comment_count_non_negative'),
         ]   
 
 class Comment(models.Model):
@@ -115,6 +126,10 @@ class Comment(models.Model):
     class Meta:
         indexes = [models.Index(fields=['clip', '-created_at'])]
         ordering = ['-created_at']
+        # DECISION: Added non-negative constraint for comment likes.
+        constraints = [
+            models.CheckConstraint(check=models.Q(likes__gte=0), name='comment_likes_non_negative'),
+        ]
 
     def save(self, *args, **kwargs):
         # NOTE: use _state.adding, NOT `not self.pk` — UUID pks with a callable

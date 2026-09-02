@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import dj_database_url
+from django.core.management.utils import get_random_secret_key
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -8,8 +9,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
+from django.core.management.utils import get_random_secret_key
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-only-temporary-key')
+# If DJANGO_SECRET_KEY is not set, generate a random key per process so no
+# predictable fallback is ever used for signing sessions/CSRF/password resets.
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY') or get_random_secret_key()
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() == 'true'
@@ -45,8 +50,13 @@ CORS_EXPOSE_HEADERS = [
     'Accept-Ranges',
 ]
 
+CORS_ALLOWED_ORIGINS = os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5173').split(',')
+
 # Only set True in dev — in prod use CORS_ALLOWED_ORIGINS
-CORS_ALLOW_ALL_ORIGINS = True
+# DECISION: Disabled CORS_ALLOW_ALL_ORIGINS; using explicit allowed origins
+# instead. Tradeoff: Less convenient for unknown clients, but prevents CSRF-style
+# attacks from malicious domains using JWT auth.
+CORS_ALLOW_ALL_ORIGINS = False
 # Application definition
 SITE_ID = 1
 INSTALLED_APPS = [
