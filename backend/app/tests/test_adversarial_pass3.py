@@ -268,24 +268,41 @@ class TestN6SyncReRead:
     worker hasn't run yet. The fix: return 202 with retry_after_ms hint,
     or pre-warm the queue on user creation."""
 
-    def test_first_feed_request_returns_202_when_cold(self, auth_client, settings):
-        # Override throttling to off (matches conftest override for tests)
+    def test_first_feed_request_returns_202_when_cold(self, auth_client, settings, monkeypatch):
+        """Audit N6: refill_user_feed.delay() is async, so a same-thread
+        lpop right after the .delay() runs before the worker has executed
+        the refill. Old code returned "You've caught up!" which is wrong.
+        New code returns 202 with a retry_after_ms hint.
+
+        NOTE: the real view code calls cache.client.get_client() which is
+        Redis-specific. The test environment uses LocMemCache. We patch
+        the view's bound name `cache` (imported as `from django.core.cache
+        import cache`) so the lpop returns None and the 202 path triggers.
+        """
+        from unittest.mock import MagicMock
         from rest_framework.test import APIClient
-        client = APIClient()
-        from django.contrib.auth import get_user_model
+        from backend.app.views import feed as feed_module
+
+        # Replace the `cache` symbol in the feed module with a stub
+        # whose .client.get_client() returns a mock that lpop's to None.
+        mock_client = MagicMock()
+        mock_client.lpop.return_value = None
+        mock_client.llen.return_value = 0
+        stub = MagicMock()
+        stub.client.get_client.return_value = mock_client
+        monkeypatch.setattr(feed_module, 'cache', stub)
+
+        # Also patch the refill task to be a no-op (so .delay() doesn't
+        # actually try to enqueue in celery).
+        monkeypatch.setattr(feed_module, 'refill_user_feed', MagicMock())
+
         u = get_user_model().objects.get(username='alice')
+        client = APIClient()
         client.force_authenticate(user=u)
-        # Use a fresh redis-key for this test (delete to simulate cold)
-        from django.core.cache import cache
-        redis = cache.client.get_client()
-        redis.delete(f'user_feed:{u.id}')
         r = client.get('/feed/')
-        # Now returns 202 Accepted with a retry hint (not "You've caught up!")
-        if r.status_code == 202:
-            assert 'retry_after_ms' in r.data
-            assert r.data.get('degraded') is True
-        # If refill completed synchronously (e.g., in eager mode), 200 is also OK
-        assert r.status_code in (200, 202)
+        assert r.status_code == 202, f"Expected 202 on cold queue, got {r.status_code}: {r.content}"
+        assert 'retry_after_ms' in r.data, f"Expected retry_after_ms in 202 body: {r.data}"
+        assert r.data.get('degraded') is True
 
 
 # ---------------------------------------------------------------------------

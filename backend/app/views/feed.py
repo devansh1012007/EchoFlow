@@ -38,10 +38,28 @@ class FastFeedViewSet(viewsets.ViewSet):
 
             if not clip_ids_bytes:
                 refill_user_feed.delay(user_id, count=40)
+                # N6 fix: refill_user_feed.delay() is async. The second
+                # lpop immediately after runs in the same request thread,
+                # *before* the worker has executed the refill. On a cold
+                # queue (new user, expired 24h TTL, broker hiccup) this
+                # second lpop almost always returns None, so we used to
+                # return "You've caught up!" — telling the user the feed
+                # is empty when it's actually about to be populated. The
+                # fix is to return 202 Accepted with a retry_after_ms
+                # hint so the client can poll again in ~1.5s and find
+                # the freshly-populated queue.
                 clip_ids_bytes = redis_client.lpop(redis_key, 10)
 
                 if not clip_ids_bytes:
-                    return Response({"results": [], "message": "You've caught up!"})
+                    return Response(
+                        {
+                            "results": [],
+                            "message": "Preparing your feed...",
+                            "retry_after_ms": 1500,
+                            "degraded": True,
+                        },
+                        status=status.HTTP_202_ACCEPTED,
+                    )
 
             clip_ids = [vid.decode('utf-8') for vid in clip_ids_bytes]
             queue_length = redis_client.llen(redis_key)
