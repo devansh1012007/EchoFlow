@@ -137,13 +137,34 @@ class CommentSerializer(serializers.ModelSerializer):
             return obj.replies.count()
         return 0
 
+    def validate_text(self, value):
+        # SECURITY: strip control characters (NUL, BEL, etc.) from
+        # comment text before storage. The React frontend auto-escapes
+        # JSON strings, so a stored `<script>` payload is rendered as
+        # text — but defense-in-depth: reject obviously malicious
+        # characters server-side too. Limit to 500 chars (model
+        # CharField max_length) and reject NUL bytes which can break
+        # downstream loggers.
+        if '\x00' in value:
+            raise serializers.ValidationError("Comment contains null bytes.")
+        # Strip ASCII control characters except common whitespace (\t, \n, \r).
+        cleaned = ''.join(
+            ch for ch in value
+            if ch >= ' ' or ch in '\t\n\r'
+        )
+        return cleaned.strip()
+
     def create(self, validated_data):
         validated_data['author'] = self.context['request'].user
         return super().create(validated_data)
     
 class InteractionTelemetrySerializer(serializers.Serializer):
     action_type = serializers.ChoiceField(choices=['view', 'like', 'share', 'skip'])
-    watch_time_ms = serializers.IntegerField(min_value=0, required=True)
+    # SECURITY: cap watch_time_ms at 10 hours = 36,000,000ms. Anything
+    # longer is a client bug or a viewbot inflating completion_rate.
+    # Real short-form audio is < 5 min (300,000ms); 10h is a generous
+    # upper bound for any legitimate use.
+    watch_time_ms = serializers.IntegerField(min_value=0, max_value=36_000_000, required=True)
 
 class ShareEventSerializer(serializers.ModelSerializer):
     sender_name = serializers.CharField(source='sender.username', read_only=True)
