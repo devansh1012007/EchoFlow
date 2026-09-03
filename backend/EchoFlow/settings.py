@@ -321,8 +321,36 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'backend.app.tasks.flush_telemetry_legacy',
         'schedule': 30.0,  # every 30 seconds
     },
+    'rebuild-global-exploit-pool': {
+        # P2.2: Global candidate pool. Single SELECT + ZADD rebuild
+        # of the clip:candidates:exploit ZSET. See
+        # backend/app/services/feed_pool.py and
+        # docs/EXPLAIN/recommendation/03-feed-pre-computation.md.
+        'task': 'backend.app.tasks.rebuild_global_exploit_pool',
+        'schedule': 300.0,  # every 5 minutes
+    },
+    'dispatch-user-pool-rebuilds': {
+        # P2.2: Per-user explore pool fan-out. Runs hourly;
+        # internally enqueues per-user rebuilds with a 0..3600s
+        # countdown so the workers absorb them gradually.
+        'task': 'backend.app.tasks.dispatch_user_pool_rebuilds',
+        'schedule': 3600.0,  # every hour
+    },
 }
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+
+# Feed candidate pool — pre-computation knobs
+# (Group A item 7 in docs/unfixed-issues-2026-09-03.md)
+# See docs/EXPLAIN/recommendation/03-feed-pre-computation.md for the
+# full design (memory cost, staleness budget, fallback contract).
+FEED_POOL_GLOBAL_TOP_N = int(os.environ.get('FEED_POOL_GLOBAL_TOP_N', '10000'))
+FEED_POOL_USER_TOP_N = int(os.environ.get('FEED_POOL_USER_TOP_N', '1000'))
+FEED_POOL_GLOBAL_TTL = int(os.environ.get('FEED_POOL_GLOBAL_TTL', '300'))
+FEED_POOL_USER_TTL = int(os.environ.get('FEED_POOL_USER_TTL', '86400'))
+FEED_POOL_REBUILD_CHUNK_SIZE = int(
+    os.environ.get('FEED_POOL_REBUILD_CHUNK_SIZE', '1000')
+)
 
 
 # Internationalization

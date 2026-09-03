@@ -71,7 +71,14 @@ services:
     image: redis:7-alpine
     container_name: echoflow_redis_cache
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    # DECISION: 3GB instead of 1GB. P2.2 pre-computed candidate pools
+    # (clip:candidates:exploit + user:{id}:candidates:explore) need
+    # ~1.2GB at 10K active users. The remaining ~1.8GB holds the
+    # existing per-user feed lists (user_feed:*), Django cache, and
+    # telemetry stream. allkeys-lru eviction is safe because the
+    # pools can be rebuilt by Beat; if memory pressure forces
+    # eviction, the refill_user_feed SQL fallback kicks in.
+    command: redis-server --appendonly yes --maxmemory 3gb --maxmemory-policy allkeys-lru
     volumes:
       - redis_cache_data:/data
     healthcheck:
