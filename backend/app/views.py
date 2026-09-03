@@ -117,50 +117,68 @@ class FastFeedViewSet(viewsets.ViewSet):
     def list(self, request):
         user_id = request.user.id
         redis_key = f"user_feed:{user_id}"
-        redis_client = cache.client.get_client()
 
-        clip_ids_bytes = redis_client.lpop(redis_key, 10)
-        
-        if not clip_ids_bytes:
-            # DECISION: Single refill call, gated by Redis SETNX lock inside
-            # the task to prevent concurrent execution. The lock lives in the
-            # task (not here) because the third call site at line 789 also
-            # needs the same protection — keeping it in one place is cheaper
-            # than re-implementing it at every caller.
-            refill_user_feed.delay(user_id, count=40)
+        # DECISION: Wrap the entire Redis path in try/except. If Redis is
+        # unreachable, return a trending-feed fallback (top clips by
+        # engagement_velocity) instead of 500ing. The architecture audit
+        # warns that a Redis outage during a 5k-user peak would otherwise
+        # firehose the database with 5k concurrent refill_user_feed tasks
+        # and crash PostgreSQL.
+        try:
+            redis_client = cache.client.get_client()
             clip_ids_bytes = redis_client.lpop(redis_key, 10)
 
             if not clip_ids_bytes:
-                return Response({"results": [], "message": "You've caught up!"})
+                refill_user_feed.delay(user_id, count=40)
+                clip_ids_bytes = redis_client.lpop(redis_key, 10)
 
-        clip_ids = [vid.decode('utf-8') for vid in clip_ids_bytes]
+                if not clip_ids_bytes:
+                    return Response({"results": [], "message": "You've caught up!"})
 
-        queue_length = redis_client.llen(redis_key)
-        # DECISION: Removed the second .delay() here. The previous code could
-        # enqueue two refills for the same user in a single request (one for
-        # empty queue, one for low queue). The task's SETNX lock would catch
-        # the second one as a no-op, but the Celery enqueue + broker round-trip
-        # would still happen. Merging into the empty-queue path above is the
-        # actual fix; the lock is defense in depth for cross-request races.
+            clip_ids = [vid.decode('utf-8') for vid in clip_ids_bytes]
+            queue_length = redis_client.llen(redis_key)
 
-        preserved_order = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(clip_ids)])
-        user_like_subquery = UserInteraction.objects.filter(
-            clip=OuterRef('pk'), user=request.user, interaction_type='like'
-        )
-        clips = (
-            AudioClip.objects
-            .filter(id__in=clip_ids)
-            .annotate(user_has_liked=Exists(user_like_subquery))
-            .order_by(preserved_order)
-        )
-
-        serializer = FeedClipSerializer(clips, many=True, context={'request': request})
-        
-        return Response({
-            "next": "auto_trigger",
-            "queue_health": queue_length,
-            "results": serializer.data
-        })
+            preserved_order = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(clip_ids)])
+            user_like_subquery = UserInteraction.objects.filter(
+                clip=OuterRef('pk'), user=request.user, interaction_type='like'
+            )
+            clips = (
+                AudioClip.objects
+                .filter(id__in=clip_ids)
+                .annotate(user_has_liked=Exists(user_like_subquery))
+                .order_by(preserved_order)
+            )
+            serializer = FeedClipSerializer(clips, many=True, context={'request': request})
+            return Response({
+                "next": "auto_trigger",
+                "queue_health": queue_length,
+                "results": serializer.data,
+            })
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "feed service degraded for user %s; serving trending fallback: %s",
+                user_id, e,
+            )
+            # Fallback: top clips by engagement_velocity. No personalization,
+            # but the user gets a result instead of a 500.
+            fallback = (
+                AudioClip.objects
+                .filter(status='ready')
+                .annotate(user_has_liked=Exists(
+                    UserInteraction.objects.filter(
+                        clip=OuterRef('pk'), user=request.user, interaction_type='like'
+                    )
+                ))
+                .order_by('-engagement_velocity', '-created_at')[:20]
+            )
+            serializer = FeedClipSerializer(fallback, many=True, context={'request': request})
+            return Response({
+                "next": "auto_trigger",
+                "queue_health": 0,
+                "degraded": True,
+                "results": serializer.data,
+            })
 # ---------------------------------------------------------
 # 4. INTERACTION LAYER (Likes & Skips)
 # ---------------------------------------------------------
@@ -682,22 +700,35 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
         category = self.request.query_params.get('category')
-        
+
         # Base filter by exact category
         queryset = AudioClip.objects.filter(status='ready', category=category)
-        
-        # Get their highly personalized blended vector
-        sem_query, ac_query = calculate_time_decayed_vectors(user)
-        
-        if sem_query and ac_query:
-            # Sort the category by their specific AI vector preference
-            queryset = queryset.annotate(
-                combined_distance=(
-                    CosineDistance('semantic_vector', sem_query) + 
-                    CosineDistance('acoustic_vector', ac_query)
-                )
-            ).order_by('combined_distance')
-            
+
+        # DECISION: Wrap the vector search in try/except. The architecture
+        # audit warns that a Postgres/Redis hiccup in calculate_time_decayed_vectors
+        # would 500 the whole explore page. With this fallback:
+        #  - Normal: rank by combined distance (semantic + acoustic).
+        #  - Failure: rank by engagement_velocity (trending within category).
+        #  - Last resort: serve the category unranked (newest first).
+        # The user always gets a result, even if the AI is down.
+        try:
+            sem_query, ac_query = calculate_time_decayed_vectors(user)
+            if sem_query and ac_query:
+                queryset = queryset.annotate(
+                    combined_distance=(
+                        CosineDistance('semantic_vector', sem_query) +
+                        CosineDistance('acoustic_vector', ac_query)
+                    )
+                ).order_by('combined_distance')
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "vector ranking failed for user %s; falling back to engagement_velocity: %s",
+                user.id, e,
+            )
+            # Fallback: trending within category. Don't 500 the request.
+            queryset = queryset.order_by('-engagement_velocity', '-created_at')
+
         # Add the 'user_has_liked' annotation to solve the N+1 query problem
         user_like_subquery = UserInteraction.objects.filter(
             clip=OuterRef('pk'), user=user, interaction_type='like'
