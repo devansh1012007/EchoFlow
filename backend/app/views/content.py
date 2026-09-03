@@ -41,3 +41,20 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
             status=status.HTTP_202_ACCEPTED,
             headers=headers,
         )
+
+    def update(self, request, *args, **kwargs):
+        # N8 fix: PATCH/PUT on a clip must NOT replace original_file.
+        # The previous approach (read_only_fields at serializer level)
+        # broke the legitimate upload flow because read_only_fields
+        # applies to BOTH create and update. Instead: at update time,
+        # strip the file from the request data BEFORE the serializer
+        # runs. A user who wants to replace their file must delete
+        # the clip and re-upload via POST.
+        if 'original_file' in request.data:
+            # request.data is a QueryDict (immutable). Make a mutable copy
+            # and replace the request's internal _full_data so the
+            # serializer sees the file-stripped version.
+            data = request.data.copy()
+            data.pop('original_file')
+            request._full_data = data
+        return super().update(request, *args, **kwargs)

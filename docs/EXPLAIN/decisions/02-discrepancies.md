@@ -49,13 +49,13 @@ This document tracks where documentation (README, AGENTS.md, audit docs) conflic
 | 8 | "Media to S3 done" (line 215) | `settings.py:270-293`: **Confirmed** for storage; CDN not yet configured | ⚠️ Partial |
 | 9 | "PgBouncer not deployed" (line 216) | **Confirmed** — direct connections via `dj_database_url` | ✅ Accurate |
 | 10 | "Decouple ML onto separate worker node" (line 217) | `celery_media` service with `--pool=solo`, separate Docker image | ✅ Accurate (partial) |
-| 11 | "Batch telemetry not done" (line 218) | **Confirmed** — synchronous `update_or_create` | ✅ Accurate |
-| 12 | "Batch update_global_metrics not done" (line 219) | **Confirmed** — full table UPDATE | ✅ Accurate |
-| 13 | "Fallback feed not done" (line 220) | **Confirmed** — commented out in `views.py:160-215` | ✅ Accurate |
-| 14 | "Split Redis not done" (line 221) | **Confirmed** — single Redis for broker + cache | ✅ Accurate |
-| 15 | "Validate audio by magic bytes not done" (line 222) | **Confirmed** — only extension check in `serializers.py:29-35` | ✅ Accurate |
-| 16 | "Rate limit telemetry partial" (line 223) | **Confirmed** — global only, no per-endpoint override | ✅ Accurate |
-| 17 | "Request tracing not done" (line 224) | **Confirmed** — no correlation ID middleware | ✅ Accurate |
+| 11 | "Batch telemetry not done" (line 218) | `views/interactions.py:88-105` + `tasks.py:591-641` + `settings.py:255-262`: Redis-buffered events + 30s batched flush via `flush_telemetry`. Synchronous fallback only on Redis outage. | ✅ Implemented |
+| 12 | "Batch update_global_metrics not done" (line 219) | `tasks.py:479-548`: cursor-paginated batches of 5000 with Redis-persisted resume cursor; `FOR UPDATE SKIP LOCKED` so a batch doesn't stall on concurrent `UserInteraction` locks. | ✅ Implemented |
+| 13 | "Fallback feed not done" (line 220) | `views/feed.py:65-86`: try/except wraps the Redis feed path; on any failure serves trending-by-`engagement_velocity` fallback. | ✅ Implemented |
+| 14 | "Split Redis not done" (line 221) | `settings.py:158-186` + `docker-compose.yml`: `redis_broker` (noeviction, 512MB) and `redis_cache` (LRU, 1GB) as separate services. `REDIS_BROKER_URL` / `REDIS_CACHE_URL` env vars; non-Docker falls back to single `REDIS_URL`. | ✅ Implemented |
+| 15 | "Validate audio by magic bytes not done" (line 222) | **Confirmed** — only extension check in `serializers.py:29-35` | ✅ Accurate (deferred) |
+| 16 | "Rate limit telemetry partial" (line 223) | `settings.py:359-369` + `views/interactions.py:118-119`: per-scope rates (`telemetry:60/min`, `upload:20/hour`, `register:5/hour`, `login:10/min`, `comment:60/hour`, `share_send:100/hour`, `interaction:60/min`); `log_telemetry` overrides its scope to `telemetry` per-action. | ✅ Implemented |
+| 17 | "Request tracing not done" (line 224) | `backend/EchoFlow/{correlation,middleware,logging_filters}.py` + `settings.py:106,391-410`: per-request `correlation_id` contextvar + middleware + JSON log filter. | ✅ Implemented |
 
 ---
 
@@ -120,10 +120,18 @@ This document tracks where documentation (README, AGENTS.md, audit docs) conflic
 8. **Backend audit claims algorithm broken** → Actually works
 9. **Backend audit claims no rate limiting** → Actually has DRF throttling
 
+### Resolved by Phase 1.0 (2026-09-04)
+- Batch telemetry via Redis queue + flush task
+- Cursor-batched `update_global_metrics` with `SKIP LOCKED`
+- Trending-feed fallback when Redis is unavailable
+- Split Redis into `redis_broker` (noeviction) + `redis_cache` (LRU)
+- Per-endpoint throttle scopes including the tighter `telemetry` scope
+- Per-request correlation_id via middleware + JSON log filter
+
 ### Low Priority (Minor)
-10. **Service count mismatch** (7 vs 8 in docker-compose)
-11. **AI/ML directory has stubs not implementations**
-12. **Celery beat healthcheck disabled** (documented in compose)
+- Service count mismatch (7 vs 8 in docker-compose) — was 8; Phase 1.0 brings it to 11 (db, redis_broker, redis_cache, pgbouncer, minio, minio-init, web, celery, celery_feed, celery_media, celery_beat)
+- AI/ML directory has stubs not implementations
+- Celery beat healthcheck disabled (documented in compose)
 
 ---
 
@@ -131,9 +139,11 @@ This document tracks where documentation (README, AGENTS.md, audit docs) conflic
 
 **Update priority:**
 1. **README.md** — Fix storage, DEBUG, CORS, worker count claims
-2. **AGENTS.md** — Note librosa duplication, .env commit as known issues
+2. **AGENTS.md** — Note librosa duplication, .env commit as known issues; update service count and add PgBouncer/Redis-split notes from Phase 1.0
 3. **backend-audit.md** — Mark false positives as resolved
-13. **Add DISCREPANCY markers** in code where comments conflict with behavior
+4. **phase-1-scaling-plan.md** — Add a verification footer (2026-09-04) listing which items were already implemented vs. which were delivered by Phase 1.0
+
+> Phase 1.0 verification footer added; see [phase-1-scaling-plan.md § Verification Note](../../phase-1-scaling-plan.md).
 
 ---
 

@@ -162,3 +162,35 @@ $ python manage.py check --deploy
 $ pytest backend/app/tests/test_security_and_validation.py -v
 27 passed in 8.13s
 ```
+
+---
+
+## Phase 1.0 Addendum (2026-09-04)
+
+The Phase 1.0 scaling work (`docs/phase-1-scaling-plan.md`) extended this
+branch's work with infrastructure changes that were *not* in scope for
+the bug-sweep branch:
+
+| Area | What changed | File(s) |
+|---|---|---|
+| **PgBouncer** | Added `pgbouncer` service in front of `db` with `AUTH_TYPE=scram-sha-256`. All web/celery services now route through it. | `docker-compose.yml`, `docker/pgbouncer/Dockerfile` |
+| **Split Redis** | Single Redis → `redis_broker` (noeviction, 512MB) + `redis_cache` (LRU, 1GB). Non-Docker falls back to single `REDIS_URL`. | `backend/EchoFlow/settings.py:158-186`, `docker-compose.yml`, `.env.example` |
+| **`SKIP LOCKED` on `update_global_metrics`** | Wrapped both `ev_query` and `acr_query` UPDATE targets in a `SELECT ... FOR UPDATE SKIP LOCKED` subquery so a batch doesn't stall on rows currently locked by `UserInteraction.save()`. Cursor pagination + Redis-persisted resume cursor already in place from Phase 4. | `backend/app/tasks.py:498-535` |
+| **Media worker concurrency** | `celery_media` switched from `--pool=solo` (1 process) to `--pool=prefork --concurrency=2`. 4G memory limit retained (per device constraint; OOM risk accepted for concurrent uploads). | `docker-compose.yml` |
+
+**Verification (live, against running stack):**
+- `pgbouncer` image builds, container starts, listens on `:6432`.
+- `psycopg2.connect('postgres://...@pgbouncer:6432/echoflow_db')` succeeds;
+  `current_setting('server_version')` returns `16.15 (Debian ...)` — end-to-end
+  SCRAM-SHA-256 auth confirmed.
+- `pg_stat_activity` from inside the `pgbouncer` connection reports only
+  1 active + 1 idle backend connection (multiplexing working).
+- The new `WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED)` query parses
+  and executes against the live DB (EXPLAIN ANALYZE: 0.9ms, 9 rows).
+
+**Container-restart note:** the running web/celery services were started
+before Phase 1.0 was committed, so they still hold the old
+`DATABASE_URL=postgres://...@db:5432/...` env var (direct connection, no
+pgbouncer). They will pick up the new `pgbouncer:6432` URL on the next
+`docker compose up --build`. Non-destructive to leave in this state
+temporarily — both paths work — but recommended before Phase 1 traffic.

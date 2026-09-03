@@ -37,14 +37,13 @@ class AudioUploadSerializer(serializers.ModelSerializer):
     class Meta:
         model = AudioClip
         fields = ['id', 'title', 'category', 'original_file', 'status']
-        # N8 fix: original_file is read-only after creation. PATCH that
-        # swaps the file silently leaves hls_playlist_url and status
-        # pointing at the OLD (stale) HLS — the new file is stored but
-        # never transcribed, vectorized, or transcoded. To replace an
-        # upload, the user must delete the clip and create a new one.
-        # If product needs in-place replace, add an explicit
-        # /clips/{id}/replace-file/ @action (not via PATCH).
-        read_only_fields = ['id', 'status', 'original_file']
+        # N8 fix: original_file is writable on create (POST) but read-only
+        # on update (PATCH/PUT). The serializer-level read_only_fields
+        # applies to BOTH, so we use 'original_file' as a writable
+        # field here and enforce read-only-on-update at the view level
+        # via an update() override that raises PermissionDenied or
+        # silently ignores the field. See AudioUploadViewSet.update().
+        read_only_fields = ['id', 'status']
 
     def validate_original_file(self, value):
         if value.size > self.MAX_SIZE:
