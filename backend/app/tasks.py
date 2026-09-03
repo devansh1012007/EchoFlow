@@ -661,13 +661,26 @@ def flush_telemetry_legacy(self, max_events=1000):
     if not events:
         return "No events to flush."
 
+    # N5 fix: batch the FK lookups with in_bulk instead of per-event .get().
+    # Old: 2 queries per event = 2000 queries for max_events=1000.
+    # New: 2 queries total (one per FK table) regardless of event count.
+    user_ids = {e['user_id'] for e in events}
+    clip_ids = {e['clip_id'] for e in events}
+    try:
+        users_by_id = User.objects.in_bulk(user_ids)
+        clips_by_id = AudioClip.objects.in_bulk(clip_ids)
+    except Exception as exc:
+        logger.error("flush_telemetry_legacy: in_bulk failed (%s); dropping batch", exc)
+        return f"FK lookup failed: {exc}"
+
     # Materialize to ORM objects in one bulk_create.
     interactions = []
     for e in events:
-        try:
-            user = User.objects.get(id=e['user_id'])
-            clip = AudioClip.objects.get(id=e['clip_id'])
-        except (User.DoesNotExist, AudioClip.DoesNotExist):
+        user = users_by_id.get(e['user_id'])
+        clip = clips_by_id.get(e['clip_id'])
+        if user is None or clip is None:
+            # FK was deleted between XADD and now. Skip; ACKed-by-design
+            # (event is in the legacy queue, single attempt).
             continue
         interactions.append(UserInteraction(
             user=user,
@@ -742,7 +755,13 @@ def flush_telemetry_stream(self, max_events=500, block_ms=5000):
     dedup_ttl = 86400
     processed_ids: list[str] = []
     dlq_ids: list[str] = []
-    interactions: list[UserInteraction] = []
+    # N5 fix: collect distinct FK ids FIRST, then resolve via in_bulk
+    # once. Old code did User.objects.get() and AudioClip.objects.get()
+    # per entry — 2 queries per event. New: 2 queries total.
+    pending_entries: list[tuple[str, dict, str, str]] = []
+    # pending_entries holds (entry_id, fields, user_id_str, clip_id_str) for
+    # entries that passed dedup. We accumulate the FK ids, batch-resolve,
+    # then materialize interactions in a second pass.
 
     for entry_id, fields in entries:
         try:
@@ -777,26 +796,40 @@ def flush_telemetry_stream(self, max_events=500, block_ms=5000):
             processed_ids.append(entry_id)
             continue
 
-        try:
-            user = User.objects.get(id=user_id)
-            clip = AudioClip.objects.get(id=clip_id)
-        except (User.DoesNotExist, AudioClip.DoesNotExist):
-            logger.warning(
-                "flush_telemetry_stream: missing user/clip for %s; ACKing (data will be lost)",
-                entry_id,
-            )
-            processed_ids.append(entry_id)
-            continue
+        pending_entries.append((entry_id, event, user_id, clip_id))
 
-        interactions.append(UserInteraction(
-            user=user,
-            clip=clip,
-            interaction_type=event['action_type'],
-            watch_time_ms=event['watch_time_ms'],
-            completion_rate=event['completion_rate'],
-            is_active=True,
-        ))
-        processed_ids.append(entry_id)
+    # Batch-resolve FKs once for all entries that survived dedup.
+    interactions: list[UserInteraction] = []
+    if pending_entries:
+        user_ids = {pid[2] for pid in pending_entries}
+        clip_ids = {pid[3] for pid in pending_entries}
+        try:
+            users_by_id = User.objects.in_bulk(user_ids)
+            clips_by_id = AudioClip.objects.in_bulk(clip_ids)
+        except Exception as exc:
+            logger.error("flush_telemetry_stream: in_bulk failed (%s); routing all to DLQ", exc)
+            for entry_id, _event, _u, _c in pending_entries:
+                dlq_ids.append(entry_id)
+        else:
+            for entry_id, event, user_id, clip_id in pending_entries:
+                user = users_by_id.get(user_id)
+                clip = clips_by_id.get(clip_id)
+                if user is None or clip is None:
+                    logger.warning(
+                        "flush_telemetry_stream: missing user/clip for %s; ACKing (data will be lost)",
+                        entry_id,
+                    )
+                    processed_ids.append(entry_id)
+                    continue
+                interactions.append(UserInteraction(
+                    user=user,
+                    clip=clip,
+                    interaction_type=event['action_type'],
+                    watch_time_ms=event['watch_time_ms'],
+                    completion_rate=event['completion_rate'],
+                    is_active=True,
+                ))
+                processed_ids.append(entry_id)
 
     if interactions:
         try:

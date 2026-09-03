@@ -228,26 +228,35 @@ class TestN5FlushTelemetryInBulk:
     """Audit N5: flush_telemetry did User.objects.get(id=...) and
     AudioClip.objects.get(id=...) per event. The fix uses in_bulk()."""
 
-    def test_flush_does_not_query_per_event(self, user, ready_clip):
-        """Verify that the flush_telemetry tasks batch the FK lookups using
-        in_bulk instead of per-event .get() calls."""
+    def test_flush_legacy_uses_in_bulk(self):
         from backend.app import tasks
         import inspect
-        from backend.app.services.interactions import record_telemetry
+        task_func = getattr(tasks, 'flush_telemetry_legacy', None)
+        if task_func is None:
+            pytest.skip("flush_telemetry_legacy not present")
+        src = inspect.getsource(task_func)
+        assert '.in_bulk' in src, "flush_telemetry_legacy doesn't use .in_bulk"
+        # Confirm there's no per-event User.objects.get inside the loop
+        # (the in_bulk call must be OUTSIDE the per-event loop)
+        # The simplest invariant: there must be a .in_bulk call and the
+        # loop body must NOT have User.objects.get(id=user_id).
+        # Find the loop and check
+        assert 'User.objects.get(id=user_id)' not in src, (
+            "flush_telemetry_legacy still has per-event User.objects.get — "
+            "the in_bulk refactor wasn't applied correctly."
+        )
 
-        # Push 50 events for the same user+clip
-        for _ in range(50):
-            record_telemetry(user, ready_clip, 'view', 1000)
-
-        # Check both tasks use in_bulk (or equivalent) for the FK lookups.
-        for task_name in ('flush_telemetry_legacy', 'flush_telemetry_stream'):
-            task_func = getattr(tasks, task_name, None)
-            if task_func is None:
-                continue
-            src = inspect.getsource(task_func)
-            assert '.in_bulk' in src, (
-                f"{task_name} doesn't use .in_bulk — it's still doing N+1."
-            )
+    def test_flush_stream_uses_in_bulk(self):
+        from backend.app import tasks
+        import inspect
+        task_func = getattr(tasks, 'flush_telemetry_stream', None)
+        if task_func is None:
+            pytest.skip("flush_telemetry_stream not present")
+        src = inspect.getsource(task_func)
+        assert '.in_bulk' in src, "flush_telemetry_stream doesn't use .in_bulk"
+        assert 'User.objects.get(id=user_id)' not in src, (
+            "flush_telemetry_stream still has per-event User.objects.get"
+        )
 
 
 # ---------------------------------------------------------------------------
