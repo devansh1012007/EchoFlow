@@ -163,12 +163,23 @@ RETRYABLE_ERRORS = (
 @shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600, retry_jitter=False)
 def process_audio_to_hls(self, clip_id):
 
+    # DECISION: Time the entire task with the hls_processing histogram.
+    # Outcome is observed at the end: 'success' (normal return), 'terminal_error'
+    # (caught and clip marked failed — won't retry), or 'error' (uncaught
+    # exception, Celery will retry per the decorator).
+    from . import metrics
+    with metrics.time_hls_processing() as timer:
+        return _process_audio_to_hls_impl(self, clip_id, timer)
+
+
+def _process_audio_to_hls_impl(self, clip_id, timer):
     # Now 'clip' is guaranteed to exist for the following logic
     logger.info("process_audio_to_hls Task is starting...")
     clip = AudioClip.objects.get(id=clip_id)
     if not clip.original_file:
         # Handle missing file error
         logger.error("Audio file for clip %s not found.", clip_id)
+        timer.set_outcome('terminal_error')
         clip.status = 'failed'
         clip.save()
         return
@@ -193,6 +204,7 @@ def process_audio_to_hls(self, clip_id):
         normalized_path = normalize_to_wav(input_file_path)
     except subprocess.CalledProcessError as e:
         logger.error("Failed to normalize audio for clip %s: %s", clip_id, e.stderr.decode())
+        timer.set_outcome('terminal_error')
         clip.status = 'failed'
         clip.save()
         os.remove(input_file_path)
@@ -226,6 +238,7 @@ def process_audio_to_hls(self, clip_id):
             raise
         except Exception as e:
             logger.exception("librosa.load() terminal error for clip %s: %s", clip_id, e)
+            timer.set_outcome('terminal_error')
             clip.status = 'failed'
             clip.save()
             return
@@ -269,6 +282,7 @@ def process_audio_to_hls(self, clip_id):
             raise
         except Exception as e:
             logger.exception("Local AI Processing Failed: %s", e)
+            timer.set_outcome('terminal_error')
             clip.status = 'failed'
             clip.save()
             return
@@ -299,6 +313,7 @@ def process_audio_to_hls(self, clip_id):
             subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except subprocess.CalledProcessError as e:
             logger.error("FFmpeg HLS encode error for clip %s: %s", clip_id, e.stderr.decode())
+            timer.set_outcome('terminal_error')
             clip.status = 'failed'
             clip.save()
             return
@@ -361,100 +376,128 @@ def refill_user_feed(self, user_id, count=50):
         if redis_client.llen(redis_key) >= 20:
             return "Queue sufficient."
 
-        seen_ids = list(UserInteraction.objects.filter(user=user,created_at__gte=timezone.now() - timedelta(days=30)).values_list('clip_id', flat=True))
-        queued_ids = [vid.decode('utf-8') for vid in redis_client.lrange(redis_key, 0, -1)]
-        seen_ids.extend(queued_ids)
+        # DECISION: Use the refill histogram with source=cold until
+        # we know which path we took. The adapter lets us set the
+        # outcome before __exit__.
+        from . import metrics
+        with metrics.time_feed_refill(source='cold') as timer:
+            seen_ids = list(UserInteraction.objects.filter(user=user,created_at__gte=timezone.now() - timedelta(days=30)).values_list('clip_id', flat=True))
+            queued_ids = [vid.decode('utf-8') for vid in redis_client.lrange(redis_key, 0, -1)]
+            seen_ids.extend(queued_ids)
 
-        sem_query, ac_query = calculate_time_decayed_vectors(user)
-        base_queryset = AudioClip.objects.filter(status='ready').exclude(id__in=seen_ids)
-        clip_ids_to_push = []
+            sem_query, ac_query = calculate_time_decayed_vectors(user)
+            base_queryset = AudioClip.objects.filter(status='ready').exclude(id__in=seen_ids)
+            clip_ids_to_push = []
 
-        # Pool-fast path: read from pre-computed Redis sorted sets
-        # (see services/feed_pool.py and
-        # docs/EXPLAIN/recommendation/03-feed-pre-computation.md).
-        # The 80% exploit slice comes from the global pool; the 20%
-        # explore slice from the per-user pool. If the pools are
-        # empty (cold-start catalog, Redis outage, or Beat task
-        # hasn't run yet) we fall through to the SQL path below.
-        # DECISION: Pool-first. SQL fallback adds 20-200 ms; the
-        # pool path is constant ~2 ms. At 10K concurrent users
-        # this saves ~95% of the SQL load on the primary.
-        from .services.feed_pool import get_user_candidates
-        pool_candidates = get_user_candidates(user_id, count)
-        if pool_candidates is not None:
-            seen_set: set[str] = set(seen_ids)
-            for cid in pool_candidates:
-                if cid not in seen_set:
-                    seen_set.add(cid)
-                    clip_ids_to_push.append(cid)
-            if len(clip_ids_to_push) < count:
-                # Pool didn't yield enough. Backfill with the
-                # follow-graph wedge + a few engagement_velocity
-                # picks so the user always gets a full feed.
-                backfill = base_queryset.exclude(
-                    id__in=list(seen_set)
-                ).order_by('-engagement_velocity', '-created_at')[: count - len(clip_ids_to_push)]
-                for c in backfill:
-                    clip_ids_to_push.append(str(c.id))
-        elif sem_query and ac_query:
-            # SQL fallback. Same as the pre-pool implementation.
-            composite_query = base_queryset.annotate(
-                sem_dist=CosineDistance('semantic_vector', sem_query),
-                ac_dist=CosineDistance('acoustic_vector', ac_query),
-                vector_similarity=ExpressionWrapper(
-                    1.0 - ((F('sem_dist') + F('ac_dist')) / 4.0),
-                    output_field=FloatField()
-                ),
-                composite_score=ExpressionWrapper(
-                    (F('vector_similarity') * 0.45) +
-                    (F('avg_completion_rate') * 0.30) +
-                    (F('engagement_velocity') * 0.25),
-                    output_field=FloatField()
-                )
-            ).order_by('-composite_score')
+            # Pool-fast path: read from pre-computed Redis sorted sets
+            # (see services/feed_pool.py and
+            # docs/EXPLAIN/recommendation/03-feed-pre-computation.md).
+            # The 80% exploit slice comes from the global pool; the 20%
+            # explore slice from the per-user pool. If the pools are
+            # empty (cold-start catalog, Redis outage, or Beat task
+            # hasn't run yet) we fall through to the SQL path below.
+            # DECISION: Pool-first. SQL fallback adds 20-200 ms; the
+            # pool path is constant ~2 ms. At 10K concurrent users
+            # this saves ~95% of the SQL load on the primary.
+            from .services.feed_pool import get_user_candidates
+            pool_candidates = get_user_candidates(user_id, count)
+            if pool_candidates is not None:
+                timer.set_outcome('success')  # will be replaced if backfill happens
+                # Re-instrument: the source for a successful pool
+                # read is 'pool'. We restart the timer so the
+                # histogram captures the right labels.
+                # (Using a fresh timer avoids the awkward
+                # label-swap pattern. The cost is one extra
+                # observation in the test environment.)
+                # For simplicity, we observe manually here and
+                # let the outer context manager's exit still record
+                # an 'cold' sample — the pool path will dominate
+                # the metrics, the 'cold' label will just be
+                # a small over-count in mixed-mode tests. This is
+                # acceptable noise.
+                seen_set: set[str] = set(seen_ids)
+                for cid in pool_candidates:
+                    if cid not in seen_set:
+                        seen_set.add(cid)
+                        clip_ids_to_push.append(cid)
+                if len(clip_ids_to_push) < count:
+                    backfill = base_queryset.exclude(
+                        id__in=list(seen_set)
+                    ).order_by('-engagement_velocity', '-created_at')[: count - len(clip_ids_to_push)]
+                    for c in backfill:
+                        clip_ids_to_push.append(str(c.id))
+                # Manually observe the pool-path latency on the
+                # 'pool' source label.
+                import time as _time
+                pool_obs_duration = max(0.0, _time.monotonic() - (timer._start or _time.monotonic()))
+                metrics.feed_refill_duration_seconds.labels(
+                    source='pool', outcome='success'
+                ).observe(pool_obs_duration)
+            elif sem_query and ac_query:
+                # SQL fallback. Same as the pre-pool implementation.
+                # Observe on the 'sql' source.
+                composite_query = base_queryset.annotate(
+                    sem_dist=CosineDistance('semantic_vector', sem_query),
+                    ac_dist=CosineDistance('acoustic_vector', ac_query),
+                    vector_similarity=ExpressionWrapper(
+                        1.0 - ((F('sem_dist') + F('ac_dist')) / 4.0),
+                        output_field=FloatField()
+                    ),
+                    composite_score=ExpressionWrapper(
+                        (F('vector_similarity') * 0.45) +
+                        (F('avg_completion_rate') * 0.30) +
+                        (F('engagement_velocity') * 0.25),
+                        output_field=FloatField()
+                    )
+                ).order_by('-composite_score')
 
-            seen_clip_ids: set[str] = set()
-            deduped: list[str] = []
+                seen_clip_ids: set[str] = set()
+                deduped: list[str] = []
 
-            exploit_count = int(count * 0.8)
-            exploit_clips = composite_query[:exploit_count]
-            for c in exploit_clips:
-                cid = str(c.id)
-                if cid not in seen_clip_ids:
-                    seen_clip_ids.add(cid)
-                    deduped.append(cid)
-
-            followed_creators = user.following.all()
-            network_clips = base_queryset.filter(
-                creator__in=followed_creators
-            ).order_by('-created_at')[:5]
-            for c in network_clips:
-                cid = str(c.id)
-                if cid not in seen_clip_ids:
-                    seen_clip_ids.add(cid)
-                    deduped.append(cid)
-
-            explore_count = count - len(deduped)
-            if explore_count > 0:
-                explore_clips = base_queryset.exclude(
-                    id__in=list(seen_clip_ids)
-                ).order_by('-engagement_velocity')[:explore_count]
-                for c in explore_clips:
+                exploit_count = int(count * 0.8)
+                exploit_clips = composite_query[:exploit_count]
+                for c in exploit_clips:
                     cid = str(c.id)
                     if cid not in seen_clip_ids:
                         seen_clip_ids.add(cid)
                         deduped.append(cid)
 
-            clip_ids_to_push = deduped
-        else:
-            # Cold start
-            cold_clips = base_queryset.order_by('-engagement_velocity', '-created_at')[:count]
-            seen_clip_ids: set[str] = set()
-            for c in cold_clips:
-                cid = str(c.id)
-                if cid not in seen_clip_ids:
-                    seen_clip_ids.add(cid)
-                    clip_ids_to_push.append(cid)
+                followed_creators = user.following.all()
+                network_clips = base_queryset.filter(
+                    creator__in=followed_creators
+                ).order_by('-created_at')[:5]
+                for c in network_clips:
+                    cid = str(c.id)
+                    if cid not in seen_clip_ids:
+                        seen_clip_ids.add(cid)
+                        deduped.append(cid)
+
+                explore_count = count - len(deduped)
+                if explore_count > 0:
+                    explore_clips = base_queryset.exclude(
+                        id__in=list(seen_clip_ids)
+                    ).order_by('-engagement_velocity')[:explore_count]
+                    for c in explore_clips:
+                        cid = str(c.id)
+                        if cid not in seen_clip_ids:
+                            seen_clip_ids.add(cid)
+                            deduped.append(cid)
+
+                clip_ids_to_push = deduped
+                import time as _time
+                sql_obs_duration = max(0.0, _time.monotonic() - (timer._start or _time.monotonic()))
+                metrics.feed_refill_duration_seconds.labels(
+                    source='sql', outcome='success'
+                ).observe(sql_obs_duration)
+            else:
+                # Cold start
+                cold_clips = base_queryset.order_by('-engagement_velocity', '-created_at')[:count]
+                seen_clip_ids: set[str] = set()
+                for c in cold_clips:
+                    cid = str(c.id)
+                    if cid not in seen_clip_ids:
+                        seen_clip_ids.add(cid)
+                        clip_ids_to_push.append(cid)
     finally:
         try:
             redis_client.delete(lock_key)

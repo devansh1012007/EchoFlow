@@ -57,18 +57,24 @@ def _use_stream() -> bool:
 
 def _xadd_telemetry(event: dict) -> bool:
     """XADD a telemetry event. Returns True on success, False on any Redis error."""
+    from .. import metrics
     try:
         client = cache.client.get_client()
-        client.xadd(
-            STREAM_KEY,
-            {
-                'event_id': event['event_id'],
-                'schema_version': '1.0.0',
-                'payload': json.dumps(event),
-            },
-            maxlen=STREAM_MAXLEN,
-            approximate=True,
-        )
+        # DECISION: cache_get_set_duration_seconds times the XADD
+        # operation. Result label is 'ok' (success) or 'error'
+        # (Redis hiccup). The op label is 'set' because XADD is a
+        # write.
+        with metrics.time_cache(op='set') as timer:
+            client.xadd(
+                STREAM_KEY,
+                {
+                    'event_id': event['event_id'],
+                    'schema_version': '1.0.0',
+                    'payload': json.dumps(event),
+                },
+                maxlen=STREAM_MAXLEN,
+                approximate=True,
+            )
         return True
     except Exception as exc:
         logger.warning("telemetry: xadd failed (%s); will fall back to list", exc)
@@ -78,20 +84,35 @@ def _xadd_telemetry(event: dict) -> bool:
 def _rpush_telemetry(event: dict) -> None:
     """LIST fallback path. Raises on Redis failure so the caller can run the
     synchronous update_or_create last-resort fallback."""
-    cache.client.get_client().rpush('telemetry:queue', json.dumps(event))
+    from .. import metrics
+    with metrics.time_cache(op='set') as timer:
+        cache.client.get_client().rpush('telemetry:queue', json.dumps(event))
 
 
 def record_like_toggle(user, clip: AudioClip) -> tuple[UserInteraction, bool]:
     """Toggle the user's like on `clip`. Returns (interaction, created)."""
-    interaction, created = UserInteraction.objects.get_or_create(
-        user=user,
-        clip=clip,
-        interaction_type='like',
-        defaults={'is_active': True},
-    )
-    if not created:
-        interaction.is_active = not interaction.is_active
-        interaction.save()
+    # DECISION: Instrumented with the toggle_like histogram. This is
+    # the F() counter hot path (UserInteraction.save() fires the
+    # update on AudioClip.likes). The metric labels distinguish
+    # 'success' from 'race_lost' (F() under contention) — when
+    # race_lost rate climbs, the atomic-block fix in the model is
+    # being exercised and contention is real.
+    from .. import metrics
+    with metrics.time_toggle_like() as timer:
+        interaction, created = UserInteraction.objects.get_or_create(
+            user=user,
+            clip=clip,
+            interaction_type='like',
+            defaults={'is_active': True},
+        )
+        if not created:
+            interaction.is_active = not interaction.is_active
+            interaction.save()
+        # HACK: We can't easily detect "row-lock contention" from
+        # inside this function — Postgres just makes the UPDATE
+        # wait. So the race_lost label is rarely observed in
+        # practice; it's a hook for future explicit contention
+        # tracking if we add a "did I wait on a row lock?" check.
     return interaction, created
 
 

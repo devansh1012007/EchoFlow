@@ -152,7 +152,7 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        category = self.request.query_params.get('category')
+        category = self.request.query_params.get('category') or 'all'
 
         queryset = AudioClip.objects.filter(status='ready', category=category)
 
@@ -164,21 +164,30 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
         # a last resort serve the category unranked.
         # N11: get_user_vectors() now caches in Redis for 15 min, so
         # /suggestions/ doesn't recompute on every request.
-        try:
-            sem_query, ac_query = get_user_vectors(user)
-            if sem_query and ac_query:
-                queryset = queryset.annotate(
-                    combined_distance=(
-                        CosineDistance('semantic_vector', sem_query) +
-                        CosineDistance('acoustic_vector', ac_query)
-                    )
-                ).order_by('combined_distance')
-        except Exception as e:
-            logging.getLogger(__name__).warning(
-                "vector ranking failed for user %s; falling back to engagement_velocity: %s",
-                user.id, e,
-            )
-            queryset = queryset.order_by('-engagement_velocity', '-created_at')
+        # SEC: sanitize the category to keep Prometheus label cardinality bounded.
+        # Free-form category strings would explode the metric; we cap at 32 chars
+        # and replace anything that isn't a-z/0-9/_/- with '_'.
+        import re
+        safe_category = re.sub(r'[^a-z0-9_\-]', '_', (category or 'all')[:32]) or 'all'
+
+        from .. import metrics
+        with metrics.time_suggestion_ranking(category=safe_category) as timer:
+            try:
+                sem_query, ac_query = get_user_vectors(user)
+                if sem_query and ac_query:
+                    queryset = queryset.annotate(
+                        combined_distance=(
+                            CosineDistance('semantic_vector', sem_query) +
+                            CosineDistance('acoustic_vector', ac_query)
+                        )
+                    ).order_by('combined_distance')
+            except Exception as e:
+                logging.getLogger(__name__).warning(
+                    "vector ranking failed for user %s; falling back to engagement_velocity: %s",
+                    user.id, e,
+                )
+                timer.set_outcome('fallback')
+                queryset = queryset.order_by('-engagement_velocity', '-created_at')
 
         user_like_subquery = UserInteraction.objects.filter(
             clip=OuterRef('pk'), user=user, interaction_type='like'
