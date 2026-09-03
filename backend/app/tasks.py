@@ -660,15 +660,24 @@ def cleanup_stuck_processing(threshold_minutes=15, max_per_run=50):
         .order_by('created_at')[:max_per_run]
     )
     re_enqueued = 0
+    give_up = 0
+    give_up_threshold = timedelta(minutes=threshold_minutes * 3)
     for clip in stuck:
-        # Cap retries: if a clip has been re-enqueued 3+ times, mark it failed.
-        # (We track by updated_at as a proxy; a future schema field would
-        # be cleaner.)
-        if clip.updated_at and (timezone.now() - clip.updated_at) < timedelta(minutes=threshold_minutes * 3):
-            # Skip — already re-enqueued recently by this same task.
+        # Cap retries: if the clip has been stuck for more than
+        # `threshold_minutes * 3` (e.g., 45 min if threshold=15), it has
+        # been re-enqueued at least 3 times and is still failing. Mark
+        # it as 'failed' so it shows up in error reports and stops
+        # re-entering the queue.
+        age = timezone.now() - clip.created_at
+        if age > give_up_threshold:
+            clip.status = 'failed'
+            clip.save(update_fields=['status'])
+            give_up += 1
             continue
         process_audio_to_hls.delay(str(clip.id))
         re_enqueued += 1
+    if give_up:
+        return f"Re-enqueued {re_enqueued}, gave up on {give_up} (>{int(give_up_threshold.total_seconds() // 60)}m) clips."
     return f"Re-enqueued {re_enqueued} stuck clips (threshold={threshold_minutes}m)."
 
 

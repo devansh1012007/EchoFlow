@@ -70,3 +70,11 @@ django-storages[s3]==1.14.4       # S3-compatible object storage backend for MED
 
 # --- LLM client (imported by backend/app/tasks.py — must be declared) ---
 openai==3.3.1                     # pure — installs offline from wheelhouse
+
+# --- Test framework ---
+# SECURITY: pytest-django is dev-only, but the wheelhouse offline build
+# (see AGENTS.md) needs every dep declared for deterministic resolution.
+# Test invocation uses DJANGO_SETTINGS_MODULE=backend.EchoFlow.settings
+# and the in-process :memory: SQLite override in conftest.py.
+pytest==9.1.1                    # pure
+pytest-django==4.14.0            # pure
