@@ -1,12 +1,12 @@
 """Profile view: /profile/me/ and /profile/{id}/."""
 from django.contrib.auth import get_user_model
-from django.db.models import Count
+from django.db.models import Count, Exists, OuterRef
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, permissions, parsers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from ..models import AudioClip
+from ..models import AudioClip, UserInteraction
 from ..serializers import (
     FeedClipSerializer, OwnProfileSerializer, PublicProfileSerializer,
     ProfileUpdateSerializer,
@@ -57,9 +57,16 @@ class ProfileViewSet(viewsets.ViewSet):
     @action(detail=True, methods=['get'], url_path='clips')
     def user_clips(self, request, pk=None):
         target = get_object_or_404(User, pk=pk)
+        # N7 fix: annotate user_has_liked so FeedClipSerializer.get_is_liked
+        # hits the fast hasattr branch (no per-clip query).
+        user_like_subquery = UserInteraction.objects.filter(
+            clip=OuterRef('pk'), user=request.user,
+            interaction_type='like', is_active=True,
+        )
         clips = (
             AudioClip.objects
             .filter(creator=target, status='ready')
+            .annotate(user_has_liked=Exists(user_like_subquery))
             .order_by('-created_at')
         )
         paginator = FeedCursorPagination()

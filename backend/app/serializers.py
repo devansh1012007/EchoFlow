@@ -1,6 +1,7 @@
 import os
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from django.db.models import Exists, OuterRef
 from .media_urls import get_hls_playback_url
 from .models import AudioClip, UserInteraction, ShareEvent, Comment
 from rest_framework.validators import UniqueValidator
@@ -250,15 +251,30 @@ class OwnProfileSerializer(serializers.ModelSerializer):
         ]
 
     def get_liked_clips(self, obj):
-        liked = UserInteraction.objects.filter(
+        # N7 fix: query AudioClip directly with the user_has_liked
+        # annotation, so FeedClipSerializer.get_is_liked() hits the
+        # fast hasattr branch (no per-clip query).
+        request = self.context.get('request') if hasattr(self, 'context') else None
+        viewer = request.user if request and request.user.is_authenticated else None
+        user_like_subquery = UserInteraction.objects.filter(
+            clip=OuterRef('pk'),
             user=obj,
             interaction_type='like',
-            is_active=True
-        ).select_related('clip').order_by('-updated_at')[:50]
+            is_active=True,
+        )
+        liked_clips = (
+            AudioClip.objects
+            .filter(
+                interactions__user=obj,
+                interactions__interaction_type='like',
+                interactions__is_active=True,
+            )
+            .annotate(user_has_liked=Exists(user_like_subquery))
+            .distinct()
+            .order_by('-interactions__updated_at')[:50]
+        )
         return FeedClipSerializer(
-            [i.clip for i in liked],
-            many=True,
-            context=self.context
+            liked_clips, many=True, context=self.context
         ).data
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):

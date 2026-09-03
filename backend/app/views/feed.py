@@ -19,6 +19,42 @@ from ..tasks import refill_user_feed, calculate_time_decayed_vectors
 from ._pagination import FeedCursorPagination
 
 
+# N11 fix: cache the user's blended vector in Redis. Without this,
+# /suggestions/?category=X runs calculate_time_decayed_vectors inline
+# on every request, hitting Postgres for the last 50 interactions and
+# doing numpy math per request. With the cache, a single computation
+# is reused across 15 min, invalidated when the user takes a new action.
+# Trade-off: 15-min staleness on explore recommendations; FastFeed (the
+# main feed) is unaffected (it reads pre-computed vectors from Redis
+# via refill_user_feed, not via this helper).
+_USER_VECTORS_TTL_SECONDS = 900  # 15 min
+_USER_VECTORS_KEY = 'user_vectors:{user_id}'
+
+
+def get_user_vectors(user):
+    """Return (semantic_vec, acoustic_vec) for a user, with Redis cache.
+
+    Returns (None, None) on cache miss + no interactions (cold start).
+    Cache key: 'user_vectors:{user_id}'. TTL: 15 min.
+    """
+    cache_key = _USER_VECTORS_KEY.format(user_id=user.id)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    sem, ac = calculate_time_decayed_vectors(user)
+    if sem is not None and ac is not None:
+        cache.set(cache_key, (sem, ac), timeout=_USER_VECTORS_TTL_SECONDS)
+    return sem, ac
+
+
+def invalidate_user_vectors_cache(user_id):
+    """Drop the user's cached vectors. Call this on state-changing events
+    (like, share, skip, telemetry) so the next /suggestions/ request
+    re-computes with fresh data.
+    """
+    cache.delete(_USER_VECTORS_KEY.format(user_id=user_id))
+
+
 class FastFeedViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -126,8 +162,10 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
         # With this fallback: rank by combined distance, or on failure
         # rank by engagement_velocity (trending within category), or as
         # a last resort serve the category unranked.
+        # N11: get_user_vectors() now caches in Redis for 15 min, so
+        # /suggestions/ doesn't recompute on every request.
         try:
-            sem_query, ac_query = calculate_time_decayed_vectors(user)
+            sem_query, ac_query = get_user_vectors(user)
             if sem_query and ac_query:
                 queryset = queryset.annotate(
                     combined_distance=(

@@ -31,8 +31,17 @@ CORS_ALLOWED_ORIGINS = os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', 'http://loc
 # to False on line 63, making the env var dead code. Removed for clarity.
 CORS_ALLOW_ALL_ORIGINS = False
 
-# Allow HLS media files specifically
-CORS_URLS_REGEX = r'^.*$'  # all URLs, or narrow to r'^/media/.*$' for HLS only
+# N14 fix: CORS_URLS_REGEX was r'^.*$' which sent CORS headers to
+# every URL (including /admin/, /auth/, /metrics/). The actual security
+# boundary is CORS_ALLOWED_ORIGINS, but the wide regex serves no
+# purpose. The /media/ Django route was removed when S3Storage was
+# adopted (per docs/stateful-media-storage-at-scale.md and
+# media_urls.py:18-37 — playback URLs come from signed S3 URLs, not
+# from a Django route). Set to an empty regex (never matches) so
+# django-cors-headers never applies CORS via the regex path. The
+# middleware will still apply CORS_ALLOWED_ORIGINS to all responses
+# that flow through its check_origin method.
+CORS_URLS_REGEX = r'$.^'  # matches nothing (negative lookahead on start)
 
 CORS_ALLOW_METHODS = [
     'GET',
