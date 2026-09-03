@@ -495,7 +495,11 @@ class TestN12RetryEngages:
     def test_normalize_to_wav_failure_raises_not_returns(self):
         import inspect
         from backend.app import tasks
-        src = inspect.getsource(tasks.process_audio_to_hls)
+        # DECISION: process_audio_to_hls was refactored to wrap the
+        # body in a metrics histogram. The body is now in
+        # _process_audio_to_hls_impl. The re-raise paths live in
+        # the impl; the wrapper just times the call.
+        src = inspect.getsource(tasks._process_audio_to_hls_impl)
         # N12 fix: the process_audio_to_hls body should now have at least
         # one re-raise in a transient-error path (was: every failure
         # returned silently, masking transient errors from autoretry_for).
