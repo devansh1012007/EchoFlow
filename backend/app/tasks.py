@@ -364,29 +364,58 @@ def refill_user_feed(self, user_id, count=50):
                 )
             ).order_by('-composite_score')
 
+            # N4 fix: dedupe clip_ids_to_push. The previous code could push
+            # the same UUID twice when a followed creator's clip also
+            # ranked in the exploit top-K (because network_clips had no
+            # exclude against exploit_clips). Duplicate clips in-feed
+            # would also inflate avg_completion_rate via duplicate view
+            # events downstream. Use a running set; preserves insertion
+            # order. O(N) at N=50 is trivial.
+            seen_clip_ids: set[str] = set()
+            deduped: list[str] = []
+
             # 80% EXPLOIT: Serve highest scoring algorithmic matches
             exploit_count = int(count * 0.8)
             exploit_clips = composite_query[:exploit_count]
+            for c in exploit_clips:
+                cid = str(c.id)
+                if cid not in seen_clip_ids:
+                    seen_clip_ids.add(cid)
+                    deduped.append(cid)
+
             # The Follow Graph Wedge: Pull recent content from followed creators
             followed_creators = user.following.all()
             network_clips = base_queryset.filter(
                 creator__in=followed_creators
-            ).order_by('-created_at')[:5] # Force 5 network clips into the mix
-            clip_ids_to_push.extend([str(c.id) for c in exploit_clips])
-            clip_ids_to_push.extend([str(c.id) for c in network_clips])
-
+            ).order_by('-created_at')[:5]
+            for c in network_clips:
+                cid = str(c.id)
+                if cid not in seen_clip_ids:
+                    seen_clip_ids.add(cid)
+                    deduped.append(cid)
 
             # 20% EXPLORE: Serve high velocity clips outside their vector neighborhood
-            explore_count = count - exploit_count
-            explore_clips = base_queryset.exclude(
-                id__in=[c.id for c in exploit_clips]
-            ).order_by('-engagement_velocity')[:explore_count]
+            explore_count = count - len(deduped)  # fill remaining slots
+            if explore_count > 0:
+                explore_clips = base_queryset.exclude(
+                    id__in=list(seen_clip_ids)  # dedup against ALL prior
+                ).order_by('-engagement_velocity')[:explore_count]
+                for c in explore_clips:
+                    cid = str(c.id)
+                    if cid not in seen_clip_ids:
+                        seen_clip_ids.add(cid)
+                        deduped.append(cid)
 
-            clip_ids_to_push.extend([str(c.id) for c in explore_clips])
+            clip_ids_to_push = deduped
         else:
             # Cold start
             cold_clips = base_queryset.order_by('-engagement_velocity', '-created_at')[:count]
-            clip_ids_to_push.extend([str(c.id) for c in cold_clips])
+            seen_clip_ids: set[str] = set()
+            for c in cold_clips:
+                cid = str(c.id)
+                if cid not in seen_clip_ids:
+                    seen_clip_ids.add(cid)
+                    clip_ids_to_push.append(cid)
     finally:
         # DECISION: Always release refill lock to prevent deadlock if worker
         # crashes after acquiring but before completing the task.
@@ -497,25 +526,40 @@ def update_global_metrics(self):
     cursor_key = 'update_global_metrics:resume_id'
     last_id = cache.get(cursor_key) or ''  # empty string = start from beginning
 
-    # engagement_velocity is a per-row formula — batch by id
+    # engagement_velocity is a per-row formula — batch by id.
+    # DECISION: inner SELECT ... FOR UPDATE SKIP LOCKED so a batch doesn't
+    # stall on rows currently locked by likes/shares writes
+    # (UserInteraction.save() in models.py takes row locks via
+    # select_for_update before bumping the AudioClip counter). Tradeoff:
+    # a row whose engagement_velocity can't be acquired is skipped and
+    # recomputed the next 5-min beat — acceptable because the formula is
+    # time-windowed and not idempotency-critical.
     ev_query = f"""
         UPDATE {clip_table}
         SET engagement_velocity =
             LEAST((likes + (shares * 2)) / POWER(EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 + 2.0, 1.5)/100.0, 1.0)
-        WHERE status = 'ready' AND id > %s
-        ORDER BY id
-        LIMIT %s
+        WHERE id IN (
+            SELECT id FROM {clip_table}
+            WHERE status = 'ready' AND id > %s
+            ORDER BY id LIMIT %s
+            FOR UPDATE SKIP LOCKED
+        )
     """
     # avg_completion_rate has a per-row correlated subquery; batch by id
-    # (the inner SELECT uses the outer table's id range).
+    # (the inner SELECT uses the outer table's id range). Same SKIP LOCKED
+    # rationale as ev_query above — both UPDATE paths touch rows that
+    # concurrent interaction writes may hold locks on.
     acr_query = f"""
         UPDATE {clip_table} SET avg_completion_rate = COALESCE((
             SELECT AVG(completion_rate) FROM {interaction_table}
             WHERE clip_id = {clip_table}.id AND interaction_type = 'view'
         ), 0)
-        WHERE status = 'ready' AND id > %s
-        ORDER BY id
-        LIMIT %s
+        WHERE id IN (
+            SELECT id FROM {clip_table}
+            WHERE status = 'ready' AND id > %s
+            ORDER BY id LIMIT %s
+            FOR UPDATE SKIP LOCKED
+        )
     """
 
     with connection.cursor() as cur:
