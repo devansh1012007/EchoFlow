@@ -10,10 +10,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-# DECISION: Fail fast on missing DJANGO_SECRET_KEY, same pattern as
-# FIELD_ENCRYPTION_KEY in models.py. Generating a random key per process
-# would silently break session/CSRF/signature verification across the
-# gunicorn + Celery fleet — every worker would have a different key.
+# DECISION: Fail fast on missing DJANGO_SECRET_KEY. Generating a random
+# key per process would silently break session/CSRF/signature
+# verification across the gunicorn + Celery fleet — every worker would
+# have a different key.
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 if not SECRET_KEY:
     raise ImproperlyConfigured(
@@ -24,7 +24,7 @@ if not SECRET_KEY:
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() == 'true'
 
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost').split(',')
-CORS_ALLOWED_ORIGINS = os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5173').split(',')
+CORS_ALLOWED_ORIGINS = os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5173,http://localhost:3021').split(',')
 # DECISION: CORS_ALLOW_ALL_ORIGINS is hard-coded to False; the env-driven
 # allowlist above is the single source of truth. Previously this line was
 # read from DJANGO_CORS_ALL env var but then unconditionally reassigned
@@ -149,11 +149,20 @@ DATABASES = {
 REDIS_URL_DEFAULT = 'redis://localhost:6379/1'
 REDIS_URL = os.getenv("REDIS_URL", REDIS_URL_DEFAULT)
 
+# DECISION: Two Redis URLs in Docker (broker vs cache) so a feed-queue spike
+# can't evict queued Celery tasks and vice versa. In Docker compose the broker
+# runs with `--maxmemory-policy noeviction` (can't lose queued tasks) and the
+# cache with `allkeys-lru` (feed queues evictable since refill is idempotent).
+# Non-Docker dev collapses both to REDIS_URL — a single Redis on localhost is
+# fine for one developer.
+REDIS_BROKER_URL = os.getenv("REDIS_BROKER_URL", REDIS_URL)
+REDIS_CACHE_URL = os.getenv("REDIS_CACHE_URL", REDIS_URL)
+
 # This is how you connect Redis to Django
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": REDIS_URL,
+        "LOCATION": REDIS_CACHE_URL,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         }
@@ -164,8 +173,8 @@ CELERY_TASK_ROUTES = {
     'backend.app.tasks.refill_user_feed': {'queue': 'fast_feed'},
 }
 # 3. CELERY CONFIGURATION
-CELERY_BROKER_URL = REDIS_URL
-CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_BROKER_URL = REDIS_BROKER_URL
+CELERY_RESULT_BACKEND = REDIS_BROKER_URL
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_WORKER_STATE_DB = None
