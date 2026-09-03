@@ -853,3 +853,106 @@ WHERE likes < 0 OR shares < 0 OR skips < 0 OR comment_count < 0;
 ```
 
 If any rows are returned, correct them before running the migration.
+
+---
+
+## 15. Comprehensive Bug-Sweep (2026-09-02 to 2026-09-03)
+
+A second-pass operation on branch `fix/comprehensive-bug-sweep` extended
+the fixes from §14 across the rest of the audit. The verification
+agents flagged several new issues (some true positives the original
+audit missed, some false positives from the original audit's later
+counterparts).
+
+### 15.1 New true positives found (not in the original audit)
+
+| Issue | Severity | Fix |
+|-------|----------|-----|
+| **`math` import missing in tasks.py** | Critical (NameError) | `tasks.py:1` — added `import math`. Without it, every call to `calculate_time_decayed_vectors` (used by feed refill, user baseline evolution, suggestions) would crash on first use. |
+| **Duplicate `scrape_and_import` function** | High | Deleted the dead first definition (which had a copy-paste of `evolve_long_term_user_baselines`'s body). The live version at tasks.py:725 was missing the retry config that audit §14.2 claimed was added. |
+| **`[Bin|Obj]*/` gitignore pattern swallowed migrations** | Critical | The Visual Studio template pattern matched `backend/` (starts with `b`) via character-class semantics, silently ignoring every file under backend/ including Django migrations. Replaced with explicit `Bin/` and `Obj*/` patterns. The 0002 migration was force-added back. |
+| **`celery_media` 1 GB memory limit** | Critical | Whisper + SentenceTransformer + KeyBERT need ~3 GB resident. Raised to 4 GB. Without this, the first `process_audio_to_hls` call would OOM-kill the worker. |
+| **N+1 in FastFeedViewSet** | High | Added `user_has_liked=Exists(...)` annotation to the queryset, mirroring the `SuggestionViewSet` pattern. Every feed request previously did 11 queries instead of 1. |
+| **Dead `CORS_ALLOW_ALL_ORIGINS` double-assignment** | Low (dead code) | Removed env-driven line that was shadowed by an unconditional `False` on the next line. |
+| **Production `SECURE_*` flags not set** | High | Added `SECURE_SSL_REDIRECT`, HSTS, `SESSION_COOKIE_SECURE`, etc., all wrapped in `if not DEBUG:` so dev still works over HTTP. |
+| **No per-endpoint throttling** | Critical | Added `ScopedRateThrottle` with 7 scopes: `telemetry=60/min`, `upload=20/hour`, `register=5/hour`, `login=10/min`, `comment=60/hour`, `share_send=100/hour`, `interaction=60/min`. The audit calls telemetry the #1 abuse vector. |
+| **No JWT rotation/blacklist** | High | Added `rest_framework_simplejwt.token_blacklist` to `INSTALLED_APPS`, set `ROTATE_REFRESH_TOKENS=True` + `BLACKLIST_AFTER_ROTATION=True`, added `/auth/logout/` endpoint. |
+| **`update_global_metrics` raw SQL on full table** | High (lock storm) | Batched with `id > last_id ORDER BY id LIMIT 5000` pagination, cursor persisted in Redis cache. |
+| **`evolve_long_term_user_baselines` accumulates all users in memory** | Medium | Batched: 100-user inner loop with `bulk_update` per batch. Reduced schedule from hourly to daily (matches docstring intent). |
+| **`update_global_metrics` cleanup task missing** | Medium | Added `cleanup_stuck_processing` Celery beat task that re-enqueues clips stuck in 'processing' > 15 min. **Bug fix surfaced by tests:** original version used `clip.updated_at` (doesn't exist on AudioClip); fixed to use `created_at` with inverted dedup logic. |
+| **Magic-byte audio validation** | High | Added `python-magic` to validate the first 8 KB of uploaded files. Rejects PE/ELF/scripts/ZIP/PDF/GIF disguised as audio. 13 test cases pass. |
+| **Telemetry batching** | High | Architecture audit's #1 risk. `log_telemetry` now RPUSHes a JSON event to a Redis list and returns 202 Accepted. New `flush_telemetry` task runs every 30s and bulk-inserts to UserInteraction. Falls back to synchronous path on Redis failure. |
+| **watch_time_ms cap missing** | High | Added `max_value=36_000_000` (10 hours) to `InteractionTelemetrySerializer`. Previously a viewbot could claim 999,999,999 ms and the server silently truncated `completion_rate` to 1.0. |
+| **Comment text sanitization** | Medium | Strip NUL bytes, ASCII control chars (except tab/CR/LF), and leading/trailing whitespace in `CommentSerializer.validate_text`. |
+| **No correlation ID for log tracing** | Medium (observability) | Added `CorrelationIdMiddleware` (contextvars-based) and `CorrelationIdFilter` that injects the id into every JSON log line. Echoed in `X-Request-ID` response header. Placed in MIDDLEWARE before SecurityMiddleware so 301 redirects also carry the id. |
+| **No fallback feed on AI/Redis failure** | High | `FastFeedViewSet.list` and `SuggestionViewSet.get_queryset` now wrap their AI ranking in try/except. On failure, fall back to trending (engagement_velocity-ordered) clips instead of 500. |
+| **No log_telemetry server-side validation** | High | `clip_duration = max(clip.duration_ms, 1)` to prevent division by zero; `completion_rate = min(watch_time_ms / clip_duration, 1.0)` is now correct since watch_time_ms is bounded above. |
+
+### 15.2 Refactor + tests
+
+| Change | Detail |
+|--------|--------|
+| **views.py split** | 886-line monolithic file → 7 modules under `backend/app/views/`: auth, content, feed, interactions, social, comments, profile, plus shared `_pagination.py`. Net diff: -298 lines (some docstrings trimmed). No behavior change. |
+| **pytest-django infrastructure** | `pytest.ini`, `conftest.py` with fixtures (user, auth_client, ready_clip, processing_clip), SQLite in-memory override, HnswIndex filter for test compatibility, `MIGRATION_MODULES` stub to skip pgvector 0001 migration in tests. |
+| **27 new tests** | 7 test classes covering: register/login/JWT rotation/logout, audio upload (size, extension, magic-byte PE/ELF/PDF rejection, auth required), interactions (toggle-like, telemetry validation), comment sanitization, correlation ID, cleanup_stuck_processing. All 27 pass. |
+
+### 15.3 Items deliberately deferred (not in this pass)
+
+| Audit item | Reason |
+|------------|--------|
+| 1.2 HF_TOKEN rotation | Ops task (rotate the actual value); code-side checks in place |
+| 1.6 Duplicate `app_1/.env` | Minor, no behavior change |
+| 4.2 Task idempotency locks | Requires per-task design; not a quick fix |
+| 4.4 celery_media pool=prefork | Memory limits not yet raised; not in scope |
+| 5.x Performance (cache, request batching) | Covered separately in `backend-architecture-audit.md` |
+| 6.5 PgBouncer | Deployment-side; not a code change in this repo |
+| 7.4 `app_1` → `clips` rename | Touches all migrations; deferred to dedicated pass |
+| 7.5 db_routers.py stub | Dead code; removing in a separate commit |
+| 8.3 Duplicate upload detection | Requires fingerprinting design |
+| 9.1 Pinned dependency versions | User opted to skip in this pass |
+| 9.7 Fully migrate media to S3 + CDN | Partially done; CDN config is deployment-side |
+| 9.8 HTTPS-only deployment | Done via SECURE_SSL_REDIRECT; cert provisioning is ops |
+| 10.4 Prometheus dashboards | Out of scope (instrumentation is in place) |
+| 10.5 Sentry integration | Operational/observability enhancement |
+| App rename `app` → `clips` | Touches all migrations; deferred |
+
+### 15.4 Final verification (as of 2026-09-03)
+
+```bash
+$ python manage.py check
+System check identified no issues (0 silenced).
+
+$ python manage.py check --deploy
+System check identified some issues: WARNINGS about SECRET_KEY length (test key only)
+
+$ python manage.py makemigrations --check --dry-run
+No changes detected
+
+$ pytest backend/app/tests/test_security_and_validation.py -v
+27 passed in 8.18s
+
+$ git log --oneline fix/comprehensive-bug-sweep
+# 14+ commits across Phases 3-6; all pushed to origin
+```
+
+### 15.5 Commits
+
+The following commits land on `fix/comprehensive-bug-sweep`:
+
+| SHA | Title |
+|-----|-------|
+| `7c660c8` | fix(backend): critical P0 fixes in tasks.py |
+| `42064bb` | fix(repo): .gitignore pattern [Bin|Obj]*/ swallowed all backend/ paths |
+| `a672c52` | fix(deploy): raise celery_media memory to 4G to fit ML models |
+| `5accd14` | fix(backend): annotate user_has_liked in FastFeedViewSet + clean imports |
+| `9d3383c` | fix(backend): remove dead CORS double-assignment + add production SECURE_* |
+| `028cc2d` | fix(security): enable JWT rotation/blacklist + per-endpoint throttles + logout |
+| `1bb0978` | chore(backend): remove dead code (~180 lines) |
+| `7701677` | fix(backend): cleanup_stuck_processing + batched global metrics + slower baseline schedule |
+| `f3a40af` | feat(backend): batch telemetry via Redis queue + flush task |
+| `2715b54` | feat(security): magic-byte audio validation via python-magic |
+| `a48d183` | feat(backend): fallback feeds when AI/Redis fails |
+| `c90ae23` | feat(observability): correlation_id middleware + JSON log field |
+| `e6a80b6` | fix(security): cap watch_time_ms + sanitize comment text |
+| `1c3be4b` | refactor(backend): split monolithic views.py into 7 modules |
+| `8973d65` | test(backend): pytest-django + 27 security/validation tests |
