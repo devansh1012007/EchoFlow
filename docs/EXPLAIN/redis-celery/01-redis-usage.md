@@ -8,6 +8,10 @@ Single Redis 7 instance serves **multiple roles**:
 3. **Feed Queues** — Per-user `user_feed:{id}` lists
 4. **Session Storage** — Django sessions (if configured)
 5. **Rate Limiting** — DRF throttling backend
+6. **Telemetry Stream** — `stream:interaction.events` + consumer group `cg:telemetry-flush` (see [02-telemetry-stream.md](02-telemetry-stream.md))
+7. **Telemetry DLQ** — `stream:interaction.events:dlq` (poison-message triage)
+8. **Legacy Telemetry List** — `telemetry:queue` (fallback during the stream migration; slated for removal)
+9. **Dedup keys** — `processed_event:{event_id}` SETNX with 24h TTL
 
 ---
 
@@ -147,6 +151,32 @@ REST_FRAMEWORK = {
 }
 ```
 
+### 7. Telemetry Stream (Primary, 2026-09)
+
+**Key:** `stream:interaction.events`
+**Consumer group:** `cg:telemetry-flush`
+**Approximate cap:** `MAXLEN ~ 50000` (enforced on every XADD; bounds RAM)
+**Dedup key:** `processed_event:{event_id}` SETNX EX 86400
+**DLQ:** `stream:interaction.events:dlq` (poison messages, unbounded, alerted on)
+
+See [02-telemetry-stream.md](02-telemetry-stream.md) for the full producer/consumer
+contract, idempotency reasoning, operational signals, and rollback steps.
+
+### 8. Legacy Telemetry List (Fallback, slated for removal)
+
+**Key:** `telemetry:queue`
+**Type:** LIST (RPUSH / LPOP)
+**Drained by:** `flush_telemetry_legacy` Celery Beat task (every 30s)
+
+Only contains events when:
+- `ECHOFLOW_TELEMETRY_STREAM=off`, OR
+- the XADD producer's call to Redis raised and the service fell back
+  to the list (the producer's `try/except` in
+  `services/interactions.py:record_telemetry`)
+
+**TODO:** remove `flush_telemetry_legacy` and this key after one
+operational cycle of the stream consumer proving stable.
+
 ---
 
 ## Connection Management
@@ -238,6 +268,10 @@ redis-cli DBSIZE
 | `connected_clients` | < 100 | > 200 |
 | `user_feed:*` avg length | 20-50 | < 5 or > 100 |
 | Broker queue depth | < 100 | > 1000 |
+| `XLEN stream:interaction.events` | < 50,000 | > 50,000 sustained 5 min |
+| `XPENDING stream:interaction.events cg:telemetry-flush` | < 1,000 | > 1,000 sustained 5 min |
+| `XLEN stream:interaction.events:dlq` | 0 | > 0 |
+| `LLEN telemetry:queue` | 0 | > 0 (legacy path running) |
 
 ---
 

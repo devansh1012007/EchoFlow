@@ -145,13 +145,27 @@ POST /interactions/{clip_id}/log-telemetry/
 ClipInteractionViewSet.log_telemetry()
     │
     ├── completion_rate = min(watch_time_ms / clip.duration_ms, 1.0)
-    ├── UserInteraction.update_or_create(
-    │     user, clip, action_type,
-    │     defaults={watch_time_ms, completion_rate, is_active=True}
-    │ )
     │
-    └── If state_changed (new/active toggle):
-          AudioClip.update(F(field) + increment)  // atomic counter
+    ▼
+backend.app.services.interactions.record_telemetry()      ← service layer
+    │
+    ├── Primary: XADD stream:interaction.events MAXLEN ~ 50000
+    │             * event_id <uuid> schema_version "1.0.0" payload <json>
+    │
+    ├── Fallback: RPUSH telemetry:queue <json>      (legacy list, drained by
+    │                                                 flush_telemetry_legacy)
+    │
+    └── Last-resort: synchronous UserInteraction.update_or_create
+                     (only on full Redis failure)
+    │
+    ▼
+flush_telemetry_stream (Celery Beat, every 10s)
+    │
+    ├── XREADGROUP cg:telemetry-flush COUNT 500 BLOCK 5000
+    ├── SET processed_event:{event_id} 1 NX EX 86400   (idempotency)
+    ├── UserInteraction.bulk_create(ignore_conflicts=True)
+    ├── XACK
+    └── Poison messages → stream:interaction.events:dlq
 ```
 
 ### 5. Periodic Metrics & Vector Evolution
@@ -194,25 +208,28 @@ Celery Beat (every hour) → evolve_long_term_user_baselines()
 |--------|----------------------|------------------------|
 | Media storage | S3-compatible (MinIO local, S3 prod) ✓ | CDN in front (CloudFront/Cloudflare) |
 | Feed computation | Redis pre-computed queues | Multi-tier: candidate gen → scoring → ranking |
-| Telemetry | Synchronous `update_or_create` per request | Batched/async via Kafka → ClickHouse |
+| Telemetry | Redis Stream + consumer group (2026-09); legacy list fallback | Schema-versioned fat events + ClickHouse analytical sink |
+| Counter side-effects | Synchronous F() in `UserInteraction.save()` | Redis INCRBY + counter batcher (P1.1 in event-driven plan) |
 | Vector search | pgvector HNSW in PostgreSQL | Dedicated vector DB (Qdrant/Milvus) at >10M clips |
 | ML inference | In Celery worker (CPU, baked models) | GPU inference service (Triton/vLLM) |
 | Message queue | Redis broker | RabbitMQ → Kafka |
 | Connection pooling | `conn_max_age=600` (Django) | PgBouncer transaction pooling |
-| Rate limiting | DRF global (1000/hr user) | Per-endpoint, Redis token bucket |
+| Rate limiting | DRF global (1000/hr user) + scoped (telemetry 60/min, upload 20/hr, etc.) | Per-endpoint, Redis token bucket |
 | Observability | JSON logs, /health, /ready, /metrics | OpenTelemetry + Prometheus + Grafana + Loki |
+| Service layer | Stage 2 boundary in `backend/app/services/` ✓ (2026-09) | Service layer as the home for all business logic |
 
 ## Known Limitations (Current Implementation)
 
-1. **Telemetry contention**: Synchronous `update_or_create` on every view creates PostgreSQL row locks
-2. **Global metrics**: Raw SQL `UPDATE` on entire `AudioClip` table locks at scale
-3. **No fallback feed**: Redis outage → synchronous vector queries → PostgreSQL collapse
-4. **Single Redis**: Broker + cache share instance; feed spike evicts broker queues
-5. **No PgBouncer**: Direct Django connections exhaust PostgreSQL at moderate load
-6. **No CDN**: HLS served directly from MinIO/S3; no edge caching
-7. **Magic byte validation missing**: Only file extension checked on upload
-8. **No dead letter queues**: Failed media tasks just log error, no retry visibility
-9. **CORS hardcoded**: `CORS_ALLOW_ALL_ORIGINS = False` but was True in earlier versions
+1. **Counter side-effect on `UserInteraction.save()` still F() into `AudioClip`** (services/interactions.py:record_like_toggle still triggers `UserInteraction.save()` → `AudioClip.objects.filter(pk=...).update(likes=F('likes')+1)`). The Stage 2 service layer is now the boundary; P1.1 of the event-driven plan replaces this with a Redis INCRBY + counter batcher.
+2. **Telemetry stream consumer:** `flush_telemetry_stream` is the primary path; `flush_telemetry_legacy` (LIST) is kept as a safety net for one cycle and slated for removal. The DLQ (`stream:interaction.events:dlq`) grows unbounded; alert on depth > 0.
+3. **Global metrics**: Raw SQL `UPDATE` on entire `AudioClip` table is now batched by id cursor (`update_global_metrics`); the correlated subquery for `avg_completion_rate` is still O(N) per batch.
+4. **No fallback feed**: Redis outage → the `FastFeedViewSet` try/except serves a trending fallback (top clips by `engagement_velocity`). Not a 500.
+5. **Single Redis**: Broker + cache share instance; feed spike evicts broker queues (mitigated by `volatile-lru`; see P0.4 in the event-driven plan).
+6. **No PgBouncer**: Direct Django connections exhaust PostgreSQL at moderate load.
+7. **No CDN**: HLS served directly from MinIO/S3; no edge caching.
+8. **Magic byte validation missing on legacy paths**: covered by `python-magic` at upload time but not on every read.
+9. **No automated DLQ triage**: failed stream events land in `stream:interaction.events:dlq` but no consumer auto-pages.
+10. **CORS hardcoded**: `CORS_ALLOW_ALL_ORIGINS = False`; env-driven allowlist is the single source of truth.
 
 ## Discrepancies with Documentation
 
