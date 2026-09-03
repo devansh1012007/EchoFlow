@@ -161,62 +161,6 @@ class FastFeedViewSet(viewsets.ViewSet):
             "queue_health": queue_length,
             "results": serializer.data
         })
-'''class FeedViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Fallback slow-but-reliable feed endpoint for traditional pagination.
-    
-    ENDPOINT: GET /feed/
-    
-    DIFFERENCE FROM FastFeedViewSet:
-    - Uses database queries (NOT Redis cache)
-    - Computes recommendations on-demand (slower: 500-1000ms)
-    - Guaranteed freshness (no pre-computed queue staleness)
-    - Better for discovery/explore sections
-    
-    RECOMMENDATION QUALITY:
-    - Applies same cosine/vector matching as FastFeedViewSet
-    - NO engagement velocity boost (fair, quality-only ranking)
-    - Cursor pagination allows deep pagination without memory bloat
-    
-    OPTIMIZATION: N+1 Query Prevention
-    - Uses .annotate(user_has_liked=Exists(...)) to solve N+1 problem
-    - Single query fetches clips + like status in one join
-    - Performance: ~50-100ms query time for typical page
-    
-    RESPONSE PAYLOAD (paginated):
-    {
-        "next": "cD0xODk2...",  # Opaque cursor for next page
-        "previous": null,
-        "results": [
-            {
-                "id": "clip_uuid",
-                "title": "Clip Title",
-                "creator_name": "username",
-                "is_liked": false,
-                ...
-            }
-        ]
-    }
-    """
-    serializer_class = FeedClipSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    pagination_class = FeedCursorPagination
-
-    def get_queryset(self):
-        user = self.request.user
-        
-        # Subquery to check if the user has already liked the clip
-        user_like_subquery = UserInteraction.objects.filter(
-            clip=OuterRef('pk'),
-            user=user,
-            interaction_type='like',
-            is_active=True
-        )
-
-        return AudioClip.objects.filter(status='ready').annotate(
-            user_has_liked=Exists(user_like_subquery)
-        )
-'''
 # ---------------------------------------------------------
 # 4. INTERACTION LAYER (Likes & Skips)
 # ---------------------------------------------------------
@@ -672,10 +616,10 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
     - Base queryset = all 'ready' clips in category
     
     STAGE 2: PERSONALIZATION (if user has vectors)
-    - Calls calculate_blended_query_vectors(user):
+    - Calls calculate_time_decayed_vectors(user):
       * Gets user's current semantic + acoustic preference vectors
       * These vectors embody "what this user is currently in the mood for"
-      * Blends 70% recent (7-day) context with 30% long-term baseline
+      * Blends short-term context with long-term baseline
     
     STAGE 3: VECTOR RANKING (within category)
     - Sorts by combined_distance (sum of semantic + acoustic cosine distance)

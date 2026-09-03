@@ -4,7 +4,6 @@ import shutil
 import subprocess
 import tempfile
 import random
-import json
 import threading
 import numpy as np
 import logging
@@ -28,8 +27,6 @@ whisper_model = None
 embedding_model = None
 kw_model = None
 _model_lock = threading.Lock()
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""
 
 
 def get_whisper_model():
@@ -79,22 +76,6 @@ def get_kw_model():
                     logger.exception("Failed to initialize KeyBERT: %s", e)
                     raise
     return kw_model
-
-def get_openai_client():
-    """Create an OpenAI client only when the task is executed.
-
-    This avoids import-time failures during Django management commands when the
-    OpenAI API key is not configured in the environment.
-    """
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY is not set. OpenAI calls require this environment variable.")
-    try:
-        from openai import OpenAI
-    except ImportError as e:
-        logger.error("openai package is not installed; OpenAI pipeline unavailable: %s", e)
-        raise
-    return OpenAI(api_key=OPENAI_API_KEY)
-
 
 def extract_acoustic_vector(y,sr):
     """
@@ -332,180 +313,13 @@ def process_audio_to_hls(self, clip_id):
             pass
         shutil.rmtree(local_hls_dir, ignore_errors=True)
 
-    # for when i will have money for API
-    '''try:
-        client = get_openai_client()
-        with open(input_file_path, "rb") as audio_file:
-            transcript_response = client.audio.transcriptions.create(
-                model="whisper-1", 
-                file=audio_file
-            )
-        transcript_text = transcript_response.text
-        # 2. SEMANTIC VECTOR EXTRACTION (OpenAI Text Embeddings)
-        clip.semantic_vector = client.embeddings.create(
-        input=transcript_text, model="text-embedding-3-small"
-    ).data[0].embedding
-        # 3. AUTOMATED TAGGING (LLM Extraction)
-        # We ask a lightweight model to categorize the transcript
-        # add pydentic model for validation in production
-        tag_response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Extract exactly 3 lower-case, single-word genre tags from this text. Return ONLY a JSON array of strings."},
-                {"role": "user", "content": transcript_text}
-            ]
-        )
-        clip.tags = json.loads(tag_response.choices[0].message.content)
-    
+    # DECISION: The OpenAI transcription/embedding/tagging path was a
+    # prototype ("for when i will have money for API"). The local Whisper +
+    # SentenceTransformer + KeyBERT pipeline (lines ~200-326) is the
+    # production path. The OpenAI block was a triple-quoted string statement,
+    # not a comment, so it was never executed — but its presence confused
+    # grep and review. Removed.
 
-    except Exception as e:
-        logger.error("AI Processing Failed: %s", e)
-        # In production, you would log this to Sentry and potentially retry
-    
-    # Create a unique output directory for this clip
-    output_dir = os.path.join(settings.MEDIA_ROOT, 'hls', str(clip.id))
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # The Master Playlist path
-    master_playlist_path = os.path.join(output_dir, 'master.m3u8')
-
-    # FFmpeg command for Audio-Only ABR
-    # We create 3 variants: 192k, 128k, and 64k.
-    # -hls_time 4: Chops the audio into 4-second segments
-    command = [
-        'ffmpeg', '-y', '-i', input_file_path,
-        
-        # Audio formatting (AAC is standard for HLS)
-        '-c:a', 'aac', '-ar', '44100',
-        
-        # Map the input to 3 different outputs
-        '-map', '0:a', '-map', '0:a', '-map', '0:a',
-        
-        # Set the bitrates for each mapping
-        '-b:a:0', '192k',
-        '-b:a:1', '128k',
-        '-b:a:2', '64k',
-        
-        # HLS Configuration
-        '-f', 'hls',
-        '-hls_time', '4', # 4 second chunks
-        '-hls_playlist_type', 'vod',
-        
-        # Create the variant sub-playlists
-        '-var_stream_map', 'a:0,agroup:audio,default:yes a:1,agroup:audio a:2,agroup:audio',
-        '-master_pl_name', 'master.m3u8',
-        
-        # Output paths (creates the folders dynamically)
-        os.path.join(output_dir, '%v', 'index.m3u8')
-    ]
-
-    try:
-        # Run the FFmpeg command
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        # Update the database with the new URL and status
-        # Note: In production, you'd upload this directory to AWS S3 and save the S3 URL.
-        clip.hls_playlist_url = f"/media/hls/{clip.id}/master.m3u8"
-        clip.status = 'ready'
-        clip.save()
-
-    except subprocess.CalledProcessError as e:
-        clip.status = 'failed'
-        clip.save()
-        logger.error("FFmpeg Error: %s", e.stderr.decode())
-    '''
-
-
-
-
-def calculate_dynamic_user_vector(user_id):
-    """
-    Calculates the user's current mood vector based on recent interactions.
-    """
-    # Fetch the 15 most recent positive interactions
-    recent_positive_interactions = UserInteraction.objects.filter(
-        user_id=user_id,
-        interaction_type__in=['like', 'share']
-    ).select_related('clip').order_by('-created_at')[:15]
-    
-    if recent_positive_interactions is None or len(recent_positive_interactions) == 0:
-        return None
-
-    # Extract the vectors
-    vectors = [
-        np.array(interaction.clip.semantic_vector)
-        for interaction in recent_positive_interactions 
-        if interaction.clip.semantic_vector is not None
-    ]
-    
-    if vectors is None:
-        return None
-        
-    # Calculate the centroid (average) of these vectors
-    # This represents their exact "vibe" right now
-    centroid_vector = np.mean(vectors, axis=0)
-    
-    # Normalize the vector to maintain standard cosine similarity geometry
-    norm = np.linalg.norm(centroid_vector)
-    if norm > 0:
-        centroid_vector = centroid_vector / norm
-        
-    return centroid_vector.tolist()
-
-def calculate_blended_query_vectors(user):
-    # 1. Fetch interactions, applying time decay in Python
-    now = timezone.now()
-    cutoff = now - timedelta(days=7) # Only consider last 7 days for context
-    
-    recent_interactions = UserInteraction.objects.filter(
-        user=user, 
-        interaction_type__in=['like', 'share', 'view'],
-        is_active=True,
-        updated_at__gte=cutoff
-    ).select_related('clip')
-    
-    if recent_interactions is None:
-        return user.long_term_semantic, user.long_term_acoustic
-
-    sem_vectors = []
-    ac_vectors = []
-    weights = []
-
-    for interaction in recent_interactions:
-        hours_since = max((now - interaction.updated_at).total_seconds() / 3600, 0.1)
-        # Time decay logic: 1 / (1 + log(hours))
-        weight = 1.0 / (1.0 + math.log(hours_since + 1))
-        
-        # Boost weight by completion rate if available
-        if interaction.completion_rate:
-            weight *= (interaction.completion_rate + 0.5)
-
-        if interaction.clip.semantic_vector is not None:
-            sem_vectors.append(np.array(interaction.clip.semantic_vector) * weight)
-        if interaction.clip.acoustic_vector is not None:
-            ac_vectors.append(np.array(interaction.clip.acoustic_vector) * weight)
-        weights.append(weight)
-
-    total_weight = sum(weights) if weights else 1
-    context_sem = np.sum(sem_vectors, axis=0) / total_weight if sem_vectors else None
-    context_ac = np.sum(ac_vectors, axis=0) / total_weight if ac_vectors else None
-
-    ALPHA = 0.75 # 75% short term mood, 25% long term baseline
-    
-    if user.long_term_semantic is not None and context_sem is not None:
-        final_sem = (ALPHA * context_sem) + ((1 - ALPHA) * np.array(user.long_term_semantic))
-    else:
-        final_sem = context_sem or user.long_term_semantic
-
-    if user.long_term_acoustic is not None and context_ac is not None:
-        final_ac = (ALPHA * context_ac) + ((1 - ALPHA) * np.array(user.long_term_acoustic))
-    else:
-        final_ac = context_ac or user.long_term_acoustic
-        
-    return (
-        final_sem.tolist() if final_sem is not None else None, 
-        final_ac.tolist() if final_ac is not None else None
-    )
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True)
 def refill_user_feed(self, user_id, count=50):

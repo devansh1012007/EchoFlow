@@ -83,12 +83,6 @@ class SkipActionSerializer(serializers.Serializer):
 
 class ShareActionSerializer(serializers.Serializer):
     receiver_id = serializers.IntegerField(required=True)
-'''
-class SharedClipsSerializer(serializers.ModelSerializer):
-    received_clips = serializers.JSONField(source='received', read_only=True)
-    class Meta:
-        model = SharedClips
-        fields = ['received_clips']'''
 
 
 class CommentSerializer(serializers.ModelSerializer):
