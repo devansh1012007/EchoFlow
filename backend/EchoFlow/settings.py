@@ -252,12 +252,24 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'backend.app.tasks.cleanup_stuck_processing',
         'schedule': 300.0,  # every 5 minutes
     },
-    'flush-telemetry': {
-        # SECURITY: Drains the Redis telemetry queue populated by
-        # log_telemetry. Replaces per-request DB writes with batched
-        # bulk_insert every 30s. Eliminates the row-lock contention
+    'flush-telemetry-stream': {
+        # Stream consumer. Primary path. XREADGROUP drains
+        # stream:interaction.events every 10s with 5s BLOCK, dedups
+        # via processed_event:{event_id} SETNX (24h TTL), bulk-inserts
+        # UserInteraction rows, XACKs, and routes poison messages to
+        # stream:interaction.events:dlq. Fast cadence is cheap with
+        # consumer groups; replaces the per-request row-lock contention
         # that the architecture audit flags as the #1 scalability risk.
-        'task': 'backend.app.tasks.flush_telemetry',
+        'task': 'backend.app.tasks.flush_telemetry_stream',
+        'schedule': 10.0,  # every 10 seconds
+    },
+    'flush-telemetry-legacy': {
+        # Legacy LIST consumer. Kept for one operational cycle as a
+        # safety net while the stream consumer proves itself. Drains
+        # the 'telemetry:queue' Redis list (the producer's LIST fallback
+        # when ECHOFLOW_TELEMETRY_STREAM=off or the stream is unhealthy).
+        # TODO: remove after one cycle of stable operation.
+        'task': 'backend.app.tasks.flush_telemetry_legacy',
         'schedule': 30.0,  # every 30 seconds
     },
 }

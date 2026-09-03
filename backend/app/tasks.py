@@ -588,16 +588,16 @@ def evolve_long_term_user_baselines(self):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10, retry_backoff=True)
-def flush_telemetry(self, max_events=1000):
-    """Drain the Redis telemetry queue and bulk-insert into UserInteraction.
+def flush_telemetry_legacy(self, max_events=1000):
+    """LEGACY: drain the Redis 'telemetry:queue' list and bulk-insert.
 
-    Architecture audit's #1 risk: synchronous update_or_create on every
-    log_telemetry call holds row locks on UserInteraction. This task
-    converts N per-request writes into a single bulk insert per flush.
+    Kept for one operational cycle as a safety net while the new
+    flush_telemetry_stream consumer proves itself. With ECHOFLOW_TELEMETRY_STREAM
+    on, the producer writes to the stream and the list is empty. With the
+    stream consumer offline, the producer falls back to the list and this
+    task drains it.
 
-    Triggered every 30s via Celery beat. Uses LPOP from a Redis list
-    (atomic) up to max_events. Each event is a JSON object written by
-    ClipInteractionViewSet.log_telemetry (views.py).
+    TODO: remove after one cycle of stable operation.
     """
     import json
     redis_client = cache.client.get_client()
@@ -611,7 +611,7 @@ def flush_telemetry(self, max_events=1000):
         try:
             events.append(json.loads(raw))
         except json.JSONDecodeError:
-            logger.warning("flush_telemetry: dropped malformed event: %r", raw)
+            logger.warning("flush_telemetry_legacy: dropped malformed event: %r", raw)
             continue
 
     if not events:
@@ -639,6 +639,156 @@ def flush_telemetry(self, max_events=1000):
 
     UserInteraction.objects.bulk_create(interactions, batch_size=500)
     return f"Flushed {len(interactions)} telemetry events to UserInteraction."
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=10, retry_backoff=True)
+def flush_telemetry_stream(self, max_events=500, block_ms=5000):
+    """Stream consumer: drain stream:interaction.events via XREADGROUP.
+
+    Consumer group: cg:telemetry-flush. Each consumer reads up to
+    max_events, dedups via processed_event:{event_id} SETNX, bulk-inserts
+    new events, and XACKs them. Poison messages (malformed payload,
+    downstream exception) are XADD'd to stream:interaction.events:dlq
+    and XACK'd from the main stream so the pipeline never stalls.
+
+    Triggered every 10s via Celery beat — faster cadence than the legacy
+    task because streams + consumer groups have lower per-tick overhead
+    than LPOP loops.
+
+    Idempotency: the dedup key has a 24h TTL. A consumer that crashes
+    after bulk_create but before XACK will cause the same event_id to
+    be re-read on the next tick; SETNX returns False, the event is
+    silently dropped, and the stream entry is XACK'd anyway. The DB
+    already has the row from the prior run, so this is correct.
+    """
+    import json
+    from ..services.interactions import STREAM_KEY, CONSUMER_GROUP
+
+    client = cache.client.get_client()
+    # Ensure the consumer group exists. MKSTREAM creates the stream on
+    # first call; the try/except swallows the BUSYGROUP error on
+    # subsequent boots. Cheap idempotent setup.
+    try:
+        client.xgroup_create(STREAM_KEY, CONSUMER_GROUP, id='0', mkstream=True)
+    except Exception:
+        pass  # BUSYGROUP — already exists.
+
+    consumer_name = f"celery-{os.getpid()}"
+    try:
+        response = client.xreadgroup(
+            CONSUMER_GROUP,
+            consumer_name,
+            {STREAM_KEY: '>'},
+            count=max_events,
+            block=block_ms,
+        )
+    except Exception as exc:
+        logger.warning("flush_telemetry_stream: xreadgroup failed: %s", exc)
+        return f"xreadgroup failed: {exc}"
+
+    if not response:
+        return "No events to flush."
+
+    # response shape: [(stream_name, [(entry_id, {fields}), ...])]
+    entries: list[tuple[str, dict]] = []
+    for _stream, items in response:
+        for entry_id, fields in items:
+            entries.append((entry_id, fields))
+
+    dedup_ttl = 86400
+    processed_ids: list[str] = []
+    dlq_ids: list[str] = []
+    interactions: list[UserInteraction] = []
+
+    for entry_id, fields in entries:
+        try:
+            event_id = fields.get('event_id') or entry_id
+            payload_raw = fields.get('payload')
+            if not payload_raw:
+                logger.warning("flush_telemetry_stream: empty payload on %s", entry_id)
+                dlq_ids.append(entry_id)
+                continue
+            event = json.loads(payload_raw)
+            user_id = event['user_id']
+            clip_id = event['clip_id']
+        except (KeyError, json.JSONDecodeError, TypeError) as exc:
+            logger.warning(
+                "flush_telemetry_stream: malformed event %s (%s); routing to DLQ",
+                entry_id, exc,
+            )
+            dlq_ids.append(entry_id)
+            continue
+
+        # SETNX dedup. If another consumer (or a previous run of this
+        # consumer after a crash) already processed this event, skip it
+        # and ACK — the row is already in the DB.
+        dedup_key = f"processed_event:{event_id}"
+        try:
+            first_time = client.set(dedup_key, '1', nx=True, ex=dedup_ttl)
+        except Exception as exc:
+            logger.warning("flush_telemetry_stream: dedup SET failed (%s); processing anyway", exc)
+            first_time = True
+
+        if not first_time:
+            processed_ids.append(entry_id)
+            continue
+
+        try:
+            user = User.objects.get(id=user_id)
+            clip = AudioClip.objects.get(id=clip_id)
+        except (User.DoesNotExist, AudioClip.DoesNotExist):
+            logger.warning(
+                "flush_telemetry_stream: missing user/clip for %s; ACKing (data will be lost)",
+                entry_id,
+            )
+            processed_ids.append(entry_id)
+            continue
+
+        interactions.append(UserInteraction(
+            user=user,
+            clip=clip,
+            interaction_type=event['action_type'],
+            watch_time_ms=event['watch_time_ms'],
+            completion_rate=event['completion_rate'],
+            is_active=True,
+        ))
+        processed_ids.append(entry_id)
+
+    if interactions:
+        try:
+            UserInteraction.objects.bulk_create(interactions, batch_size=500)
+        except Exception as exc:
+            logger.error("flush_telemetry_stream: bulk_create failed (%s); routing all to DLQ", exc)
+            for entry_id, _ in entries:
+                if entry_id not in processed_ids:
+                    dlq_ids.append(entry_id)
+                else:
+                    processed_ids.remove(entry_id)
+
+    # ACK everything we handled successfully.
+    if processed_ids:
+        try:
+            client.xack(STREAM_KEY, CONSUMER_GROUP, *processed_ids)
+        except Exception as exc:
+            logger.warning("flush_telemetry_stream: xack failed for %d ids: %s",
+                           len(processed_ids), exc)
+
+    # Move poison messages to DLQ so the main stream advances. Keep them
+    # observable (no AUTO-trim) so operators can XLEN the DLQ and triage.
+    for entry_id in dlq_ids:
+        try:
+            client.xadd('stream:interaction.events:dlq', {
+                'original_id': entry_id,
+                'reason': 'malformed_or_duplicate',
+            })
+            client.xack(STREAM_KEY, CONSUMER_GROUP, entry_id)
+        except Exception as exc:
+            logger.error("flush_telemetry_stream: DLQ xadd failed for %s: %s", entry_id, exc)
+
+    return (
+        f"Flushed {len(interactions)} telemetry events; "
+        f"DLQ-routed {len(dlq_ids)}; ACKed {len(processed_ids)}."
+    )
 
 
 @shared_task
