@@ -232,8 +232,21 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': 300.0,  # every 5 minutes
     },
     'evolve-user-baselines': {
+        # DECISION: Hourly is too aggressive — with limit=100 per user and
+        # select_related('clip'), this scans 100 interactions per user per
+        # hour. At 100k users that's 10M interaction reads/hour. Daily (86400s)
+        # is the design intent. Use crontab in django_celery_beat for 3:00 AM
+        # if exact timing matters.
         'task': 'backend.app.tasks.evolve_long_term_user_baselines',
-        'schedule': 3600.0,  # every hour
+        'schedule': 86400.0,  # every 24 hours
+    },
+    'cleanup-stuck-processing': {
+        # SECURITY/RELIABILITY: A clip stuck in 'processing' past 15 minutes
+        # means its Celery task never completed (Redis broker hiccup, worker
+        # OOM, network drop). Without this task the clip is abandoned.
+        # Re-enqueue and let the retry decorators handle transient failures.
+        'task': 'backend.app.tasks.cleanup_stuck_processing',
+        'schedule': 300.0,  # every 5 minutes
     },
 }
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'

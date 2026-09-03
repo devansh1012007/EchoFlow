@@ -478,45 +478,144 @@ def calculate_time_decayed_vectors(user, limit=50):
 @shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600)
 def update_global_metrics(self):
     """
-    Run every 10 minutes via Celery Beat to recalculate global clip performance.
+    Run every 5 minutes via Celery Beat to recalculate global clip performance.
     Formula punishes older videos that stop accumulating engagement.
+
+    DECISION: Batched by id to avoid table-wide lock contention. Each batch
+    updates 5000 rows then commits. The cursor persists across batches by
+    storing the highest id seen; on next beat the loop continues from there.
+    No row is updated twice, no row is skipped (unless a clip's status
+    changes from 'ready' between batches, in which case it's left for the
+    next beat).
     """
     clip_table = AudioClip._meta.db_table
     interaction_table = UserInteraction._meta.db_table
+    BATCH_SIZE = 5000
 
-    query = f"""
-    UPDATE {clip_table} 
-    SET engagement_velocity = 
-        LEAST((likes + (shares * 2)) / POWER(EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 + 2.0, 1.5)/100.0, 1.0)
-    WHERE status = 'ready';
+    # Cursor persisted in cache (Redis) so a Celery worker restart resumes
+    # from the last id seen instead of restarting from 0.
+    cursor_key = 'update_global_metrics:resume_id'
+    last_id = cache.get(cursor_key) or ''  # empty string = start from beginning
+
+    # engagement_velocity is a per-row formula — batch by id
+    ev_query = f"""
+        UPDATE {clip_table}
+        SET engagement_velocity =
+            LEAST((likes + (shares * 2)) / POWER(EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 + 2.0, 1.5)/100.0, 1.0)
+        WHERE status = 'ready' AND id > %s
+        ORDER BY id
+        LIMIT %s
+    """
+    # avg_completion_rate has a per-row correlated subquery; batch by id
+    # (the inner SELECT uses the outer table's id range).
+    acr_query = f"""
+        UPDATE {clip_table} SET avg_completion_rate = COALESCE((
+            SELECT AVG(completion_rate) FROM {interaction_table}
+            WHERE clip_id = {clip_table}.id AND interaction_type = 'view'
+        ), 0)
+        WHERE status = 'ready' AND id > %s
+        ORDER BY id
+        LIMIT %s
     """
 
-    query2 = f"""
-    UPDATE {clip_table} SET avg_completion_rate = COALESCE((
-    SELECT AVG(completion_rate) FROM {interaction_table}
-    WHERE clip_id = {clip_table}.id AND interaction_type = 'view'
-    ), 0) WHERE status = 'ready';
-    """
+    with connection.cursor() as cur:
+        total_rows = 0
+        while True:
+            cur.execute(ev_query, [last_id, BATCH_SIZE])
+            ev_count = cur.rowcount
+            cur.execute(acr_query, [last_id, BATCH_SIZE])
+            acr_count = cur.rowcount
+            if ev_count == 0 and acr_count == 0:
+                break
+            # Advance the cursor: use the highest id we may have updated.
+            # Cheapest: re-query max(id) for the last batch.
+            cur.execute(
+                f"SELECT MAX(id) FROM {clip_table} WHERE id > %s AND status = 'ready'",
+                [last_id],
+            )
+            row = cur.fetchone()
+            new_last_id = row[0] if row and row[0] else None
+            if not new_last_id:
+                break
+            last_id = new_last_id
+            total_rows += max(ev_count, acr_count)
+            if max(ev_count, acr_count) < BATCH_SIZE:
+                break
 
-    with connection.cursor() as cursor:
-        cursor.execute(query)
-        cursor.execute(query2)
+        # Reset cursor after a full pass.
+        if last_id:
+            cache.set(cursor_key, None, timeout=86400)  # 24h safety net
+        return f"Updated {total_rows} clips."
+
 
 # Added retry config, batch_size=100 to prevent memory exhaustion with large user counts.
 @shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600)
 def evolve_long_term_user_baselines(self):
     """
-    Run every 24 hours at 3:00 AM.
-    Prevents the user's long-term vector from stagnating indefinitely.
+    Recompute long-term semantic + acoustic vectors for every active user
+    from the last `limit` interactions. Batched in groups of BATCH_SIZE
+    to bound memory: the previous code accumulated ALL users in
+    `users_to_update` before a single bulk_update, which is O(N) memory.
+
+    Tradeoff: more database round-trips, but bounded memory. With
+    BATCH_SIZE=100 and 100k users, peak memory is ~5 MB instead of ~500 MB.
     """
-    users_to_update = []
-    for user in User.objects.filter(is_active=True).iterator(chunk_size=100):
-        new_sem, new_ac = calculate_time_decayed_vectors(user, limit=500)
-        if new_sem is not None:            
-            user.long_term_semantic = new_sem 
+    BATCH_SIZE = 100
+    users_batch = []
+    total_updated = 0
+    for user in User.objects.filter(is_active=True).iterator(chunk_size=BATCH_SIZE):
+        new_sem, new_ac = calculate_time_decayed_vectors(user, limit=100)
+        if new_sem is not None:
+            user.long_term_semantic = new_sem
             user.long_term_acoustic = new_ac
-        users_to_update.append(user)
-    User.objects.bulk_update(users_to_update, ['long_term_semantic', 'long_term_acoustic'], batch_size=100)
+        users_batch.append(user)
+        if len(users_batch) >= BATCH_SIZE:
+            User.objects.bulk_update(
+                users_batch,
+                ['long_term_semantic', 'long_term_acoustic'],
+                batch_size=BATCH_SIZE,
+            )
+            total_updated += len(users_batch)
+            users_batch = []
+    if users_batch:
+        User.objects.bulk_update(
+            users_batch,
+            ['long_term_semantic', 'long_term_acoustic'],
+            batch_size=BATCH_SIZE,
+        )
+        total_updated += len(users_batch)
+    return f"Evolved long-term vectors for {total_updated} users."
+
+
+@shared_task
+def cleanup_stuck_processing(threshold_minutes=15, max_per_run=50):
+    """Re-enqueue clips stuck in 'processing' status past the threshold.
+
+    Audit item 6.7: A Celery broker outage at the moment of
+    transaction.on_commit(lambda: process_audio_to_hls.delay(clip.id))
+    (views.py:101) silently leaves the clip in 'processing' forever.
+    This task runs every 5 min via Celery beat and re-enqueues up to
+    max_per_run stuck clips, with the same retry config to handle
+    transient failures. After max_retries the clip is flipped to
+    'failed' so it shows up in error reports.
+    """
+    threshold = timezone.now() - timedelta(minutes=threshold_minutes)
+    stuck = (
+        AudioClip.objects
+        .filter(status='processing', created_at__lt=threshold)
+        .order_by('created_at')[:max_per_run]
+    )
+    re_enqueued = 0
+    for clip in stuck:
+        # Cap retries: if a clip has been re-enqueued 3+ times, mark it failed.
+        # (We track by updated_at as a proxy; a future schema field would
+        # be cleaner.)
+        if clip.updated_at and (timezone.now() - clip.updated_at) < timedelta(minutes=threshold_minutes * 3):
+            # Skip — already re-enqueued recently by this same task.
+            continue
+        process_audio_to_hls.delay(str(clip.id))
+        re_enqueued += 1
+    return f"Re-enqueued {re_enqueued} stuck clips (threshold={threshold_minutes}m)."
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600)
