@@ -311,19 +311,39 @@ class ClipInteractionViewSet(viewsets.GenericViewSet):
         clip_duration = max(clip.duration_ms, 1) # Prevent division by zero
         completion_rate = min(watch_time_ms / clip_duration, 1.0)
 
-        # Log or update the interaction with telemetry
-        interaction, created = UserInteraction.objects.update_or_create(
-            user=user,
-            clip=clip,
-            interaction_type=action_type,
-            defaults={
-                'watch_time_ms': watch_time_ms,
-                'completion_rate': completion_rate,
-                'is_active': True 
-            }
-        )
+        # SECURITY: Telemetry is the architecture audit's #1 lock-contention
+        # risk. Instead of update_or_create on every request (which holds a
+        # row lock on UserInteraction), we append the event to a Redis list
+        # and a periodic Celery task flushes the list to the DB in batches.
+        # This converts a per-request DB write into an async bulk insert.
+        # Tradeoff: telemetry is "eventually consistent" (visible to
+        # update_global_metrics within 30s instead of immediately). Feed
+        # ranking tolerates this delay; engagement_velocity recomputes
+        # every 5 minutes anyway.
+        import json as _json
+        event = {
+            'user_id': str(user.id),
+            'clip_id': str(clip.id),
+            'action_type': action_type,
+            'watch_time_ms': watch_time_ms,
+            'completion_rate': completion_rate,
+        }
+        try:
+            cache.client.get_client().rpush('telemetry:queue', _json.dumps(event))
+        except Exception:
+            # If Redis is down, fall through to the synchronous path so we
+            # don't drop the event. The synchronous path is the pre-batching
+            # behavior (still a single upsert per request).
+            UserInteraction.objects.update_or_create(
+                user=user, clip=clip, interaction_type=action_type,
+                defaults={
+                    'watch_time_ms': watch_time_ms,
+                    'completion_rate': completion_rate,
+                    'is_active': True,
+                },
+            )
 
-        return Response({"status": "telemetry logged"}, status=status.HTTP_201_CREATED)
+        return Response({"status": "telemetry logged"}, status=status.HTTP_202_ACCEPTED)
 
     def get_throttles(self):
         # SECURITY: log_telemetry is the architecture audit's #1 abuse vector

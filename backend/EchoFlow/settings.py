@@ -248,6 +248,14 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'backend.app.tasks.cleanup_stuck_processing',
         'schedule': 300.0,  # every 5 minutes
     },
+    'flush-telemetry': {
+        # SECURITY: Drains the Redis telemetry queue populated by
+        # log_telemetry. Replaces per-request DB writes with batched
+        # bulk_insert every 30s. Eliminates the row-lock contention
+        # that the architecture audit flags as the #1 scalability risk.
+        'task': 'backend.app.tasks.flush_telemetry',
+        'schedule': 30.0,  # every 30 seconds
+    },
 }
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 

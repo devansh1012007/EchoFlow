@@ -587,6 +587,60 @@ def evolve_long_term_user_baselines(self):
     return f"Evolved long-term vectors for {total_updated} users."
 
 
+@shared_task(bind=True, max_retries=3, default_retry_delay=10, retry_backoff=True)
+def flush_telemetry(self, max_events=1000):
+    """Drain the Redis telemetry queue and bulk-insert into UserInteraction.
+
+    Architecture audit's #1 risk: synchronous update_or_create on every
+    log_telemetry call holds row locks on UserInteraction. This task
+    converts N per-request writes into a single bulk insert per flush.
+
+    Triggered every 30s via Celery beat. Uses LPOP from a Redis list
+    (atomic) up to max_events. Each event is a JSON object written by
+    ClipInteractionViewSet.log_telemetry (views.py).
+    """
+    import json
+    redis_client = cache.client.get_client()
+    queue_key = 'telemetry:queue'
+    events = []
+    # LPOP in a tight loop. If queue is empty, returns None and we stop.
+    for _ in range(max_events):
+        raw = redis_client.lpop(queue_key)
+        if raw is None:
+            break
+        try:
+            events.append(json.loads(raw))
+        except json.JSONDecodeError:
+            logger.warning("flush_telemetry: dropped malformed event: %r", raw)
+            continue
+
+    if not events:
+        return "No events to flush."
+
+    # Materialize to ORM objects in one bulk_create.
+    interactions = []
+    for e in events:
+        try:
+            user = User.objects.get(id=e['user_id'])
+            clip = AudioClip.objects.get(id=e['clip_id'])
+        except (User.DoesNotExist, AudioClip.DoesNotExist):
+            continue
+        interactions.append(UserInteraction(
+            user=user,
+            clip=clip,
+            interaction_type=e['action_type'],
+            watch_time_ms=e['watch_time_ms'],
+            completion_rate=e['completion_rate'],
+            is_active=True,
+        ))
+
+    if not interactions:
+        return "No valid events to flush."
+
+    UserInteraction.objects.bulk_create(interactions, batch_size=500)
+    return f"Flushed {len(interactions)} telemetry events to UserInteraction."
+
+
 @shared_task
 def cleanup_stuck_processing(threshold_minutes=15, max_per_run=50):
     """Re-enqueue clips stuck in 'processing' status past the threshold.
