@@ -155,6 +155,37 @@ DATABASES = {
         )
 }
 
+# DECISION: optional 'read' connection for routing pure reads to a
+# PostgreSQL streaming replica. See backend/app/db_routers.py and
+# docs/EXPLAIN/database/05-read-replica-design.md. The replica is not
+# provisioned by docker-compose yet; when READ_DATABASE_URL is unset,
+# the router falls back to 'default' and the existing single-DB
+# behavior is preserved unchanged. When set, every read on the 'app'
+# app that is NOT inside transaction.atomic() and NOT a SELECT FOR
+# UPDATE goes to the replica.
+if os.environ.get('READ_DATABASE_URL'):
+    DATABASES['read'] = dj_database_url.config(
+        default=os.environ.get('READ_DATABASE_URL', ''),
+        conn_max_age=600,
+        # SECURITY: the replica is intended to be read-only. We set the
+        # connection option as a defense in depth — if a bug ever causes
+        # a write to be routed to 'read' (e.g. router bug, or a
+        # developer manually using 'read' from a Celery task), Postgres
+        # will refuse the write with
+        # `ERROR: cannot execute INSERT in a read-only transaction`.
+        conn_health_checks=True,
+        options={
+            '-c default_transaction_read_only=on',
+        },
+    )
+
+# DECISION: register ReadRouter only when the replica is configured.
+# Enabling the router without READ_DATABASE_URL set would route reads
+# to a non-existent connection and every read would fail with
+# "connection does not exist" — a worse failure mode than today.
+if 'read' in DATABASES:
+    DATABASE_ROUTERS = ['backend.app.db_routers.ReadRouter']
+
 REDIS_URL_DEFAULT = 'redis://localhost:6379/1'
 REDIS_URL = os.getenv("REDIS_URL", REDIS_URL_DEFAULT)
 
