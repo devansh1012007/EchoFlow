@@ -100,6 +100,10 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'corsheaders.middleware.CorsMiddleware',##
+    # CorrelationIdMiddleware is high in the stack so it runs before
+    # SecurityMiddleware (which can short-circuit with SECURE_SSL_REDIRECT
+    # in production) — every request, even 301s, gets a correlation id.
+    'backend.EchoFlow.middleware.CorrelationIdMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -383,16 +387,26 @@ SIMPLE_JWT = {
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'filters': {
+        # Inject the per-request correlation_id (set by CorrelationIdMiddleware
+        # via contextvars) into every log record. Empty string outside a
+        # request scope (e.g., Celery workers) — see celery.py to set it
+        # from task headers.
+        'correlation': {
+            '()': 'backend.EchoFlow.logging_filters.CorrelationIdFilter',
+        },
+    },
     'formatters': {
         'json': {
             '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
-            'fmt': '%(asctime)s %(name)s %(levelname)s %(message)s',
+            'fmt': '%(asctime)s %(name)s %(levelname)s %(correlation_id)s %(message)s',
         },
     },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'json',
+            'filters': ['correlation'],
         },
     },
     'root': {
