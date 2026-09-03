@@ -86,90 +86,26 @@ A `robots.txt`-respecting, rate-limited scraper ingests openly-licensed audio fr
 4. **Engage** → likes/shares/telemetry are recorded as `UserInteraction` rows, incrementing denormalized counters via `F()` expressions.
 5. **Evolve** → Celery Beat periodically recalculates `engagement_velocity`, `avg_completion_rate`, and users' long-term preference vectors.
 
-## Backend Setup Without Docker
+## Backend Setup
 
-### Prerequisites
-- Python 3.11+
-- PostgreSQL 16 with the `pgvector` extension
-- Redis 7
-- FFmpeg installed and on `PATH` (required for HLS transcoding and audio normalization)
-
-### Steps
-
-```bash
-# 1. Clone & enter the repo
-git clone https://github.com/devansh1012007/EchoFlow.git
-cd EchoFlow
-
-# 2. Create and activate a virtual environment
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-```
-
-Copy the committed template and fill in your values:
-
-```bash
-cp .env.example .env   # then edit .env
-```
-
-Required variables:
-
-| Variable | Purpose |
-|----------|---------|
-| `DJANGO_SECRET_KEY` | Django signing key (required — app fails fast without it) |
-| `DATABASE_URL` | `postgres://USER:PASSWORD@HOST:5432/echoflow_db` |
-| `REDIS_URL` | `redis://localhost:6379/1` |
-| `FIELD_ENCRYPTION_KEY` | Fernet key used to encrypt user emails |
-| `HF_TOKEN` | HuggingFace token for offline model loading |
-| `OPENAI_API_KEY` | Optional — reserved for the OpenAI-based pipeline branch |
-| `FREESOUND_API_KEY` | Required only for the `freesound` scraper source |
-| `SEED_AUTH_TOKEN` | Auth token used by `seed_db.py` |
-
-```bash
-# 4. Run database migrations
-python manage.py migrate
-
-# 5. Start the API server (Django dev server)
-python manage.py runserver
-
-# 6. In a separate terminal — start Celery workers
-celery -A EchoFlow worker --loglevel=info
-
-# 7. Feed-refill worker (dedicated queue)
-celery -A EchoFlow worker -Q fast_feed --concurrency=4 --loglevel=info
-
-# 8. Media/AI processing worker (heavy queue, single-process)
-celery -A EchoFlow worker -Q heavy_media --pool=solo --loglevel=info
-
-# 9. Periodic scheduler (metrics + vector evolution)
-celery -A EchoFlow beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
-```
-
-## Backend Setup With Docker
-
-Docker Compose provisions seven services exactly as defined in `docker-compose.yml`: `db` (pgvector/pgvector:pg16), `redis` (redis:7-alpine), `web` (gunicorn on `0.0.0.0:8000`, exposed on host port `8005`), plus `celery`, `celery_feed`, `celery_media`, and `celery_beat`.
+**Docker is the only supported way to run EchoFlow locally.** The `Dockerfile` and `docker-compose.yml` provision every dependency (Postgres+pgvector, Redis, MinIO, all Celery queues, ffmpeg, Python 3.11, ML libs) in a single `docker compose up --build`. There is no bare-metal install path.
 
 ```bash
 # 1. Ensure .env exists and is populated (DB_*, REDIS_URL, DJANGO_SECRET_KEY, HF_TOKEN, ...)
-#    docker-compose reads ${VAR} substitutions from your .env file.
+#    docker compose reads ${VAR} substitutions from your .env file.
 
-# 2. Build and start all services
-docker-compose up --build
+# 2. Build and start all services (11: db, pgbouncer, redis_broker, redis_cache, minio, minio-init, web, celery, celery_feed, celery_media, celery_beat)
+docker compose up --build
 
 # 3. View logs for a specific service (e.g. media worker)
-docker-compose logs -f celery_media
+docker compose logs -f celery_media
 
 # 4. Run a management command inside the web container
-docker-compose exec web python manage.py migrate
+docker compose exec web python manage.py migrate
 
 # 5. Tear everything down
-docker-compose down
+docker compose down
 ```
-
-The `web` container automatically runs `wait_for_db.py`, `migrate`, and `collectstatic` before starting gunicorn with 4 workers × 2 threads. Persistence is handled by named volumes: `postgres_data`, `media_data`, and `huggingface_cache`.
 
 ## Audio Scraping / Ingestion
 
@@ -188,10 +124,10 @@ Allowed licenses are configurable via `SCRAPER_ALLOW_LICENSES` (default: `CC0, C
 
 ```bash
 # Import 3 clips from Wikimedia Commons, trimmed to 30s
-python manage.py scrape_audio --source=wikimedia --limit=3 --clip-length=30
+docker compose exec web python manage.py scrape_audio --source=wikimedia --limit=3 --clip-length=30
 
-# Same ingestion, but as a Celery task
-python -c "from backend.app.tasks import scrape_and_import; scrape_and_import.delay('internet_archive', limit=5)"
+# Same ingestion, but as a Celery task (enqueue from inside the web container)
+docker compose exec web python -c "from backend.app.tasks import scrape_and_import; scrape_and_import.delay('internet_archive', limit=5)"
 ```
 
 Scraped clips are stored under `media/audio_scraper/{source}/YYYY/MM/DD/`, provenance/license metadata is attached, and each clip is then processed through the full AI + HLS pipeline automatically.

@@ -57,4 +57,3 @@ FIX BEFORE PRODUCTION
 - The unconditional static_serve route is a stopgap, not a production answer. It's single-threaded blocking I/O with no caching headers — every HLS segment request now parks a gunicorn thread for its full duration. Fine at hackathon scale. When you're ready to matter to real users, that's an nginx-in-front-of-gunicorn problem (or S3/R2 + CDN), not a Django-routes problem.
 - Frontend Fix: The frontend auth interceptor should treat any error on /auth/token/refresh/ (both 401 and 500) as a hard auth failure: immediately clear localStorage / cookies, reset client auth state, and navigate to /login.
 - docker-compose.yml always sets REDIS_URL via .env, so the fallback never triggers in your current setup. But it's the identical failure mode waiting to happen: if you ever run a worker outside this exact compose file (a one-off script, a different deploy target, a k8s pod where the env var name got typo'd) with REDIS_URL unset, it won't error —
-- 

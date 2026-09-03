@@ -8,6 +8,10 @@ Single Redis 7 instance serves **multiple roles**:
 3. **Feed Queues** — Per-user `user_feed:{id}` lists
 4. **Session Storage** — Django sessions (if configured)
 5. **Rate Limiting** — DRF throttling backend
+6. **Telemetry Stream** — `stream:interaction.events` + consumer group `cg:telemetry-flush` (see [02-telemetry-stream.md](02-telemetry-stream.md))
+7. **Telemetry DLQ** — `stream:interaction.events:dlq` (poison-message triage)
+8. **Legacy Telemetry List** — `telemetry:queue` (fallback during the stream migration; slated for removal)
+9. **Dedup keys** — `processed_event:{event_id}` SETNX with 24h TTL
 
 ---
 
@@ -132,20 +136,48 @@ cache.set(key, value, timeout=300)
 ### 6. DRF Throttling
 
 **Keys:** `throttle_{scope}_{ident}`
-**Scopes:** `anon` (100/hr), `user` (1000/hr)
 
-```python
-REST_FRAMEWORK = {
-    'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle',
-    ],
-    'DEFAULT_THROTTLE_RATES': {
-        'anon': '100/hour',
-        'user': '1000/hour',
-    },
-}
-```
+Per-scope rates (`backend/EchoFlow/settings.py:359-369`); ViewSets opt in via
+`throttle_scope = '<name>'`. `log_telemetry` overrides its scope to `telemetry`
+per-action (`views/interactions.py:118-119`) to defend against viewbot abuse:
+
+| Scope | Rate | Used by |
+|---|---|---|
+| `anon` | 100/hour | Anonymous requests |
+| `user` | 1000/hour | Default authenticated fallback |
+| `telemetry` | 60/min | `log_telemetry` (viewbot defense — architecture audit's #1 risk) |
+| `upload` | 20/hour | `AudioUploadViewSet` (storage-abuse defense) |
+| `register` | 5/hour | `RegisterView` (account-creation spam) |
+| `login` | 10/min | `TokenObtainPairView` (credential stuffing) |
+| `comment` | 60/hour | `CommentViewSet.create` |
+| `share_send` | 100/hour | `ShareViewSet.send_share` |
+| `interaction` | 60/min | `toggle_like`, `register_skip` |
+
+### 7. Telemetry Stream (Primary, 2026-09)
+
+**Key:** `stream:interaction.events`
+**Consumer group:** `cg:telemetry-flush`
+**Approximate cap:** `MAXLEN ~ 50000` (enforced on every XADD; bounds RAM)
+**Dedup key:** `processed_event:{event_id}` SETNX EX 86400
+**DLQ:** `stream:interaction.events:dlq` (poison messages, unbounded, alerted on)
+
+See [02-telemetry-stream.md](02-telemetry-stream.md) for the full producer/consumer
+contract, idempotency reasoning, operational signals, and rollback steps.
+
+### 8. Legacy Telemetry List (Fallback, slated for removal)
+
+**Key:** `telemetry:queue`
+**Type:** LIST (RPUSH / LPOP)
+**Drained by:** `flush_telemetry_legacy` Celery Beat task (every 30s)
+
+Only contains events when:
+- `ECHOFLOW_TELEMETRY_STREAM=off`, OR
+- the XADD producer's call to Redis raised and the service fell back
+  to the list (the producer's `try/except` in
+  `services/interactions.py:record_telemetry`)
+
+**TODO:** remove `flush_telemetry_legacy` and this key after one
+operational cycle of the stream consumer proving stable.
 
 ---
 
@@ -180,35 +212,42 @@ redis:
 | `maxmemory` | 512MB | Hard limit |
 | `maxmemory-policy` | `allkeys-lru` | Evicts least recently used across ALL keys |
 
-**Risk:** Feed queues (`user_feed:*`) can be evicted under memory pressure, same as broker queues.
+**Risk:** ~~Feed queues (`user_feed:*`) can be evicted under memory pressure,
+same as broker queues.~~ **Resolved in Phase 1.0 (2026-09-04)** —
+broker and cache are now separate Redis services; the broker uses
+`noeviction` (queued tasks must not be dropped) and the cache uses
+`allkeys-lru` (feed queues are safe to evict because `refill_user_feed`
+is idempotent). See "Split Redis" section below.
 
 ---
 
-## Architecture Audit Finding: Split Redis
+## Split Redis (Phase 1.0, 2026-09-04)
 
-**Current:** Single Redis for broker + cache + feeds
-**Recommended:** Two Redis instances
+**Status:** ✅ Implemented. Two services in `docker-compose.yml`:
+- `redis_broker` (image `redis:7-alpine`, `noeviction`, 512MB) — Celery
+  broker queues and result backend. Set via `REDIS_BROKER_URL`.
+- `redis_cache` (image `redis:7-alpine`, `allkeys-lru`, 1GB) — Django
+  cache, `user_feed:*` lists, `feed_refill_lock:*` keys, telemetry stream
+  + legacy list, DRF throttle counters. Set via `REDIS_CACHE_URL`.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Current (Single)                         │
-│  Redis (512MB)                                               │
-│  ├── Celery broker queues                                   │
-│  ├── Django cache                                           │
-│  ├── user_feed:* lists (1M users × 50 clips ≈ 2GB!)        │
-│  └── Rate limit keys                                        │
-│  → allkeys-lru evicts feeds when broker spikes              │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│                     Recommended (Split)                      │
-│  Redis Broker (256MB)          Redis Cache (1-4GB)          │
-│  ├── celery queue              ├── user_feed:* lists        │
-│  ├── fast_feed queue           ├── Django cache             │
-│  └── heavy_media queue         ├── Rate limits              │
-│  → noeviction                  → allkeys-lru (feeds safe)   │
+│                     As Deployed (Phase 1.0)                  │
+│                                                              │
+│  redis_broker (512MB, noeviction)   redis_cache (1GB, LRU)  │
+│  ├── celery                          ├── Django cache        │
+│  ├── fast_feed                       ├── user_feed:*         │
+│  ├── heavy_media                     ├── feed_refill_lock:*  │
+│  └── celery-task-meta-*              ├── telemetry stream    │
+│  (queued tasks MUST NOT evict)       ├── throttle_*          │
+│                                      └── allkeys-lru OK      │
+│                                        (refill idempotent)  │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**Non-Docker dev path:** `REDIS_BROKER_URL` and `REDIS_CACHE_URL` are
+optional env vars. If unset, both fall back to `REDIS_URL` (single Redis
+on `localhost:6379/1`) — see `backend/EchoFlow/settings.py:158-186`.
 
 ---
 
@@ -238,6 +277,10 @@ redis-cli DBSIZE
 | `connected_clients` | < 100 | > 200 |
 | `user_feed:*` avg length | 20-50 | < 5 or > 100 |
 | Broker queue depth | < 100 | > 1000 |
+| `XLEN stream:interaction.events` | < 50,000 | > 50,000 sustained 5 min |
+| `XPENDING stream:interaction.events cg:telemetry-flush` | < 1,000 | > 1,000 sustained 5 min |
+| `XLEN stream:interaction.events:dlq` | 0 | > 0 |
+| `LLEN telemetry:queue` | 0 | > 0 (legacy path running) |
 
 ---
 
@@ -245,10 +288,10 @@ redis-cli DBSIZE
 
 | Scenario | Impact | Mitigation |
 |----------|--------|------------|
-| Redis OOM | `allkeys-lru` evicts feeds + broker keys | Split Redis, increase memory |
-| Redis crash | All queues lost, feeds empty | AOF persistence, replica |
-| Network partition | Workers can't enqueue/dequeue | Circuit breaker, fallback feed |
-| Feed queue eviction | Users get "caught up" incorrectly | Monitor queue health, alert |
+| `redis_broker` OOM | `noeviction` blocks writes; broker stalls | Increase broker memory, throttle `process_audio_to_hls` enqueue rate |
+| `redis_cache` OOM | `allkeys-lru` evicts feed lists; users see "caught up" momentarily until `refill_user_feed` repopulates | Increase cache memory; refill is idempotent |
+| Redis crash (either) | Queues lost (broker) or feeds empty (cache) | AOF persistence; replica (out of Phase 1 scope) |
+| Network partition | Workers can't enqueue/dequeue | Circuit breaker (`views/feed.py:65-86`); trending-feed fallback |
 
 ---
 
@@ -268,4 +311,4 @@ redis-cli DBSIZE
 
 ---
 
-*Source: `backend/EchoFlow/settings.py`, `backend/app/views.py:118-159`, `backend/app/tasks.py:512-592`, `docker-compose.yml:35-62`*
+*Source: `backend/EchoFlow/settings.py:158-186, 359-369`; `backend/app/views/feed.py:25-86`; `backend/app/views/interactions.py:88-119`; `backend/app/tasks.py:325-405, 478-548, 590-641`; `docker-compose.yml:35-130` (services `redis_broker`, `redis_cache`).*

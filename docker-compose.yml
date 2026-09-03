@@ -32,13 +32,19 @@ services:
         soft: 65536
         hard: 65536
 
-  redis:
+  # DECISION: Two Redis instances instead of one. The broker (Celery queues)
+  # cannot tolerate message eviction under memory pressure, so it runs with
+  # `noeviction`. The cache (Django cache + per-user feed lists + telemetry
+  # queue) is safe to evict because refill_user_feed and flush_telemetry are
+  # idempotent. Single Redis on localhost remains the non-Docker fallback
+  # (see REDIS_URL in settings.py).
+  redis_broker:
     image: redis:7-alpine
-    container_name: echoflow_redis
+    container_name: echoflow_redis_broker
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
     volumes:
-      - redis_data:/data
+      - redis_broker_data:/data
     ports:
       - "6379:6379"
     healthcheck:
@@ -56,6 +62,98 @@ services:
         reservations:
           cpus: '0.25'
           memory: 128M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  redis_cache:
+    image: redis:7-alpine
+    container_name: echoflow_redis_cache
+    restart: unless-stopped
+    # DECISION: 3GB instead of 1GB. P2.2 pre-computed candidate pools
+    # (clip:candidates:exploit + user:{id}:candidates:explore) need
+    # ~1.2GB at 10K active users. The remaining ~1.8GB holds the
+    # existing per-user feed lists (user_feed:*), Django cache, and
+    # telemetry stream. allkeys-lru eviction is safe because the
+    # pools can be rebuilt by Beat; if memory pressure forces
+    # eviction, the refill_user_feed SQL fallback kicks in.
+    command: redis-server --appendonly yes --maxmemory 3gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_cache_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+          pids: 300
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  # DECISION: PgBouncer in front of db. transaction pool mode multiplexes
+  # hundreds of Django + Celery client connections onto ~25 real Postgres
+  # connections, so `max_connections` doesn't exhaust at 10K concurrent.
+  # AUTH_TYPE=scram-sha-256 — same wire auth as direct Postgres, no
+  # plaintext trust mode. Uses edoburu/pgbouncer (upstream 1.x base is
+  # EOL Alpine 3.9; see docker/pgbouncer/Dockerfile SECURITY note).
+  pgbouncer:
+    build:
+      context: ./docker/pgbouncer
+      dockerfile: Dockerfile
+    image: echoflow/pgbouncer:local
+    container_name: echoflow_pgbouncer
+    restart: unless-stopped
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - LISTEN_PORT=6432
+      - AUTH_TYPE=scram-sha-256
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=10000
+      - DEFAULT_POOL_SIZE=25
+      - MIN_POOL_SIZE=5
+      - RESERVE_POOL_SIZE=5
+      - RESERVE_POOL_TIMEOUT=3
+      - SERVER_IDLE_TIMEOUT=600
+      - QUERY_WAIT_TIMEOUT=120
+      - VERBOSE=0
+      - LOG_CONNECTIONS=1
+      - LOG_DISCONNECTIONS=1
+      - LOG_POOLER_ERRORS=1
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "6432:6432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+          pids: 500
+        reservations:
+          cpus: '0.1'
+          memory: 64M
     ulimits:
       nofile:
         soft: 65536
@@ -137,6 +235,8 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
+      - REDIS_BROKER_URL=${REDIS_BROKER_URL:-redis://redis_broker:6379/0}
+      - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis_cache:6379/0}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
       - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-localhost}
@@ -162,7 +262,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      pgbouncer:
+        condition: service_healthy
+      redis_broker:
+        condition: service_healthy
+      redis_cache:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
@@ -206,7 +310,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      pgbouncer:
+        condition: service_healthy
+      redis_broker:
+        condition: service_healthy
+      redis_cache:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
@@ -221,6 +329,8 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
+      - REDIS_BROKER_URL=${REDIS_BROKER_URL:-redis://redis_broker:6379/0}
+      - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis_cache:6379/0}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
     deploy:
@@ -253,11 +363,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      pgbouncer:
+        condition: service_healthy
+      redis_broker:
+        condition: service_healthy
+      redis_cache:
         condition: service_healthy
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
+      - REDIS_BROKER_URL=${REDIS_BROKER_URL:-redis://redis_broker:6379/0}
+      - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis_cache:6379/0}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
     volumes:
@@ -298,7 +414,13 @@ services:
     restart: unless-stopped
     command: >
       sh -c "set -e && python wait_for_db.py &&
-              celery -A backend.EchoFlow worker -Q heavy_media --pool=solo --loglevel=info"
+              # DECISION: prefork concurrency=2 instead of solo. Each worker
+              # loads Whisper (~1.5GB) + SentenceTransformer (~0.5GB) = ~2GB
+              # resident. 2 workers × 2GB = 4GB fits the 4G memory limit.
+              # Concurrency > 2 risks OOMKill under concurrent clip uploads.
+              # Raise both this flag AND the memory limit together when the
+              # worker moves to a node with more RAM.
+              celery -A backend.EchoFlow worker -Q heavy_media --pool=prefork --concurrency=2 --loglevel=info"
     # No volumes at all now — this worker never needed local disk for
     # anything but media, and media is object storage now. That's the whole
     # point: this container can run on any machine, with no filesystem in
@@ -308,13 +430,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      pgbouncer:
+        condition: service_healthy
+      redis_broker:
+        condition: service_healthy
+      redis_cache:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
+      - REDIS_BROKER_URL=${REDIS_BROKER_URL:-redis://redis_broker:6379/0}
+      - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis_cache:6379/0}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
       # Must match the bake-time path in the Dockerfile (models are baked in,
@@ -365,13 +493,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      pgbouncer:
+        condition: service_healthy
+      redis_broker:
+        condition: service_healthy
+      redis_cache:
         condition: service_healthy
     env_file:
       - .env
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
+      - REDIS_BROKER_URL=${REDIS_BROKER_URL:-redis://redis_broker:6379/0}
+      - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis_cache:6379/0}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
     deploy:
@@ -391,7 +525,8 @@ services:
 # Define persistent storage
 volumes:
   postgres_data:
-  redis_data:
+  redis_broker_data:
+  redis_cache_data:
   minio_data:  # MinIO's own storage — belongs to the minio service alone,
     # never mounted into web/celery/celery_media. App containers reach it
     # over the network (S3 API) exactly like they'd reach real S3 in prod;

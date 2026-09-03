@@ -10,10 +10,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-# DECISION: Fail fast on missing DJANGO_SECRET_KEY, same pattern as
-# FIELD_ENCRYPTION_KEY in models.py. Generating a random key per process
-# would silently break session/CSRF/signature verification across the
-# gunicorn + Celery fleet — every worker would have a different key.
+# DECISION: Fail fast on missing DJANGO_SECRET_KEY. Generating a random
+# key per process would silently break session/CSRF/signature
+# verification across the gunicorn + Celery fleet — every worker would
+# have a different key.
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 if not SECRET_KEY:
     raise ImproperlyConfigured(
@@ -24,15 +24,24 @@ if not SECRET_KEY:
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() == 'true'
 
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost').split(',')
-CORS_ALLOWED_ORIGINS = os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5173').split(',')
+CORS_ALLOWED_ORIGINS = os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://localhost:5173,http://localhost:3021').split(',')
 # DECISION: CORS_ALLOW_ALL_ORIGINS is hard-coded to False; the env-driven
 # allowlist above is the single source of truth. Previously this line was
 # read from DJANGO_CORS_ALL env var but then unconditionally reassigned
 # to False on line 63, making the env var dead code. Removed for clarity.
 CORS_ALLOW_ALL_ORIGINS = False
 
-# Allow HLS media files specifically
-CORS_URLS_REGEX = r'^.*$'  # all URLs, or narrow to r'^/media/.*$' for HLS only
+# N14 fix: CORS_URLS_REGEX was r'^.*$' which sent CORS headers to
+# every URL (including /admin/, /auth/, /metrics/). The actual security
+# boundary is CORS_ALLOWED_ORIGINS, but the wide regex serves no
+# purpose. The /media/ Django route was removed when S3Storage was
+# adopted (per docs/stateful-media-storage-at-scale.md and
+# media_urls.py:18-37 — playback URLs come from signed S3 URLs, not
+# from a Django route). Set to an empty regex (never matches) so
+# django-cors-headers never applies CORS via the regex path. The
+# middleware will still apply CORS_ALLOWED_ORIGINS to all responses
+# that flow through its check_origin method.
+CORS_URLS_REGEX = r'$.^'  # matches nothing (negative lookahead on start)
 
 CORS_ALLOW_METHODS = [
     'GET',
@@ -146,14 +155,54 @@ DATABASES = {
         )
 }
 
+# DECISION: optional 'read' connection for routing pure reads to a
+# PostgreSQL streaming replica. See backend/app/db_routers.py and
+# docs/EXPLAIN/database/05-read-replica-design.md. The replica is not
+# provisioned by docker-compose yet; when READ_DATABASE_URL is unset,
+# the router falls back to 'default' and the existing single-DB
+# behavior is preserved unchanged. When set, every read on the 'app'
+# app that is NOT inside transaction.atomic() and NOT a SELECT FOR
+# UPDATE goes to the replica.
+if os.environ.get('READ_DATABASE_URL'):
+    DATABASES['read'] = dj_database_url.config(
+        default=os.environ.get('READ_DATABASE_URL', ''),
+        conn_max_age=600,
+        # SECURITY: the replica is intended to be read-only. We set the
+        # connection option as a defense in depth — if a bug ever causes
+        # a write to be routed to 'read' (e.g. router bug, or a
+        # developer manually using 'read' from a Celery task), Postgres
+        # will refuse the write with
+        # `ERROR: cannot execute INSERT in a read-only transaction`.
+        conn_health_checks=True,
+        options={
+            '-c default_transaction_read_only=on',
+        },
+    )
+
+# DECISION: register ReadRouter only when the replica is configured.
+# Enabling the router without READ_DATABASE_URL set would route reads
+# to a non-existent connection and every read would fail with
+# "connection does not exist" — a worse failure mode than today.
+if 'read' in DATABASES:
+    DATABASE_ROUTERS = ['backend.app.db_routers.ReadRouter']
+
 REDIS_URL_DEFAULT = 'redis://localhost:6379/1'
 REDIS_URL = os.getenv("REDIS_URL", REDIS_URL_DEFAULT)
+
+# DECISION: Two Redis URLs in Docker (broker vs cache) so a feed-queue spike
+# can't evict queued Celery tasks and vice versa. In Docker compose the broker
+# runs with `--maxmemory-policy noeviction` (can't lose queued tasks) and the
+# cache with `allkeys-lru` (feed queues evictable since refill is idempotent).
+# Non-Docker dev collapses both to REDIS_URL — a single Redis on localhost is
+# fine for one developer.
+REDIS_BROKER_URL = os.getenv("REDIS_BROKER_URL", REDIS_URL)
+REDIS_CACHE_URL = os.getenv("REDIS_CACHE_URL", REDIS_URL)
 
 # This is how you connect Redis to Django
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": REDIS_URL,
+        "LOCATION": REDIS_CACHE_URL,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         }
@@ -164,8 +213,8 @@ CELERY_TASK_ROUTES = {
     'backend.app.tasks.refill_user_feed': {'queue': 'fast_feed'},
 }
 # 3. CELERY CONFIGURATION
-CELERY_BROKER_URL = REDIS_URL
-CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_BROKER_URL = REDIS_BROKER_URL
+CELERY_RESULT_BACKEND = REDIS_BROKER_URL
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_WORKER_STATE_DB = None
@@ -252,16 +301,56 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'backend.app.tasks.cleanup_stuck_processing',
         'schedule': 300.0,  # every 5 minutes
     },
-    'flush-telemetry': {
-        # SECURITY: Drains the Redis telemetry queue populated by
-        # log_telemetry. Replaces per-request DB writes with batched
-        # bulk_insert every 30s. Eliminates the row-lock contention
+    'flush-telemetry-stream': {
+        # Stream consumer. Primary path. XREADGROUP drains
+        # stream:interaction.events every 10s with 5s BLOCK, dedups
+        # via processed_event:{event_id} SETNX (24h TTL), bulk-inserts
+        # UserInteraction rows, XACKs, and routes poison messages to
+        # stream:interaction.events:dlq. Fast cadence is cheap with
+        # consumer groups; replaces the per-request row-lock contention
         # that the architecture audit flags as the #1 scalability risk.
-        'task': 'backend.app.tasks.flush_telemetry',
+        'task': 'backend.app.tasks.flush_telemetry_stream',
+        'schedule': 10.0,  # every 10 seconds
+    },
+    'flush-telemetry-legacy': {
+        # Legacy LIST consumer. Kept for one operational cycle as a
+        # safety net while the stream consumer proves itself. Drains
+        # the 'telemetry:queue' Redis list (the producer's LIST fallback
+        # when ECHOFLOW_TELEMETRY_STREAM=off or the stream is unhealthy).
+        # TODO: remove after one cycle of stable operation.
+        'task': 'backend.app.tasks.flush_telemetry_legacy',
         'schedule': 30.0,  # every 30 seconds
+    },
+    'rebuild-global-exploit-pool': {
+        # P2.2: Global candidate pool. Single SELECT + ZADD rebuild
+        # of the clip:candidates:exploit ZSET. See
+        # backend/app/services/feed_pool.py and
+        # docs/EXPLAIN/recommendation/03-feed-pre-computation.md.
+        'task': 'backend.app.tasks.rebuild_global_exploit_pool',
+        'schedule': 300.0,  # every 5 minutes
+    },
+    'dispatch-user-pool-rebuilds': {
+        # P2.2: Per-user explore pool fan-out. Runs hourly;
+        # internally enqueues per-user rebuilds with a 0..3600s
+        # countdown so the workers absorb them gradually.
+        'task': 'backend.app.tasks.dispatch_user_pool_rebuilds',
+        'schedule': 3600.0,  # every hour
     },
 }
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+
+# Feed candidate pool — pre-computation knobs
+# (Group A item 7 in docs/unfixed-issues-2026-09-03.md)
+# See docs/EXPLAIN/recommendation/03-feed-pre-computation.md for the
+# full design (memory cost, staleness budget, fallback contract).
+FEED_POOL_GLOBAL_TOP_N = int(os.environ.get('FEED_POOL_GLOBAL_TOP_N', '10000'))
+FEED_POOL_USER_TOP_N = int(os.environ.get('FEED_POOL_USER_TOP_N', '1000'))
+FEED_POOL_GLOBAL_TTL = int(os.environ.get('FEED_POOL_GLOBAL_TTL', '300'))
+FEED_POOL_USER_TTL = int(os.environ.get('FEED_POOL_USER_TTL', '86400'))
+FEED_POOL_REBUILD_CHUNK_SIZE = int(
+    os.environ.get('FEED_POOL_REBUILD_CHUNK_SIZE', '1000')
+)
 
 
 # Internationalization
@@ -364,7 +453,8 @@ REST_FRAMEWORK = {
         'register': '5/hour',       # RegisterView: prevent account-creation spam
         'login': '10/min',          # TokenObtainPairView: prevent credential stuffing
         'comment': '60/hour',       # CommentViewSet.create
-        'share_send': '100/hour',   # ShareViewSet.send_share
+        'share_send': '100/hour',   # ShareViewSet.send_share (anti-spam)
+        'share_poll': '1000/hour',  # ShareViewSet inbox/unread/mark-read (client polling)
         'interaction': '60/min',    # toggle_like, register_skip
     },
 }

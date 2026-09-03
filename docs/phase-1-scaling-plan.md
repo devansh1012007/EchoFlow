@@ -461,3 +461,63 @@ Run these against a staging environment with simulated 10K concurrent load (usin
 ---
 
 *This plan is based on actual code inspection of `backend/app/tasks.py`, `backend/app/views.py`, `backend/app/models.py`, `backend/EchoFlow/settings.py`, and `docker-compose.yml` as of 2026-09-02. All recommendations are specific to EchoFlow's dual-vector recommendation engine, Celery media pipeline, and MinIO-backed HLS delivery system.*
+
+---
+
+## Verification Note (2026-09-04)
+
+A re-verification pass against the current `main` (after the
+`fix/comprehensive-bug-sweep` work) found that several "P0 bugs" cited
+in this plan were **already implemented** before Phase 1.0 began, and
+several other items were **already-true false positives**. The split
+between "actual gaps that Phase 1.0 closed" and "items that were stale
+audit claims" is below.
+
+### Items that were false positives / already done (no change needed)
+
+| Plan item | Original claim | Reality (verified 2026-09-04) |
+|---|---|---|
+| **#2** `update_global_metrics` full-table lock | `tasks.py:640-666` does a raw full-table UPDATE that locks at 100K clips. | Cursor-paginated batches of 5000 with Redis-persisted resume cursor already in place (landed in `fix/comprehensive-bug-sweep`). Phase 1.0 only added `FOR UPDATE SKIP LOCKED` to the inner subquery. |
+| **#3a** `weights=[]` cold-start bug | `tasks.py:558-561` `weights` never populated. | `weights` is initialized at line 416 and appended at line 442. No bug. |
+| **#3b** Lua-script atomic drain | `views.py:138-140` `llen` + `lpop` race. | `views/feed.py:37` uses `redis_client.lpop(redis_key, 10)` — Redis6.2+ atomic multi-pop, no Lua needed. |
+| **#4** No tiered rate limiting | Only `anon: 100/hr`, `user: 1000/hr`. | 9 scopes in `settings.py:359-369`, including `telemetry:60/min`, `upload:20/hour`, `register:5/hour`, `login:10/min`, `comment:60/hour`, `share_send:100/hour`, `interaction:60/min`. |
+| **#9** No retry / DLQ config | No retries configured. | All heavy tasks have `max_retries` + `autoretry_for=RETRYABLE_ERRORS` + `retry_backoff=True`. `acks_late=True`. No formal DLQ, but tasks are idempotent. |
+| **#12** No Redis circuit breaker | If Redis `llen` fails, 500. | `views/feed.py:65-86`: try/except wraps the entire Redis path; on any failure serves trending-by-`engagement_velocity` fallback. |
+| **(risk)** Synchronous `log_telemetry` row locks | Per-request `update_or_create` row locks. | `views/interactions.py:88-105` → Redis list → 30s batched flush via `flush_telemetry` task. Synchronous fallback only on Redis outage. |
+| **(risk)** No correlation IDs | No request tracing. | `backend/EchoFlow/{correlation,middleware,logging_filters}.py` + `settings.py:106,391-410`. |
+
+### Items that were real gaps (Phase 1.0 closed them)
+
+| Plan item | What Phase 1.0 did |
+|---|---|
+| **#1** No PgBouncer | Added `pgbouncer` service in `docker-compose.yml` + `docker/pgbouncer/Dockerfile` (based on `edoburu/pgbouncer`, `AUTH_TYPE=scram-sha-256`, transaction pool, `LISTEN_PORT=6432`). All web/celery services now route through `pgbouncer:6432`; non-Docker dev falls back to direct `localhost:5432`. |
+| **#5** Single Redis | Split into `redis_broker` (noeviction, 512MB) + `redis_cache` (LRU, 1GB). `REDIS_BROKER_URL` / `REDIS_CACHE_URL` env vars; non-Docker collapses to single `REDIS_URL`. |
+| **#8** `celery_media` `--pool=solo` | Switched to `--pool=prefork --concurrency=2`. 4G memory limit retained (per device constraint); OOM risk under concurrent uploads accepted. |
+| **#2** (additional) `SKIP LOCKED` | Wrapped both `ev_query` and `acr_query` UPDATE targets in `SELECT ... FOR UPDATE SKIP LOCKED` so a batch doesn't stall on rows currently locked by `UserInteraction.save()`. |
+
+### Items deferred (per user decision, 2026-09-04)
+
+- `UserInteraction` table partitioning by `created_at`
+- CI/CD pipeline
+- Media upload backpressure (currently returns 202 + ETA)
+- Two-stage HNSW candidate generation (item #7) — needs `EXPLAIN ANALYZE` first to confirm the planner doesn't already use HNSW for the composite query
+- Feed batch pre-computation (item #13)
+- DLQ infrastructure
+- Idempotency wrapper (tasks are naturally idempotent)
+
+### Live verification (2026-09-04)
+
+- `pgbouncer` image builds; container starts; listens on `:6432`.
+- `psycopg2.connect('postgres://...@pgbouncer:6432/echoflow_db')` succeeds;
+  `current_setting('server_version')` returns `16.15 (Debian ...)` — end-to-end
+  SCRAM-SHA-256 auth confirmed.
+- `pg_stat_activity` from inside the pgbouncer connection reports only
+  1 active + 1 idle backend connection (multiplexing working — 10000
+  client connections collapsing to ≤25 real Postgres connections).
+- The new `WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED)` query parses
+  and executes against the live DB (EXPLAIN ANALYZE: 0.9ms, 9 rows,
+  no errors).
+- Running web/celery containers were started before Phase 1.0 was
+  committed and still hold the pre-Phase-1.0 `DATABASE_URL`. They will
+  pick up `pgbouncer:6432` on next `docker compose up --build`. Both
+  paths work; non-destructive to leave in this state temporarily.

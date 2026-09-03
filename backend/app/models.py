@@ -1,46 +1,38 @@
 import os
 import uuid
 import logging
-from cryptography.fernet import Fernet
 from django.db import models, transaction
 from django.db.models import F
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from pgvector.django import VectorField
 from pgvector.django import HnswIndex
-#from django.contrib.auth.models import User
-from django.core.exceptions import ImproperlyConfigured # Use standard ValueError if not in Django
 
 logger = logging.getLogger(__name__)
 
-FERNET_KEY = os.environ.get('FIELD_ENCRYPTION_KEY')
-
-if not FERNET_KEY:
-    # Fail fast. Do not allow the app to boot without PII encryption.
-    raise ImproperlyConfigured(
-        "FIELD_ENCRYPTION_KEY is missing. Application cannot start without PII encryption."
-    )
-
-# os.environ.get always returns a string, so .encode() is safe and sufficient
-cipher_suite = Fernet(FERNET_KEY.encode())
 
 class User(AbstractUser):
-    encrypted_email = models.TextField(unique=True, null=True, blank=True)
+    # N3 fix: encrypted_email removed. The previous design encrypted
+    # plaintext email on save and stored it in a TextField with unique=True,
+    # but: (a) nothing ever decrypted it (no lookup-by-email, no password
+    # reset, no admin view), (b) Fernet is non-deterministic (random IV per
+    # encrypt) so the unique=True constraint never fired for actual duplicate
+    # emails, (c) TagsViewSet.initialize_vectors called user.save() on every
+    # vector update, re-encrypting the email each time (wasted UPDATE), and
+    # (d) plaintext AbstractUser.email is what RegisterSerializer validates
+    # against via UniqueValidator — the encrypted column was misleading
+    # theatre that provided zero security benefit.
+    #
+    # The plaintext email field (inherited from AbstractUser) is the source
+    # of truth. It is unique=True at the DB level via Django's auto-generated
+    # constraint, and RegisterSerializer's UniqueValidator catches duplicates
+    # at the API boundary. For GDPR/privacy, the answer is to use a real
+    # encryption-at-rest strategy (column encryption via RDS, or
+    # deterministic encryption with HMAC for lookup) — not random-IV Fernet.
     following = models.ManyToManyField('self', symmetrical=False, related_name='followers', blank=True)
-    #long_term_semantic = VectorField(dimensions=1536, null=True, blank=True)
     long_term_semantic = VectorField(dimensions=384, null=True, blank=True)
     long_term_acoustic = VectorField(dimensions=128, null=True, blank=True)
     profile_picture = models.ImageField(upload_to='avatars/', null=True, blank=True)
-    
-    
-    # nOT SURE ABOUT THIS, MAYBE FOR FUTURE USE?
-    def save(self, *args, **kwargs):
-        if self.email and cipher_suite:
-            self.encrypted_email = cipher_suite.encrypt(self.email.encode()).decode()
-        elif self.email and not cipher_suite:
-            logger.warning(f"WARNING: Saving email in plaintext for user {self.username} due to missing encryption key.")
-            self.encrypted_email = self.email
-        super().save(*args, **kwargs)
 
 
 
@@ -179,28 +171,37 @@ class UserInteraction(models.Model):
         indexes = [models.Index(fields=['user', 'interaction_type'])]
 
     def save(self, *args, **kwargs):
-        is_new = self.pk is None
+        # N2 fix: the previous code did the F() counter update OUTSIDE the
+        # transaction.atomic() block, opening a race window between
+        # releasing the row lock and writing the counter. Two concurrent
+        # toggle-like requests for the same (user, clip) could each read
+        # the old is_active=True and each bump the counter, double-counting.
+        # The fix is to wrap the entire read-decide-write sequence in one
+        # transaction.atomic() block. The F() UPDATE is row-atomic at the
+        # DB level; we keep it inside the atomic block to document the
+        # single-unit-of-work contract.
+        is_new = self._state.adding
         state_changed = False
         increment_val = 0
 
-        if is_new:
-            state_changed = True
-            increment_val = 1 if self.is_active else 0
-        else:
-            # Lock the row to prevent concurrent saves from double-counting
-            with transaction.atomic():
+        with transaction.atomic():
+            if is_new:
+                state_changed = True
+                increment_val = 1 if self.is_active else 0
+            else:
+                # Lock the row to prevent concurrent saves from double-counting
                 old_instance = UserInteraction.objects.select_for_update().get(pk=self.pk)
                 if old_instance.is_active != self.is_active:
                     state_changed = True
                     increment_val = 1 if self.is_active else -1
 
-        super().save(*args, **kwargs)
+            super().save(*args, **kwargs)
 
-        if state_changed and increment_val != 0:
-            field_map = {'like': 'likes', 'share': 'shares', 'skip': 'skips'}
-            field_to_update = field_map.get(self.interaction_type)
-            
-            if field_to_update:
-                AudioClip.objects.filter(pk=self.clip.pk).update(
-                    **{field_to_update: F(field_to_update) + increment_val}
-                )
+            if state_changed and increment_val != 0:
+                field_map = {'like': 'likes', 'share': 'shares', 'skip': 'skips'}
+                field_to_update = field_map.get(self.interaction_type)
+
+                if field_to_update:
+                    AudioClip.objects.filter(pk=self.clip.pk).update(
+                        **{field_to_update: F(field_to_update) + increment_val}
+                    )

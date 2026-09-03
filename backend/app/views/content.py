@@ -1,11 +1,14 @@
-"""Content/ingestion view: audio upload."""
-from django.db import transaction
+"""Content/ingestion view: audio upload.
+
+Stage 2 (relational-to-event-driven plan): the transaction.on_commit
+dispatch into Celery is owned by services.uploads.finalize_upload.
+"""
 from rest_framework import viewsets, permissions, parsers, status
 from rest_framework.response import Response
 
 from ..models import AudioClip
 from ..serializers import AudioUploadSerializer
-from ..tasks import process_audio_to_hls
+from ..services import uploads as uploads_svc
 
 
 class AudioUploadViewSet(viewsets.ModelViewSet):
@@ -26,9 +29,7 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         clip = serializer.save()
 
-        # transaction.on_commit: only enqueue after the DB write commits.
-        # If the transaction rolls back, the task is never enqueued.
-        transaction.on_commit(lambda: process_audio_to_hls.delay(clip.id))
+        uploads_svc.finalize_upload(clip)
 
         headers = self.get_success_headers(serializer.data)
         return Response(
@@ -40,3 +41,20 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
             status=status.HTTP_202_ACCEPTED,
             headers=headers,
         )
+
+    def update(self, request, *args, **kwargs):
+        # N8 fix: PATCH/PUT on a clip must NOT replace original_file.
+        # The previous approach (read_only_fields at serializer level)
+        # broke the legitimate upload flow because read_only_fields
+        # applies to BOTH create and update. Instead: at update time,
+        # strip the file from the request data BEFORE the serializer
+        # runs. A user who wants to replace their file must delete
+        # the clip and re-upload via POST.
+        if 'original_file' in request.data:
+            # request.data is a QueryDict (immutable). Make a mutable copy
+            # and replace the request's internal _full_data so the
+            # serializer sees the file-stripped version.
+            data = request.data.copy()
+            data.pop('original_file')
+            request._full_data = data
+        return super().update(request, *args, **kwargs)

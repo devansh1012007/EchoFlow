@@ -1,28 +1,64 @@
 """Social views: sharing and following.
 
 DECISION: Split out of monolithic views.py in 2026-09.
+Stage 2 (relational-to-event-driven plan): ORM writes go through
+backend.app.services.follows and backend.app.services.shares.
+
+ShareViewSet is now GenericViewSet + List + Retrieve + Destroy, NOT
+ModelViewSet. The router-default POST /share/ (modelviewset's create)
+crashed with an IntegrityError because ShareEventSerializer has no
+writable sender/receiver fields — the only legitimate create path is
+the @action send_share which uses the shares_svc service. Narrowing the
+mixin set makes POST /share/ return 405 Method Not Allowed instead of
+500. List/retrieve/destroy continue to work as before.
 """
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
-from rest_framework import viewsets, permissions, status
+from rest_framework import generics, mixins, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from ..models import AudioClip, UserInteraction, ShareEvent
+from ..models import AudioClip, ShareEvent
 from ..serializers import ShareEventSerializer
+from ..services import follows as follows_svc
+from ..services import shares as shares_svc
 
 User = get_user_model()
 
 
-class ShareViewSet(viewsets.ModelViewSet):
-    # SECURITY: 100 shares/hour/user prevents inbox-spam DoS. Targeted
-    # only at send_share; inbox/list/mark_read don't abuse-target.
+class ShareViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    # SECURITY: 100 shares/hour/user prevents inbox-spam DoS. Only
+    # send_share uses this tight rate; read actions (inbox, find_user,
+    # unread_count) share a looser 'share_poll' scope (see get_throttles).
     throttle_scope = 'share_send'
     serializer_class = ShareEventSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         return ShareEvent.objects.filter(receiver=self.request.user)
+
+    def get_throttles(self):
+        # SECURITY: Per-action throttle dispatch (mirrors the pattern in
+        # ClipInteractionViewSet). Only send_share gets the tight
+        # 'share_send' rate; read actions get the looser 'share_poll'
+        # rate so a polling inbox badge doesn't burn the share-send
+        # budget. 100 shares/hour is a spam guard; 1000/hour is enough
+        # for a client polling every 3.6s.
+        from rest_framework.throttling import ScopedRateThrottle
+        if self.action == 'send_share':
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
+
+    @property
+    def throttle_scope(self):
+        if self.action == 'send_share':
+            return 'share_send'
+        return 'share_poll'
 
     @action(detail=False, methods=['get'], url_path='find-user')
     def find_user(self, request):
@@ -40,20 +76,12 @@ class ShareViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='send-share')
     def send_share(self, request, pk=None):
         clip = get_object_or_404(AudioClip, pk=pk)
-        user = request.user
-
         receiver_id = request.data.get('receiver_id')
         if not receiver_id:
             return Response({'error': 'Receiver ID required'}, status=status.HTTP_400_BAD_REQUEST)
         receiver = get_object_or_404(User, id=receiver_id)
 
-        # 1. Log the interaction for the algorithm (increments global share count)
-        UserInteraction.objects.get_or_create(
-            user=user, clip=clip, interaction_type='share'
-        )
-        # 2. Create the peer-to-peer inbox event
-        ShareEvent.objects.create(sender=user, receiver=receiver, clip=clip)
-
+        shares_svc.send_share(sender=request.user, clip=clip, receiver=receiver)
         return Response({'status': 'shared successfully'}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['delete'], url_path='share-delete')
@@ -93,14 +121,9 @@ class FollowViewSet(viewsets.ViewSet):
     @action(detail=True, methods=['post'], url_path='toggle-follow')
     def toggle_follow(self, request, pk=None):
         target_user = get_object_or_404(User, pk=pk)
-        current_user = request.user
-
-        if target_user == current_user:
+        if target_user == request.user:
             return Response({'error': 'You cannot follow yourself.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if current_user.following.filter(pk=target_user.pk).exists():
-            current_user.following.remove(target_user)
-            return Response({'status': 'unfollowed'}, status=status.HTTP_200_OK)
-        else:
-            current_user.following.add(target_user)
-            return Response({'status': 'followed'}, status=status.HTTP_201_CREATED)
+        result = follows_svc.toggle_follow(actor=request.user, target=target_user)
+        status_code = status.HTTP_201_CREATED if result == 'followed' else status.HTTP_200_OK
+        return Response({'status': result}, status=status_code)
