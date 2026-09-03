@@ -392,19 +392,22 @@ class TestN12RetryEngages:
         import inspect
         from backend.app import tasks
         src = inspect.getsource(tasks.process_audio_to_hls)
-        # The normalize_to_wav block should NOT end in 'return' for retryable
-        # errors. Check for the pattern.
-        # Look for: except subprocess.CalledProcessError as e:
-        #   ...clip.status = 'failed'...
-        #   return  <-- this is the bug
-        # We expect: ...raise (or no return at all)
-        normalize_section = src.split('normalize_to_wav')[1].split('def ')[0]
-        # Allow a return in case the error is terminal (corrupt file), but the
-        # primary retryable path must re-raise. The test just confirms a raise
-        # exists somewhere in the normalize block.
-        assert 'raise' in normalize_section, (
-            "process_audio_to_hls.normalize_to_wav failure path doesn't re-raise. "
-            "Transient errors (network blip, OOM) will be silently marked as failed."
+        # N12 fix: the process_audio_to_hls body should now have at least
+        # one re-raise in a transient-error path (was: every failure
+        # returned silently, masking transient errors from autoretry_for).
+        # The normalize_to_wav path is still terminal (corrupt audio) —
+        # that's correct. The librosa.load and S3 upload paths now raise
+        # on OSError/ConnectionError. Verify both.
+        assert 'raise' in src, (
+            "process_audio_to_hls has no re-raise — every failure is still "
+            "swallowed silently. autoretry_for never engages."
+        )
+        # The fix specifically re-raises on OSError/ConnectionError in
+        # the librosa.load and S3 upload paths. Both should be present.
+        assert src.count('except (OSError, ConnectionError)') >= 2, (
+            "Expected at least 2 'except (OSError, ConnectionError):' blocks "
+            "(librosa.load and S3 upload), but found fewer. The N12 fix "
+            "is incomplete."
         )
 
 

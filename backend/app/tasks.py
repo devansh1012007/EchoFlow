@@ -212,11 +212,20 @@ def process_audio_to_hls(self, clip_id):
     local_hls_dir = tempfile.mkdtemp(prefix=f'hls-{clip_id}-')
 
     try:
-        # 1. Acoustic Vector Extraction
+        # 1. Acoustic Vector Extraction.
+        # N12 fix: distinguish transient vs terminal.
+        # - librosa.load() OSError on a local file IS transient (disk
+        #   hiccup, NFS blip, temp race). Re-raise so autoretry_for
+        #   picks it up.
+        # - Any other Exception (corrupt audio, unsupported codec) is
+        #   terminal — mark failed, don't retry.
         try:
             y, sr = librosa.load(normalized_path, sr=22050)
+        except OSError:
+            logger.exception("librosa.load() transient error for clip %s; re-raising for retry", clip_id)
+            raise
         except Exception as e:
-            logger.exception("librosa.load() failed for clip %s: %s", clip_id, e)
+            logger.exception("librosa.load() terminal error for clip %s: %s", clip_id, e)
             clip.status = 'failed'
             clip.save()
             return
@@ -228,6 +237,9 @@ def process_audio_to_hls(self, clip_id):
         clip.save(update_fields=['acoustic_vector', 'duration_ms'])
         logger.info(f"Extracted acoustic vector and duration for clip {clip_id}")
         # 2. AUDIO TO TEXT (Whisper)
+        # Same N12 pattern: OSError/ConnectionError (transient model-load
+        # failure) re-raise; other exceptions (model logic error) are
+        # terminal.
         try:
             # Lazy-init models to avoid startup cost during management commands
             model = get_whisper_model()
@@ -252,6 +264,9 @@ def process_audio_to_hls(self, clip_id):
                 # Fallback for purely instrumental tracks with no vocals
                 clip.semantic_vector = [0.0] * 384
                 clip.tags = ["instrumental"]
+        except (OSError, ConnectionError):
+            logger.exception("AI inference transient error for clip %s; re-raising for retry", clip_id)
+            raise
         except Exception as e:
             logger.exception("Local AI Processing Failed: %s", e)
             clip.status = 'failed'
@@ -276,14 +291,22 @@ def process_audio_to_hls(self, clip_id):
             os.path.join(local_hls_dir, 'index.m3u8')
         ]
 
+        # N12 fix: split HLS encode from S3 upload. ffmpeg CalledProcessError
+        # is terminal (corrupt audio, unsupported codec — retrying won't help).
+        # default_storage.save() failures are typically transient (S3 hiccup,
+        # network blip) — re-raise so autoretry_for picks it up.
         try:
             subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as e:
+            logger.error("FFmpeg HLS encode error for clip %s: %s", clip_id, e.stderr.decode())
+            clip.status = 'failed'
+            clip.save()
+            return
 
-            # Upload every file ffmpeg just wrote locally up to object
-            # storage, under hls/<clip_id>/... — this is the step that
-            # replaces "shared volume" with "every container talks to the
-            # same bucket over the network".
-            storage_prefix = f"hls/{clip.id}"
+        # Upload to object storage. OSError / ConnectionError are
+        # transient (S3 blip, network blip) — re-raise.
+        storage_prefix = f"hls/{clip.id}"
+        try:
             for root, _dirs, files in os.walk(local_hls_dir):
                 for fname in files:
                     local_path = os.path.join(root, fname)
@@ -291,20 +314,19 @@ def process_audio_to_hls(self, clip_id):
                     storage_key = f"{storage_prefix}/{rel_path}".replace(os.sep, '/')
                     with open(local_path, 'rb') as fh:
                         default_storage.save(storage_key, fh)
+        except (OSError, ConnectionError):
+            logger.exception("S3 upload transient error for clip %s; re-raising for retry", clip_id)
+            raise
 
-            # DECISION: store the relative object KEY, not a full URL. A
-            # signed S3 URL expires (see AWS_S3_QUERYSTRING_EXPIRE) — baking
-            # one into the database would mean playback silently breaks an
-            # hour after processing regardless of whether the clip is still
-            # valid. The serializer generates a fresh signed URL from this
-            # key on every read instead (see FeedClipSerializer).
-            clip.hls_playlist_url = f"{storage_prefix}/master.m3u8"
-            clip.status = 'ready'
-            clip.save()
-        except subprocess.CalledProcessError as e:
-            clip.status = 'failed'
-            clip.save()
-            logger.error("FFmpeg Error: %s", e.stderr.decode())
+        # DECISION: store the relative object KEY, not a full URL. A
+        # signed S3 URL expires (see AWS_S3_QUERYSTRING_EXPIRE) — baking
+        # one into the database would mean playback silently breaks an
+        # hour after processing regardless of whether the clip is still
+        # valid. The serializer generates a fresh signed URL from this
+        # key on every read instead (see FeedClipSerializer).
+        clip.hls_playlist_url = f"{storage_prefix}/master.m3u8"
+        clip.status = 'ready'
+        clip.save()
     finally:
         # Always clean up both local scratch areas, success or failure.
         try:
