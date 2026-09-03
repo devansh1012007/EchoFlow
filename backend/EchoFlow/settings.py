@@ -72,7 +72,10 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework.authtoken',
-    'rest_framework_simplejwt', 
+    'rest_framework_simplejwt',
+    # SECURITY: token_blacklist enables ROTATE_REFRESH_TOKENS + BLACKLIST_AFTER_ROTATION
+    # so a leaked refresh token can be invalidated (used by the /auth/logout/ endpoint).
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',#for frontend
     'storages',#S3-compatible MEDIA storage — see STORAGES["default"] below
     ##
@@ -321,10 +324,23 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.ScopedRateThrottle',
     ],
+    # SECURITY: per-scope rates for abuse-prone endpoints. Each ViewSet
+    # opts in with `throttle_scope = 'X'` to inherit its rate. These are
+    # defaults — the architecture audit calls log_telemetry the #1 abuse
+    # vector (viewbot / engagement-velocity manipulation), so its rate is
+    # the tightest. Override via env vars if needed.
     'DEFAULT_THROTTLE_RATES': {
         'anon': '100/hour',
         'user': '1000/hour',
+        'telemetry': '60/min',      # log_telemetry: 1/second max sustained
+        'upload': '20/hour',        # AudioUploadViewSet.create: prevent storage abuse
+        'register': '5/hour',       # RegisterView: prevent account-creation spam
+        'login': '10/min',          # TokenObtainPairView: prevent credential stuffing
+        'comment': '60/hour',       # CommentViewSet.create
+        'share_send': '100/hour',   # ShareViewSet.send_share
+        'interaction': '60/min',    # toggle_like, register_skip
     },
 }
 # lets set lifetimes for tokens
@@ -333,6 +349,13 @@ from datetime import timedelta
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    # SECURITY: Rotate refresh tokens on every /token/refresh/ call. The previous
+    # refresh token is blacklisted (if 'token_blacklist' is in INSTALLED_APPS).
+    # Tradeoff: clients must update their stored refresh token on every refresh,
+    # but a stolen refresh token is single-use.
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
 }
 
 # Structured logging configuration

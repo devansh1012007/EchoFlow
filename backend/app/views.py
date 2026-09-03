@@ -41,6 +41,10 @@ class CommentCursorPagination(CursorPagination):
 # 2. MEDIA INGESTION LAYER
 # ---------------------------------------------------------
 class AudioUploadViewSet(viewsets.ModelViewSet):
+    # SECURITY: 20 uploads/hour/user prevents storage-abuse DoS. Each upload
+    # is up to 100 MB (AudioUploadSerializer.MAX_SIZE), so default DRF
+    # 1000/hour/user would let one account push 100 GB/hour.
+    throttle_scope = 'upload'
     """
     REST API endpoint for uploading new audio clips.
     
@@ -220,6 +224,7 @@ class FastFeedViewSet(viewsets.ViewSet):
 class ClipInteractionViewSet(viewsets.GenericViewSet):
     queryset = AudioClip.objects.all()
     permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = 'interaction'
 
     @action(detail=True, methods=['post'], url_path='toggle-like')
     def toggle_like(self, request, pk=None):
@@ -375,10 +380,27 @@ class ClipInteractionViewSet(viewsets.GenericViewSet):
         )
 
         return Response({"status": "telemetry logged"}, status=status.HTTP_201_CREATED)
+
+    def get_throttles(self):
+        # SECURITY: log_telemetry is the architecture audit's #1 abuse vector
+        # (viewbot / engagement-velocity manipulation). Override the default
+        # 'interaction' scope with the tighter 'telemetry' scope for this action.
+        from rest_framework.throttling import ScopedRateThrottle
+        if self.action == 'log_telemetry':
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
+
+    @property
+    def throttle_scope(self):
+        return 'telemetry' if self.action == 'log_telemetry' else 'interaction'
+
 # ---------------------------------------------------------
 # 5. COMMUNITY LAYER (Sharing & Inbox)
 # ---------------------------------------------------------
 class ShareViewSet(viewsets.ModelViewSet):
+    # SECURITY: 100 shares/hour/user prevents inbox-spam DoS. Targeted
+    # only at send_share; inbox/list/mark_read don't abuse-target.
+    throttle_scope = 'share_send'
     """
     Social sharing system: Users can send clips to each other and track sent/received clips.
     
@@ -526,6 +548,9 @@ class ShareViewSet(viewsets.ModelViewSet):
 # 6. COMMENTS LAYER
 # ---------------------------------------------------------
 class CommentViewSet(viewsets.ModelViewSet):
+    # SECURITY: 60 comments/hour/user prevents comment spam. Default
+    # 1000/hour/user lets one account post every 3.6s indefinitely.
+    throttle_scope = 'comment'
     """
     REST API for creating, viewing, and managing nested comments on clips.
     
@@ -803,6 +828,9 @@ class RegisterView(generics.CreateAPIView): # generic view for user registration
     # Everyone must be able to hit this endpoint to sign up!
     permission_classes = (AllowAny,)
     serializer_class = RegisterSerializer
+    # SECURITY: 5 registrations/hour/IP (scoped to 'register'). Default
+    # AnonRateThrottle is 100/hour — too loose for account-creation spam.
+    throttle_scope = 'register'
 
 
 class ProfileViewSet(viewsets.ViewSet):
