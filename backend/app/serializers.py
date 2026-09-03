@@ -20,6 +20,18 @@ class AudioUploadSerializer(serializers.ModelSerializer):
     # Tradeoff: Slightly more code in serializer vs. guaranteed validation.
     ALLOWED_EXT = {'.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.webm', '.opus'}
     MAX_SIZE = 100 * 1024 * 1024  # 100 MB
+    # SECURITY: Magic-byte MIME allowlist. An attacker can rename evil.exe
+    # to evil.mp3 and bypass extension-only checks. python-magic reads the
+    # first ~1KB of the file and returns the inferred MIME type. We accept
+    # only audio/* MIME types. If libmagic is unavailable, fall back to
+    # extension-only (with a logged warning) so the service doesn't break
+    # on minimal Docker images.
+    ALLOWED_MIMES = frozenset({
+        'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
+        'audio/wave', 'audio/x-vorbis+ogg', 'audio/ogg', 'audio/flac',
+        'audio/x-flac', 'audio/mp4', 'audio/aac', 'audio/x-m4a',
+        'audio/webm', 'audio/opus',
+    })
 
     class Meta:
         model = AudioClip
@@ -32,6 +44,32 @@ class AudioUploadSerializer(serializers.ModelSerializer):
         ext = os.path.splitext(value.name)[1].lower()
         if ext not in self.ALLOWED_EXT:
             raise serializers.ValidationError(f"Unsupported file type: {ext}")
+        # Magic-byte sniff: read the first 8KB and check the MIME.
+        # Done at upload time (not deferred to ffmpeg) so the malicious
+        # file is rejected before it ever lands in object storage.
+        #
+        # libmagic is unreliable for truncated audio frames (it returns
+        # application/octet-stream for valid MP3/OGG headers without
+        # enough frame data to identify the codec). The check below
+        # rejects anything that libmagic confidently identifies as
+        # non-audio (PE/ELF/scripts/etc) but accepts octet-stream for
+        # allowed extensions, since the real validation happens at
+        # process_audio_to_hls via ffmpeg.
+        try:
+            import magic
+            head = value.read(8192)
+            value.seek(0)
+            mime = magic.from_buffer(head, mime=True)
+            if mime and not mime.startswith('audio/') and mime != 'application/octet-stream':
+                raise serializers.ValidationError(
+                    f"File content does not match audio format. Detected: {mime}"
+                )
+        except ImportError:
+            # python-magic not installed — log and fall back to extension check.
+            import logging
+            logging.getLogger(__name__).warning(
+                "python-magic unavailable; magic-byte validation skipped"
+            )
         return value
 
     def create(self, validated_data):

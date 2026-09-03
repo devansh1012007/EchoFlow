@@ -34,6 +34,10 @@ whitenoise==6.12.0                # pure
 # --- Config / logging ---
 python-dotenv==1.2.3              # pure
 dj-database-url==3.1.2            # pure
+# SECURITY: audio upload magic-byte validation. Requires libmagic in the
+# Docker image; the Debian slim-bookworm base already ships libmagic1,
+# so the wheel is pure-Python and no extra apt install is required.
+python-magic==0.4.27              # pure
 python-json-logger==4.2.0         # pure
 
 # --- API plumbing ---

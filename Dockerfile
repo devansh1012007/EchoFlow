@@ -47,6 +47,7 @@ RUN groupadd -g 1000 appgroup \
         postgresql-client \
         ffmpeg \
         libsndfile1 \
+        libmagic1 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
