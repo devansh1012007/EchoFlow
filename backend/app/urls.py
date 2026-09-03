@@ -47,8 +47,8 @@ class LogoutView(APIView):
             token = RefreshToken(refresh_token)
             token.blacklist()
             return Response({'detail': 'logged out'})
-        except TokenError as e:
-            return Response({'detail': str(e)}, status=400)
+        except TokenError:
+            return Response({'detail': 'invalid refresh token'}, status=400)
 
 
 urlpatterns = [
