@@ -376,7 +376,8 @@ REST_FRAMEWORK = {
         'register': '5/hour',       # RegisterView: prevent account-creation spam
         'login': '10/min',          # TokenObtainPairView: prevent credential stuffing
         'comment': '60/hour',       # CommentViewSet.create
-        'share_send': '100/hour',   # ShareViewSet.send_share
+        'share_send': '100/hour',   # ShareViewSet.send_share (anti-spam)
+        'share_poll': '1000/hour',  # ShareViewSet inbox/unread/mark-read (client polling)
         'interaction': '60/min',    # toggle_like, register_skip
     },
 }

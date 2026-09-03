@@ -3,10 +3,18 @@
 DECISION: Split out of monolithic views.py in 2026-09.
 Stage 2 (relational-to-event-driven plan): ORM writes go through
 backend.app.services.follows and backend.app.services.shares.
+
+ShareViewSet is now GenericViewSet + List + Retrieve + Destroy, NOT
+ModelViewSet. The router-default POST /share/ (modelviewset's create)
+crashed with an IntegrityError because ShareEventSerializer has no
+writable sender/receiver fields — the only legitimate create path is
+the @action send_share which uses the shares_svc service. Narrowing the
+mixin set makes POST /share/ return 405 Method Not Allowed instead of
+500. List/retrieve/destroy continue to work as before.
 """
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
-from rest_framework import viewsets, permissions, status
+from rest_framework import generics, mixins, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
@@ -18,15 +26,39 @@ from ..services import shares as shares_svc
 User = get_user_model()
 
 
-class ShareViewSet(viewsets.ModelViewSet):
-    # SECURITY: 100 shares/hour/user prevents inbox-spam DoS. Targeted
-    # only at send_share; inbox/list/mark_read don't abuse-target.
+class ShareViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    # SECURITY: 100 shares/hour/user prevents inbox-spam DoS. Only
+    # send_share uses this tight rate; read actions (inbox, find_user,
+    # unread_count) share a looser 'share_poll' scope (see get_throttles).
     throttle_scope = 'share_send'
     serializer_class = ShareEventSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         return ShareEvent.objects.filter(receiver=self.request.user)
+
+    def get_throttles(self):
+        # SECURITY: Per-action throttle dispatch (mirrors the pattern in
+        # ClipInteractionViewSet). Only send_share gets the tight
+        # 'share_send' rate; read actions get the looser 'share_poll'
+        # rate so a polling inbox badge doesn't burn the share-send
+        # budget. 100 shares/hour is a spam guard; 1000/hour is enough
+        # for a client polling every 3.6s.
+        from rest_framework.throttling import ScopedRateThrottle
+        if self.action == 'send_share':
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
+
+    @property
+    def throttle_scope(self):
+        if self.action == 'send_share':
+            return 'share_send'
+        return 'share_poll'
 
     @action(detail=False, methods=['get'], url_path='find-user')
     def find_user(self, request):
