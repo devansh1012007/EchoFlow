@@ -61,12 +61,12 @@ A `robots.txt`-respecting, rate-limited scraper ingests openly-licensed audio fr
                         │  :9443 (HTTPS) → MinIO (HLS segments)    │
                         └──────┬────────────────────┬──────────────┘
                                │ HTTP               │ HTTP
-                  ┌────────────▼─────────┐ ┌────────▼─────────────┐
-                  │  gunicorn (Django)   │ │   MinIO (S3)         │
-                  │  + DRF + JWT         │ │  hls/  public-read   │
-                  │  + Prometheus /metrics│ │  uploads/ private    │
-                  └──────┬────────┬──────┘ └──────────────────────┘
-                         │        │
+                 ┌─────────────▼─────────┐ ┌────────▼─────────────┐
+                 │  gunicorn (Django)   │ │   MinIO (S3)         │
+                 │  + DRF + JWT         │ │  hls/  public-read   │
+                 │  + Prometheus /metrics│ │  uploads/ private    │
+                 └──────┬────────┬──────┘ └──────────────────────┘
+                        │        │
               ┌──────────▼───┐ ┌──▼──────────────────┐
               │ PostgreSQL 16│ │   Redis 7            │
               │  + pgvector  │ │  • cache (django-redis)│
@@ -82,11 +82,11 @@ A `robots.txt`-respecting, rate-limited scraper ingests openly-licensed audio fr
               │  │ worker      │ (feed refill)│ (HLS / AI)   │  │
               │  └─────────────┴──────────────┴──────────────┘  │
               │  Celery Beat ── periodic jobs (metrics,         │
-              │  vector evolution, counter flush)               │
+              │  vector evolution, counter flush, orphan cleanup)│
               └─────────────────────────────────────────────────┘
 ```
 
-**Backend:** Django 5 / DRF · **API auth:** JWT (SimpleJWT, access + refresh) · **DB:** PostgreSQL 16 + pgvector (HNSW ANN indexes) · **Cache/Queue:** Redis 7 · **Async:** Celery + Celery Beat · **Media:** FFmpeg HLS transcoding · **ML:** faster-whisper, sentence-transformers, librosa, keybert · **Serving:** gunicorn, WhiteNoise · **TLS:** nginx 1.27 (`:80` redirect, `:443` Django, `:9443` MinIO)
+**Backend:** Django 5 / DRF · **API auth:** JWT (SimpleJWT, access + refresh) · **DB:** PostgreSQL 16 + pgvector (HNSW ANN indexes) · **Cache/Queue:** Redis 7 · **Async:** Celery + Celery Beat · **Media:** FFmpeg HLS transcoding · **ML:** faster-whisper, sentence-transformers, librosa, keybert · **Serving:** gunicorn, WhiteNoise · **TLS:** nginx 1.27 (`:80` redirect, `:443` Django, `:9443` MinIO) · **Observability:** Prometheus + Grafana (primary), Sentry (errors, ready-to-configure)
 
 ### Data Flow
 1. **TLS termination** — every client request enters through `nginx:443`, which terminates TLS, sets `X-Forwarded-Proto: https`, and forwards plain HTTP to gunicorn (`web:8000`). `nginx:9443` serves browser HLS segments over HTTPS (mixed-content safety).
@@ -104,7 +104,8 @@ A `robots.txt`-respecting, rate-limited scraper ingests openly-licensed audio fr
 # 1. Ensure .env exists and is populated (DB_*, REDIS_URL, DJANGO_SECRET_KEY, HF_TOKEN, ...)
 #    docker compose reads ${VAR} substitutions from your .env file.
 
-# 2. Build and start all services (11: db, pgbouncer, redis_broker, redis_cache, minio, minio-init, web, celery, celery_feed, celery_media, celery_beat)
+# 2. Build and start all services (14: db, pgbouncer, redis_broker, redis_cache, minio, minio-init,
+#    nginx, web, celery, celery_feed, celery_media, celery_beat, prometheus, grafana)
 docker compose up --build
 
 # 3. View logs for a specific service (e.g. media worker)
@@ -113,7 +114,16 @@ docker compose logs -f celery_media
 # 4. Run a management command inside the web container
 docker compose exec web python manage.py migrate
 
-# 5. Tear everything down
+# 5. Verify HTTPS is live (the nginx terminator runs on :80, :443, :9443)
+curl -kI https://localhost/health/
+
+# 6. Verify Prometheus is scraping (web target should be UP)
+open http://localhost:9090/targets
+
+# 7. Verify Grafana dashboards (admin / ${GRAFANA_ADMIN_PASSWORD})
+open http://localhost:3000
+
+# 8. Tear everything down
 docker compose down
 ```
 
@@ -162,8 +172,9 @@ EchoFlow/
 │   │   ├── views.py            # ViewSets: feed, uploads, interactions, comments, share, follow, tags, profile
 │   │   ├── serializers.py      # DRF serializers (feed, upload, comment, auth, profiles)
 │   │   ├── urls.py             # DRF router + JWT auth endpoints
-│   │   ├── tasks.py            # Celery tasks (HLS/AI pipeline, feed refill, metrics, vector evolution)
-│   │   ├── db_routers.py       # Multi-DB routing stub (single DB for now)
+│   │   ├── tasks.py            # Celery tasks (HLS/AI pipeline, feed refill, metrics, vector evolution, counter flush, orphan cleanup)
+│   │   ├── db_routers.py       # Multi-DB routing (read-replica; auto-activates when READ_DATABASE_URL is set)
+│   │   ├── services/           # Service layer: interactions, shares, follows, comments, uploads, feed_pool, counter_store, sentry, task_publisher
 │   │   ├── scrapers/           # License-aware ingestion pipeline
 │   │   │   ├── base.py         # robots.txt checker, rate limiter, HTTP session
 │   │   │   ├── downloader.py   # Safe audio download (size/content-type guards)
@@ -173,7 +184,7 @@ EchoFlow/
 │   │   ├── management/
 │   │   │   └── commands/       # scrape_audio management command
 │   │   ├── migrations/
-│   │   └── tests/              # test_scraper.py
+│   │   └── tests/              # 20 pytest files (security, services, adversarial, integration, etc.)
 │   ├── scripts/                # Seed scripts (seed_db.py, seed_db2.py)
 │   └── staticfiles/            # collectstatic output (generated)
 ├── frontend/                   # Sample Vite/React client (HLS.js playback)
@@ -181,8 +192,9 @@ EchoFlow/
 │   ├── models/                 # Whisper / embedding / KeyBERT / acoustic wrappers
 │   ├── pipelines/              # audio_ingest, cold_start, recommendation
 │   └── eval/                   # feed_metrics, vector_quality
-├── docs/                       # Architecture audits, scaling analysis, deployment notes
-├── docker-compose.yml          # 7 services: db, redis, web, celery, celery_feed, celery_media, celery_beat
+├── docs/                       # Architecture audits, EXPLAIN/, scaling analysis, deployment notes
+├── docker/                     # nginx.conf, prometheus/, grafana/, certs/
+├── docker-compose.yml          # 14 services (db, pgbouncer, redis_broker, redis_cache, minio, minio-init, nginx, web, celery, celery_feed, celery_media, celery_beat, prometheus, grafana)
 ├── Dockerfile                  # Multi-stage build → api + media images, offline wheelhouse installs
 ├── requirements.txt            # Aggregate for local dev (-r base + media)
 ├── requirements-base.txt       # Core Django/API deps (used by api image)
@@ -202,12 +214,14 @@ Generated at runtime, never committed: `media/` (uploads + HLS output), `wheelho
 Natural next steps that follow directly from the existing architecture:
 
 - **Media to object storage** — move HLS output and uploads from local disk to S3-compatible storage (django-storages + boto3 are already dependencies)
-- **CDN delivery** — serve HLS segments through a CDN for global low-latency streaming
+- **Real CDN front of MinIO** — the nginx config is ready for `Cache-Control: public, max-age=31536000, immutable` on `.ts` segments and `no-cache, must-revalidate` on `.m3u8` manifests; activation is via `PUBLIC_MEDIA_ENDPOINT_URL`. See [docs/EXPLAIN/storage/](docs/EXPLAIN/storage/) for the real-CDN activation playbook.
+- **Read-replica activation** — set `READ_DATABASE_URL` and the `ReadRouter` auto-activates. Activation playbook: [docs/EXPLAIN/database/05-read-replica-design.md](docs/EXPLAIN/database/05-read-replica-design.md).
 - **Real-time notifications** — push events for shares/inbox via websockets or a streaming broker
 - **Recommendation at scale** — replace brute-force cosine scans with a candidate-generation + ANN tier as the catalog grows
 - **Event-driven message bus** — migrate the Celery/Redis broker to a durable event stream for idempotent, retryable processing
-- **Rate limiting & throttling** — add DRF throttling and distributed rate limits to the API layer
-- **Observability stack** — structured logging, metrics, tracing, and error tracking for production confidence
+- **Sentry production credentials** — DSN is env-gated; ship `SENTRY_DSN` and `SENTRY_ENV` in staging/prod `.env` to start capturing errors with full correlation_id tracing
+- **Prometheus alert rules** — design proposed in [docs/EXPLAIN/observability/03-prometheus-grafana-design.md](docs/EXPLAIN/observability/03-prometheus-grafana-design.md); ship when an escalation path (Slack/on-call) is set
+- **Rate limiting & throttling** — add DRF throttling and distributed rate limits at the API layer
 - **CI/CD pipeline** — automated test + build + deploy stages for the Docker stack
 
 ---
@@ -224,7 +238,27 @@ Full design: [docs/EXPLAIN/docker/05-https-tls-termination.md](docs/EXPLAIN/dock
 
 ---
 
-**Stack at a glance:** `Django 5` · `DRF` · `PostgreSQL + pgvector` · `Redis` · `Celery` · `FFmpeg/HLS` · `faster-whisper` · `sentence-transformers` · `librosa` · `nginx 1.27 (TLS terminator)` · `Docker Compose` (12 services: db, pgbouncer, redis_broker, redis_cache, minio, minio-init, nginx, web, celery, celery_feed, celery_media, celery_beat)
+**Stack at a glance:** `Django 5` · `DRF` · `PostgreSQL + pgvector` · `Redis` · `Celery` · `FFmpeg/HLS` · `faster-whisper` · `sentence-transformers` · `librosa` · `nginx 1.27 (TLS terminator)` · `Docker Compose` (14 services: db, pgbouncer, redis_broker, redis_cache, minio, minio-init, nginx, web, celery, celery_feed, celery_media, celery_beat, prometheus, grafana)
 
 ## Storage (MinIO / S3-compatible)
 Derived HLS streams live in object storage (MinIO locally / S3 in prod) with the `hls/` prefix public-read for multi-file playback; original uploads (`uploads/`) stay private via signed URLs. The public `hls/` endpoint is served over HTTPS via nginx `:9443` (see [docs/EXPLAIN/docker/05-https-tls-termination.md](docs/EXPLAIN/docker/05-https-tls-termination.md)). Full architecture, failure analysis, and verification scripts are documented in `docs/minio-s3-architecture.md`.
+
+## Observability
+Two stacks are available after `docker compose up`:
+
+- **Prometheus + Grafana (primary)** — Prometheus (`http://localhost:9090`) scrapes `web:8005/metrics/` every 15s. Two pre-built Grafana dashboards (admin at `http://localhost:3000`, default dashboards: `EchoFlow / 01-feed-and-suggestions` and `02-celery-health`) show p95 of the 4 application histograms, cache hit rate, and Celery task throughput. Activation: [docs/EXPLAIN/observability/04-prometheus-grafana-setup.md](docs/EXPLAIN/observability/04-prometheus-grafana-setup.md). Full design: [docs/EXPLAIN/observability/03-prometheus-grafana-design.md](docs/EXPLAIN/observability/03-prometheus-grafana-design.md).
+- **Sentry (errors, ready-to-configure)** — `sentry-sdk[django,celery]==2.18.0` is installed; `init_sentry()` runs in each process's `App1Config.ready()`. Set `SENTRY_DSN` in `.env` to start capturing errors with the request's `correlation_id` (from Group B item 11) attached as a Sentry tag. `send_default_pii=False` — user IPs, cookies, and auth headers are NOT sent. PII-free by default.
+
+The stdlib-based `scripts/observability_tui.py` is still available for quick spot-checks when no browser is handy.
+
+## Testing
+**Current count: 230 passed, 9 skipped, 0 failed** (9 skipped = 2 ffmpeg-environmental + 6 integration-on-SQLite + 1 live-nginx-environmental).
+
+The test suite lives under `backend/app/tests/` (20 files) and uses `pytest` + `pytest-django`. Run via `docker compose exec web pytest …`. See [AGENTS.md](AGENTS.md) → "Running Tests" for the full command set.
+
+Integration tests that need real Postgres + Redis + S3 (pgvector HNSW indexes, row-level locks, Redis Streams, concurrent transactions) are marked with `@pytest.mark.integration`. They auto-skip on the local SQLite + LocMem test environment and run in CI where the workflow provisions real services. Run them locally: `pytest backend/app/tests/ -m integration`.
+
+## Docs
+- [docs/EXPLAIN/](docs/EXPLAIN/) — 69 architecture deep-dives (data flow, frontend, backend, APIs, AI/ML, recommendations, Redis/Celery, media/HLS, object storage, scraping, auth, deployment, observability, testing, failure modes)
+- [docs/backend-bug-fixs.md](docs/backend-bug-fixs.md) — audit + Group A/B/C/D/partial-issues fix reports (4 parts)
+- [docs/EXPLAIN/decisions/partial-issues-completion-plan.md](docs/EXPLAIN/decisions/partial-issues-completion-plan.md) — plan + completion record for the 7 partially-addressed items (A1, A3, A5, A8, B13, B14, B17) + B19 docstring

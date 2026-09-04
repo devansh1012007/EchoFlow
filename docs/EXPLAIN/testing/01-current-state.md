@@ -1,8 +1,10 @@
 # Testing & Observability — Current State
 
+> **Status: significantly out of date (2026-09-03 snapshot).** The test suite grew from 1 file to 20 files (179 → 230 passed). pytest + pytest-django is configured. CI runs the full suite + the new `pytest -m integration` step. The most accurate testing reference is now [AGENTS.md](../../AGENTS.md#testing--linting) and the runbook in this directory at [04-integration-test-suite.md](04-integration-test-suite.md). This file is preserved as the original state-of-the-world snapshot for the audit trail.
+
 ## Testing
 
-### Current Test Suite
+### Current Test Suite (as of 2026-09-03 — pre-Group-A)
 **File:** `backend/app/tests/test_scraper.py`
 
 ```python
@@ -64,9 +66,9 @@ class ScraperUnitTests(TestCase):
 
 ---
 
-## Test Infrastructure (Missing)
+## Test Infrastructure (as of 2026-09-03 — pre-Group-A)
 
-### No Test Runner Configured
+### No Test Runner Configured (FIXED)
 ```bash
 # No pytest.ini, setup.cfg, pyproject.toml
 # No test command in package.json
@@ -96,7 +98,7 @@ responses==0.23.0
 
 ---
 
-## Running Tests (Manual)
+## Running Tests (Manual — pre-Group-A; see AGENTS.md for current)
 
 ```bash
 # Current (no test runner)

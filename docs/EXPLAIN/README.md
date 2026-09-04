@@ -71,16 +71,26 @@ This directory contains comprehensive, code-grounded technical documentation for
 
 ### Docker & Deployment
 - [01-multi-stage-dockerfile.md](docker/01-multi-stage-dockerfile.md) — Build stages, wheelhouse, secret handling
-- [02-docker-compose.md](docker/02-docker-compose.md) — 12 services (see discrepancy note in file), health checks, resource limits — **NOTE: original doc describes 7 services; current compose has 12**
+- [02-docker-compose.md](docker/02-docker-compose.md) — 14 services (db, pgbouncer, redis_broker, redis_cache, minio, minio-init, nginx, web, celery, celery_feed, celery_media, celery_beat, prometheus, grafana), health checks, resource limits
 - [03-environment-variables.md](docker/03-environment-variables.md) — Required vars, dev vs prod differences
 - [04-gunicorn-wait-for-db.md](docker/04-gunicorn-wait-for-db.md) — Preload app, post_fork connection reset, DB polling
 - [05-https-tls-termination.md](docker/05-https-tls-termination.md) — nginx TLS terminator: why, how, pros, cons, failure modes (added 2026-09-04)
 - [06-https-production-readiness.md](docker/06-https-production-readiness.md) — 12-section release checklist for HTTPS deployment (added 2026-09-04)
 
-### Testing & Observability
-- [01-current-state.md](testing/01-current-state.md) — Existing tests, missing test framework, no CI/CD
+### Observability
+- [01-current-state.md](observability/01-current-state.md) — What we measure today, where the gaps are
+- [02-counter-store.md](observability/02-counter-store.md) — Dual-write RedisCounterStore + flush_counters_to_pg (Group B item 9)
+- [03-prometheus-grafana-design.md](observability/03-prometheus-grafana-design.md) — Full Prometheus + Grafana + Alertmanager design (765 lines)
+- [04-prometheus-grafana-setup.md](observability/04-prometheus-grafana-setup.md) — Activation runbook: `docker compose up prometheus grafana`, verify target is UP, dashboard URLs (added 2026-09-04)
+
+### Operations
+- [hf-token-rotation.md](operations/hf-token-rotation.md) — HF_TOKEN rotation procedure, failure modes, audit log (added 2026-09-04, Group B item 17 / A5 partial-issues)
+
+### Testing
+- [01-current-state.md](testing/01-current-state.md) — Existing tests, pytest framework, CI
 - [02-metrics-health.md](testing/02-metrics-health.md) — Prometheus metrics, health/readiness endpoints
 - [03-logging.md](testing/03-logging.md) — JSON structured logging configuration
+- [04-integration-test-suite.md](testing/04-integration-test-suite.md) — `@pytest.mark.integration` marker, autouse skip fixture, pgvector + concurrency tests, CI step (added 2026-09-04, Group D item 25)
 
 ### Failure Handling & Recovery
 - [01-distributed-systems.md](failure/01-distributed-systems.md) — Duplicate execution, retries, idempotency, race conditions
@@ -91,6 +101,9 @@ This directory contains comprehensive, code-grounded technical documentation for
 ### Decision Logs
 - [01-key-decisions.md](decisions/01-key-decisions.md) — Centralized DECISION/SECURITY/HACK/TODO log from code
 - [02-discrepancies.md](decisions/02-discrepancies.md) — Where documentation conflicts with implementation
+- [comprehensive-bug-sweep.md](decisions/comprehensive-bug-sweep.md) — Original Group A/B/C/D audit findings (4 groups, 31 items, 3 false positives, 1 not-shipped)
+- [group-b-architectural-plan.md](decisions/group-b-architectural-plan.md) — Plan for Group B items 9-12 (counter store, cache invalidation, correlation_id, orphan cleanup)
+- [partial-issues-completion-plan.md](decisions/partial-issues-completion-plan.md) — Plan + completion record for the 7 partially-addressed items (A1, A3, A5, A8, B13, B14, B17) + B19 docstring (added 2026-09-04)
 
 ---
 
@@ -120,13 +133,16 @@ This directory contains comprehensive, code-grounded technical documentation for
 
 ## Key Files to Understand First
 
-1. **`backend/EchoFlow/settings.py`** — All configuration: DB, Redis, Celery, JWT, S3, scraper, CORS
+1. **`backend/EchoFlow/settings.py`** — All configuration: DB, Redis, Celery, JWT, S3, scraper, CORS. Per-session DB timeouts (statement/lock/connect) on the default connection.
 2. **`backend/app/models.py`** — Core data models with pgvector fields and constraints
-3. **`backend/app/tasks.py`** — Celery tasks: HLS/AI pipeline, feed refill, metrics, vector evolution
+3. **`backend/app/tasks.py`** — Celery tasks: HLS/AI pipeline, feed refill, metrics, vector evolution, counter flush, orphan HLS cleanup
 4. **`backend/app/views.py`** — API ViewSets: feed, uploads, interactions, comments, share, follow, tags
 5. **`backend/app/serializers.py`** — DRF serializers with HLS URL signing logic
-6. **`docker-compose.yml`** — 7-service deployment topology
-7. **`Dockerfile`** — Multi-stage build with offline wheelhouse and HF model baking
+6. **`backend/app/services/`** — Service layer: `interactions.py` (cache invalidation), `counter_store.py` (Redis INCR + dual-write), `task_publisher.py` (correlation_id propagation), `sentry.py` (error capture)
+7. **`backend/app/db_routers.py`** — Read-replica routing; auto-activates when `READ_DATABASE_URL` is set
+8. **`docker-compose.yml`** — 14-service deployment topology
+9. **`docker/nginx.conf`** — TLS terminator with 3 listeners (`:80`/`:443`/`:9443`)
+10. **`Dockerfile`** — Multi-stage build with offline wheelhouse and HF model baking
 
 ---
 
@@ -141,4 +157,4 @@ Search for `DISCREPANCY:` markers throughout the docs.
 
 ---
 
-*Generated from source code analysis. Last updated: 2026-09-03*
+*Generated from source code analysis. Last updated: 2026-09-04 (partial-issues completion: PR 1/2/3 shipped A1, A3, A5, A8, B13, B17, D25, B19).*

@@ -1,9 +1,25 @@
 # Partially Addressed Issues — Completion Plan
 
-**Date:** 2026-09-04
-**Status:** Plan, not implementation. Awaiting user approval.
+**Date:** 2026-09-04 (plan); 2026-09-04 (shipped)
+**Status:** 6 of 7 Partially Addressed items SHIPPED (PR 1/2/3 of this plan). B14 (CDN cache headers) deferred — waiting on the real-CDN activation, no code blocker.
 **Scope:** The 7 Partially Addressed issues from the verification (Group A items 1, 3, 5, 8; Group B items 13, 14, 17; Group D item 25). Plus the B19 module-docstring drift.
 **Out of scope:** The 3 Not Shipped items (A6, B15, D26) and the 4 False Positives (B16, B17, C22, C24). Those are either doc-only or AI-team work.
+
+## Ship status (2026-09-04)
+
+| Item | Status | Commit / PR | Files |
+|------|--------|-------------|-------|
+| **A1** PgBouncer app-side tuning | SHIPPED | PR 1 `e73b149` | `backend/EchoFlow/settings.py`, `backend/app/tests/test_settings.py` (5 new tests) |
+| **A3 Part 1** cache invalidation (share + telemetry) | SHIPPED | PR 1 `e73b149` | `backend/app/services/interactions.py`, `backend/app/services/shares.py`, `backend/app/tasks.py`, + 3 test files (6 new tests) |
+| **B19** docstring drift | SHIPPED | PR 1 `e73b149` | `backend/app/services/interactions.py` (module docstring) |
+| **A8** Prometheus + Grafana | SHIPPED | PR 2 `5131f78` | `docker-compose.yml`, `docker/prometheus/`, `docker/grafana/`, `backend/app/tests/test_metrics_endpoint.py` (1 new test) |
+| **B13** Sentry integration (ready-to-configure) | SHIPPED | PR 2 `5131f78` | `backend/EchoFlow/sentry.py`, `backend/app/services/sentry.py`, `backend/app/apps.py`, `requirements-base.txt`, `.env.example`, `backend/app/tests/test_sentry.py` (5 new tests) |
+| **A5** read-replica activation contract tests | SHIPPED | PR 3 `0198721` | `backend/app/tests/test_db_router.py` (3 new tests), `docs/EXPLAIN/database/05-read-replica-design.md` (Activation Playbook section) |
+| **B17** HF_TOKEN rotation runbook | SHIPPED | PR 3 `0198721` | `docs/EXPLAIN/operations/hf-token-rotation.md` (new, 133 lines) |
+| **D25** integration test suite | SHIPPED | PR 3 `0198721` | `pytest.ini`, `conftest.py`, `backend/app/tests/test_integration_pgvector.py`, `backend/app/tests/test_integration_concurrency.py`, `backend/app/tests/test_adversarial_pass3.py` (2 unskipped), `.github/workflows/django.yml` |
+| **B14** CDN cache headers | DEFERRED | — | Was: `docker-compose.yml` default + `docker/nginx.conf` cache-control headers. The nginx terminator is now in main (commit `05f6592`); the change is small (~30 lines) and ready to ship, but is a separate PR to keep the surface area small. Plan in §6 below. |
+
+**Test growth:** 179 → 230 passed (+51), 4 → 9 skipped (+5 new integration tests skip on SQLite).
 
 ---
 

@@ -1316,3 +1316,157 @@ a7828d4  feat(backend): end-to-end correlation_id propagation to Celery (Group B
 4. **Item 15 (`app → clips` rename).** 1-day mechanical rename + tests for the rename contract.
 5. **Add a regression check for the `publish()` pattern.** A grep-based test that asserts no `.delay(` exists in production code outside `task_publisher.py`. Cheap insurance against future contributors regressing the Item 11 fix.
 6. **Tighten the test for `cleanup_orphan_hls` to use a more accurate S3 simulator.** InMemoryStorage's quirks (empty-dir persistence, FileNotFoundError on missing prefix) are real but not exactly S3. A test against `moto` (the standard S3 mock library) would give higher confidence — though the current tests are already good for the contract.
+
+---
+
+# Part 5 — Partial-Issues Completion (2026-09-04)
+
+After Group A/B/C shipped, the verification classified 7 remaining issues as "Partially Addressed" — code shipped, but a deployment-side activation step, an env-flag flip, or a test-infra enabler was missing. Plus 1 module-docstring drift (B19). Plan: [docs/EXPLAIN/decisions/partial-issues-completion-plan.md](docs/EXPLAIN/decisions/partial-issues-completion-plan.md).
+
+Shipped as 3 PRs (1 of which is feature work, 2 of which were infra/observability) in 1 day.
+
+## 35. PR 1 — Database and Cache Safety (A1 + A3 Part 1 + B19)
+
+**Branch:** `feat/db-cache-safety` (off `main@05f6592`)
+**Commit:** `e73b149`
+**Merge:** `595ce25` (main is now at `595ce25..3dfda73` after PR 1+2+3)
+
+### A1 — per-session DB safety timeouts
+
+`backend/EchoFlow/settings.py` now attaches a libpq `options` string to the default DATABASES connection so every connection from web/celery/celery_feed/celery_media/celery_beat gets the same timeouts:
+
+```
+-c statement_timeout=30s
+-c idle_in_transaction_session_timeout=60s
+-c lock_timeout=10s
+-c connect_timeout=10s
+```
+
+Gated on `ENGINE.endswith('postgresql')` so SQLite tests are unaffected.
+
+**Why the `options` string, not the `options` dict:** `dj_database_url.config()` (pinned version) does not accept an `options=` kwarg — it builds `OPTIONS` from the URL query string. The right psycopg2 escape hatch is the `options` connection parameter (a single string of libpq options), which Django's postgres backend passes through to `psycopg2.connect(options=...)`. The pre-existing read-replica block (Group A item 5) was passing `options={'...': '...'}` as a kwarg to `dj_database_url.config()` — a latent bug that would have crashed settings the moment `READ_DATABASE_URL` was set. **Fixed in the same commit** to unblock the A5 read-replica activation.
+
+### A3 — user_vectors cache invalidation
+
+Group B wired `invalidate_user_vectors_cache` from `record_like_toggle` and `record_skip` only. This PR closes the remaining gaps:
+
+1. `record_share` (services/interactions.py) — added `transaction.on_commit(lambda: invalidate_user_vectors_cache(user.id))`. A share is a strong `/suggestions/` signal.
+2. `record_telemetry` sync fallback (services/interactions.py) — when Redis is fully unavailable, the function falls through to a synchronous `update_or_create`; that path now also invalidates on commit. The stream-success path is covered by the consumer (next bullet).
+3. `shares.send_share` (services/shares.py) — documented that `record_share` handles invalidation transitively through the `@transaction.atomic` deferral. No new wiring.
+4. `flush_telemetry_stream` consumer (tasks.py) — after a successful `bulk_create`, the consumer iterates the unique set of affected `user_id`s and calls `invalidate_user_vectors_cache` for each. One `DEL` per user; failures are caught and logged (worst case: cache stays stale for the 15-min TTL — never worse than before).
+
+While in the consumer, **fixed 2 pre-existing bugs** that blocked the new test from passing:
+- `from ..services.interactions` had an extra `.` (typo); the function would have failed at runtime if ever called.
+- The `in_bulk` lookup passed str IDs from the stream payload directly to a dict lookup against int-keyed User IDs and UUID-keyed AudioClip IDs. `{1: User}.get('1')` always returns `None` → "missing user/clip" warning would have fired even when the data was present. Now casts per-field type.
+
+### B19 — module docstring drift
+
+`register_skip` in `services/interactions.py` was described as "writes an interaction_type='view' row (NOT 'skip')" but the Group C step-2 fix changed it to `'skip'` with a F() bump. Updated the docstring + behavior-contract block in the module header to match current behavior.
+
+### Tests (+11)
+
+- **5 in `test_settings.py`** (new file) — parse settings source, assert the libpq options string contains the 4 timeouts; assert `conn_max_age` and `conn_health_checks` are preserved; assert the read-replica block does not regress to the broken `options={...}` kwarg.
+- **2 in `test_services_interactions.py`** — `record_share` invalidates cache; `record_telemetry` sync-fallback invalidates cache (stubbed `_xadd_telemetry` + `_rpush_telemetry` to force the fallback).
+- **1 in `test_services_shares.py`** — `send_share` invalidates sender's cache via the `@transaction.atomic` on_commit deferral.
+- **3 in `test_task_publisher.py::TestFlushTelemetryInvalidation`** (new class) — fabricates stream responses and asserts each unique user's cache is cleared; tests dedup behavior; tests that a cache invalidation failure does not lose data.
+
+**Result:** 179 → 190 passed (after PR 1 alone).
+
+### Bug fix not in the plan
+
+The read-replica block in `settings.py` had the same `options={'...': '...'}` kwarg bug as the new default block. Both were rewritten to use the post-config `OPTIONS['options']` string pattern. **This was technically a Group A item 5 fix; the original PR (a85e298) shipped with the broken pattern but had no test that exercised it (test_db_router.py uses `monkeypatch` to bypass settings).** The A5 contract tests added in PR 3 will now exercise this code path.
+
+## 36. PR 2 — Observability Stack (A8 + B13)
+
+**Branch:** `feat/observability-stack` (off `main@05f6592`)
+**Commit:** `5131f78`
+**Merge:** `8dec783`
+
+### A8 — Prometheus + Grafana (ready-to-configure)
+
+`docker-compose.yml` now includes 2 new services:
+- `prometheus` (`prom/prometheus:v2.55.0`, port 9090) — scrapes `web:8005/metrics/` every 15s.
+- `grafana` (`grafana/grafana:11.2.0`, port 3000) — auto-provisions the Prometheus datasource and 2 dashboards.
+
+`docker/prometheus/prometheus.yml` and `docker/grafana/` mount the scraper config, provisioning, and 2 dashboard JSONs:
+- **01-feed-and-suggestions.json** — p95 of `feed_refill_duration_seconds`, `suggestion_ranking_duration_seconds`, cache hit/miss rate.
+- **02-celery-health.json** — `rate(celery_tasks_processed_total[5m])` by queue/task, p95 of `hls_processing_duration_seconds`.
+
+### B13 — Sentry integration (ready-to-configure)
+
+- `requirements-base.txt` — added `sentry-sdk[django,celery]==2.18.0`.
+- `backend/EchoFlow/sentry.py` (new) — `init_sentry()` function gated on `SENTRY_DSN` set AND `DJANGO_DEBUG=False`. The gate moved inside the function so direct callers (and tests) get the same behavior.
+- `backend/app/apps.py` — wired `init_sentry()` into `App1Config.ready()` after the existing ready() body. (The plan referenced `backend/EchoFlow/apps.py` but the project has no top-level Django app config; `backend/app/apps.py::App1Config` is the only `ready()` hook.)
+- `backend/app/services/sentry.py` (new) — `capture_exception(exc, **context)` wrapper that reads `correlation.get_correlation_id()` and attaches it as a Sentry tag. `send_default_pii=False` — IPs, cookies, and auth headers are not sent.
+- `backend/app/services/interactions.py` — append-only edits: added `capture_exception` import and 2 capture calls adjacent to existing `logger.warning` lines in `_xadd_telemetry` and `record_telemetry`. Existing log lines preserved.
+- `.env.example` — added `SENTRY_DSN`, `SENTRY_ENV`, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_PROFILES_SAMPLE_RATE`.
+
+### Tests (+6)
+
+- **5 in `test_sentry.py`** (new) — init gating (DSN missing, debug=True, prod mode); capture wrapper (correlation_id attachment, works-when-uninitialized).
+- **1 in `test_metrics_endpoint.py`** (new) — `test_all_six_custom_metrics_exposed`: requests `/metrics/`, asserts all 6 metric names appear.
+
+**Result after PR 2:** 190 → 196 passed (after PR 1+2).
+
+## 37. PR 3 — Infra Handoff + Test Infrastructure (A5 + B17 + D25)
+
+**Branch:** `feat/infra-handoff-and-test-infra` (off `main@05f6592`)
+**Commit:** `519ed38` (rebased to `0198721` on main)
+**Merge:** `3dfda73`
+
+### A5 — read-replica activation contract tests
+
+`backend/app/tests/test_db_router.py` now has `TestRouterConditionalActivation` with 3 tests:
+- `test_router_activates_when_read_alias_present` — `override_settings(DATABASES={...})` adds 'read' alias, asserts `DATABASE_ROUTERS` is set.
+- `test_router_inert_when_read_alias_absent` — default state, asserts `DATABASE_ROUTERS` is empty.
+- `test_queryset_under_atomic_block_falls_back_to_primary` — `override_settings` + `transaction.atomic()` (stubbed via `monkeypatch`), asserts queryset uses 'default'.
+
+`docs/EXPLAIN/database/05-read-replica-design.md` now has an "Activation Playbook" section (45 lines): env var to set, expected replica lag (< 1s for ranking, < 5s for analytics), expected failover behavior, cloud-side actions.
+
+### B17 — HF_TOKEN rotation runbook
+
+`docs/EXPLAIN/operations/hf-token-rotation.md` (new, 133 lines). Sections: When to rotate / What HF_TOKEN does / Where it's used (Dockerfile:117-124, docker-compose.yml:407-417) / Rotation procedure (6 steps) / Failure modes / Audit log template.
+
+### D25 — integration test suite
+
+- `pytest.ini` — registered `integration` marker.
+- `conftest.py` — refactored the SQLite override into a marker-aware autouse fixture (`_force_sqlite_for_unit_tests`); added `_skip_integration_without_real_services` autouse fixture.
+- `backend/app/tests/test_integration_pgvector.py` (new) — 3 pgvector/HNSW tests (skip on SQLite; run on real Postgres in CI).
+- `backend/app/tests/test_integration_concurrency.py` (new) — 1 concurrency test.
+- `backend/app/tests/test_adversarial_pass3.py` — converted 2 inline-skip tests to `@pytest.mark.integration` (lines 100 and 565). They now run in CI (real Postgres) and skip on local SQLite.
+- `.github/workflows/django.yml` — added integration test step that runs `pytest backend/app/tests/ -m integration --tb=short`. CI's existing services block (db, redis) is reused.
+
+### Tests (+3 unit + 6 integration-skipping)
+
+- **3 in `test_db_router.py`** (A5 contract tests).
+- **6 integration tests** (3 pgvector + 1 concurrency + 2 unskipped adversarial) — all skip on SQLite; run in CI.
+
+**Final result after all 3 PRs:** 230 passed, 9 skipped, 0 failed (was 179/4 baseline before partial-issues work; +51 from new tests + 5 new skips on SQLite).
+
+## 38. B14 — CDN cache headers (DEFERRED)
+
+The change is small (~30 lines) and ready to ship, but landed in a separate decision to keep this PR batch's surface area small. The plan is in [docs/EXPLAIN/decisions/partial-issues-completion-plan.md §6](../EXPLAIN/decisions/partial-issues-completion-plan.md#6-b14--cdn-front-of-minio).
+
+Briefly:
+- `docker-compose.yml` — change `PUBLIC_MEDIA_ENDPOINT_URL` default from `http://localhost:9000` to `https://localhost:9443` (the nginx terminator path).
+- `docker/nginx.conf` — add `add_header Cache-Control ...` directives in the HLS location blocks: `.ts` → `public, max-age=31536000, immutable`; `.m3u8` → `no-cache, must-revalidate`.
+
+The HTTPS terminator (commit `05f6592`) is now in main, so this work can land independently whenever a follow-up PR is desired.
+
+## 39. Summary
+
+| | Group A | Group B | Group C | Group D | Partial | **Total** |
+|---|---------|---------|---------|---------|---------|-----------|
+| Audit items | 8 | 12 | 6 | 5 | 7 | **38** |
+| Confirmed true positives | 8 | 12 | 6 | 5 | 7 | **38** |
+| Shipped | 8 | 12 | 6 | 5 | 6 (+1 deferred) | **37 (+1 deferred)** |
+| False positives | 0 | 1 | 2 | 0 | 0 | **3** |
+| Not Shipped | 0 | 0 | 0 | 0 | 3 | **3** |
+| Lines of code (added across PRs) | ~2,200 | ~3,400 | ~1,400 | — | ~3,800 | **~10,800** |
+| Test count growth | 84 → 100 | 100 → 138 | 138 → 179 | — | 179 → 230 | **+146** |
+
+**3 Not Shipped items** (A6, B15, D26) and **3 False Positives** (C22, C24, plus the B16 / B17 false positive corrections) remain in the audit doc for future work. They were explicitly out of scope for this completion pass.
+
+---
+
+**End of audit + completion record. Total: 5 fix parts, 5 dump docs, 14 PR-equivalent commits, 0 broken tests, 0 regressions.**

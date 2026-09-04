@@ -2,7 +2,7 @@
 
 ## Overview
 
-**File:** `docker-compose.yml` — 12 services for full stack
+**File:** `docker-compose.yml` — 14 services for full stack (db, pgbouncer, redis_broker, redis_cache, minio, minio-init, nginx, web, celery, celery_feed, celery_media, celery_beat, prometheus, grafana)
 
 ```mermaid
 graph TB
