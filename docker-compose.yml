@@ -250,6 +250,10 @@ services:
       - AWS_S3_QUERYSTRING_EXPIRE=${AWS_S3_QUERYSTRING_EXPIRE:-3600}
       - PUBLIC_MEDIA_ENDPOINT_URL=${PUBLIC_MEDIA_ENDPOINT_URL:-http://localhost:9000}
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENV=${SENTRY_ENV:-production}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      - SENTRY_PROFILES_SAMPLE_RATE=${SENTRY_PROFILES_SAMPLE_RATE:-0.05}
     command: >
       sh -c "set -e && python wait_for_db.py &&
          python manage.py migrate &&
@@ -338,6 +342,10 @@ services:
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis_cache:6379/0}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENV=${SENTRY_ENV:-production}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      - SENTRY_PROFILES_SAMPLE_RATE=${SENTRY_PROFILES_SAMPLE_RATE:-0.05}
     deploy:
       resources:
         limits:
@@ -381,6 +389,10 @@ services:
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis_cache:6379/0}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENV=${SENTRY_ENV:-production}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      - SENTRY_PROFILES_SAMPLE_RATE=${SENTRY_PROFILES_SAMPLE_RATE:-0.05}
     volumes:
       - .:/app
     # Same shared-image override as the default celery worker.
@@ -450,6 +462,10 @@ services:
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis_cache:6379/0}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENV=${SENTRY_ENV:-production}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      - SENTRY_PROFILES_SAMPLE_RATE=${SENTRY_PROFILES_SAMPLE_RATE:-0.05}
       # Must match the bake-time path in the Dockerfile (models are baked in,
       # NOT downloaded at runtime). Do NOT mount a cache volume over it.
       - HF_HOME=/home/appuser/.cache/huggingface
@@ -513,6 +529,10 @@ services:
       - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis_cache:6379/0}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENV=${SENTRY_ENV:-production}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      - SENTRY_PROFILES_SAMPLE_RATE=${SENTRY_PROFILES_SAMPLE_RATE:-0.05}
     deploy:
       resources:
         limits:
@@ -577,6 +597,91 @@ services:
         soft: 65536
         hard: 65536
 
+  # DECISION: Prometheus scrapes /metrics/ from the web container every
+  # 15s. web:8005 is the in-container gunicorn port (the same port the
+  # debug-escape host port 8005 maps to). 15s is the smallest scrape
+  # interval that doesn't dominate disk I/O at 7-day retention. Retention
+  # is the prometheus default (15 days) — production should override with
+  # --storage.tsdb.retention.time=30d and provision more disk.
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: echoflow_prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+          pids: 200
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  # DECISION: Grafana reads Prometheus via the auto-provisioned
+  # datasource and loads dashboards from /var/lib/grafana/dashboards
+  # (mounted from docker/grafana/dashboards). GF_SECURITY_ADMIN_PASSWORD
+  # has no default fallback — Grafana itself rejects a missing admin
+  # password in v11.x, which is fail-loud (better than shipping a
+  # well-known admin/admin).
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: echoflow_grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+          pids: 200
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
 # Define persistent storage
 volumes:
   postgres_data:
@@ -586,6 +691,12 @@ volumes:
     # never mounted into web/celery/celery_media. App containers reach it
     # over the network (S3 API) exactly like they'd reach real S3 in prod;
     # there is no separate "local mode" volume-sharing code path anymore.
+  prometheus_data:  # Prometheus TSDB storage. ~50 GB worst-case at 15s
+    # scrape × 7-day retention × ~150 active series. Dev-tier fine.
+  grafana_data:  # Grafana's own storage (users, dashboards metadata, sqlite).
+    # The JSON dashboards themselves are bind-mounted from
+    # docker/grafana/dashboards, so this volume only holds user-managed
+    # state.
 
 # Build-time secrets (Compose >= 2.17 forwards these to BuildKit).
 # hf_token is consumed by the Dockerfile's --mount=type=secret,id=hf_token
