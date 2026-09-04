@@ -2,7 +2,7 @@
 
 ## Overview
 
-**File:** `docker-compose.yml` — 7 services for full stack
+**File:** `docker-compose.yml` — 12 services for full stack
 
 ```mermaid
 graph TB

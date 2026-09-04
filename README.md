@@ -54,37 +54,47 @@ A `robots.txt`-respecting, rate-limited scraper ingests openly-licensed audio fr
 ## Architecture / Tech Stack
 
 ```
-                        ┌───────────────────────────────┐
-                        │       API Gateway (gunicorn)  │
-                        │   Django + Django REST FW     │
-                        └──────┬───────────┬────────────┘
-                               │           │
-                 ┌─────────────▼─────┐   ┌──▼──────────────────┐
-                 │   PostgreSQL 16   │   │   Redis 7            │
-                 │   + pgvector      │   │  • cache (django-redis)│
-                 │  (clips, users,   │   │  • user feed queues   │
-                 │   vectors, HNSW)  │   │  • Celery broker      │
-                 └─────────────┬─────┘   └──┬──────────────────┘
-                               │            │
-                 ┌─────────────▼────────────▼───────────────────┐
-                 │                Celery Workers                │
-                 │  ┌─────────────┬──────────────┬────────────┐  │
-                 │  │ default     │ fast_feed    │ heavy_media│  │
-                 │  │ worker      │ (feed refill)│ (HLS/AI)   │  │
-                 │  └─────────────┴──────────────┴────────────┘  │
-                 │  Celery Beat ── periodic jobs (metrics,       │
-                 │  long-term vector evolution)                  │
-                 └───────────────────────────────────────────────┘
+                        ┌──────────────────────────────────────────┐
+                        │  nginx 1.27  (TLS terminator)           │
+                        │  :80 → :443 redirect                     │
+                        │  :443 (HTTPS) → Django                   │
+                        │  :9443 (HTTPS) → MinIO (HLS segments)    │
+                        └──────┬────────────────────┬──────────────┘
+                               │ HTTP               │ HTTP
+                  ┌────────────▼─────────┐ ┌────────▼─────────────┐
+                  │  gunicorn (Django)   │ │   MinIO (S3)         │
+                  │  + DRF + JWT         │ │  hls/  public-read   │
+                  │  + Prometheus /metrics│ │  uploads/ private    │
+                  └──────┬────────┬──────┘ └──────────────────────┘
+                         │        │
+              ┌──────────▼───┐ ┌──▼──────────────────┐
+              │ PostgreSQL 16│ │   Redis 7            │
+              │  + pgvector  │ │  • cache (django-redis)│
+              │  (clips,     │ │  • user feed queues   │
+              │   users,     │ │  • Celery broker      │
+              │   HNSW idx)  │ │  • telemetry stream   │
+              └──────────────┘ └──────────┬──────────┘
+                                          │
+              ┌───────────────────────────▼────────────────────┐
+              │                Celery Workers                   │
+              │  ┌─────────────┬──────────────┬──────────────┐  │
+              │  │ default     │ fast_feed    │ heavy_media  │  │
+              │  │ worker      │ (feed refill)│ (HLS / AI)   │  │
+              │  └─────────────┴──────────────┴──────────────┘  │
+              │  Celery Beat ── periodic jobs (metrics,         │
+              │  vector evolution, counter flush)               │
+              └─────────────────────────────────────────────────┘
 ```
 
-**Backend:** Django 5 / DRF · **API auth:** JWT (SimpleJWT, access + refresh) · **DB:** PostgreSQL 16 + pgvector (HNSW ANN indexes) · **Cache/Queue:** Redis 7 · **Async:** Celery + Celery Beat · **Media:** FFmpeg HLS transcoding · **ML:** faster-whisper, sentence-transformers, librosa, keybert · **Serving:** gunicorn, WhiteNoise
+**Backend:** Django 5 / DRF · **API auth:** JWT (SimpleJWT, access + refresh) · **DB:** PostgreSQL 16 + pgvector (HNSW ANN indexes) · **Cache/Queue:** Redis 7 · **Async:** Celery + Celery Beat · **Media:** FFmpeg HLS transcoding · **ML:** faster-whisper, sentence-transformers, librosa, keybert · **Serving:** gunicorn, WhiteNoise · **TLS:** nginx 1.27 (`:80` redirect, `:443` Django, `:9443` MinIO)
 
 ### Data Flow
-1. **Upload** → `POST /clips/` creates an `AudioClip` in `processing` status and enqueues `process_audio_to_hls` via `transaction.on_commit`.
-2. **Process** → Celery (heavy_media queue) extracts acoustic features, transcribes, embeds, tags, and transcodes to ABR HLS. Status flips to `ready`.
-3. **Serve feed** → `GET /feed/` pops clip IDs from the user's Redis feed queue; the queue is refilled by the `fast_feed` worker using vector/composite scoring.
-4. **Engage** → likes/shares/telemetry are recorded as `UserInteraction` rows, incrementing denormalized counters via `F()` expressions.
-5. **Evolve** → Celery Beat periodically recalculates `engagement_velocity`, `avg_completion_rate`, and users' long-term preference vectors.
+1. **TLS termination** — every client request enters through `nginx:443`, which terminates TLS, sets `X-Forwarded-Proto: https`, and forwards plain HTTP to gunicorn (`web:8000`). `nginx:9443` serves browser HLS segments over HTTPS (mixed-content safety).
+2. **Upload** → `POST /clips/` creates an `AudioClip` in `processing` status and enqueues `process_audio_to_hls` via `transaction.on_commit`.
+3. **Process** → Celery (heavy_media queue) extracts acoustic features, transcribes, embeds, tags, and transcodes to ABR HLS. Status flips to `ready`.
+4. **Serve feed** → `GET /feed/` pops clip IDs from the user's Redis feed queue; the queue is refilled by the `fast_feed` worker using vector/composite scoring.
+5. **Engage** → likes/shares/telemetry are recorded as `UserInteraction` rows, incrementing denormalized counters via `F()` expressions.
+6. **Evolve** → Celery Beat periodically recalculates `engagement_velocity`, `avg_completion_rate`, and users' long-term preference vectors.
 
 ## Backend Setup
 
@@ -202,8 +212,19 @@ Natural next steps that follow directly from the existing architecture:
 
 ---
 
-**Stack at a glance:** `Django 5` · `DRF` · `PostgreSQL + pgvector` · `Redis` · `Celery` · `FFmpeg/HLS` · `faster-whisper` · `sentence-transformers` · `librosa` · `Docker Compose`
+## HTTPS / TLS
+Every external request enters through an `nginx:1.27-alpine` reverse proxy that terminates TLS. Three listeners:
+- **`:80`** — permanent 301 redirect to `https://` (no plaintext responses leave the edge).
+- **`:443`** — TLS 1.2/1.3, HSTS 1-year+includeSubDomains+preload, proxies to gunicorn with `X-Forwarded-Proto: https` (so Django's `SECURE_SSL_REDIRECT` and `Secure` cookie flag activate).
+- **`:9443`** — TLS in front of MinIO so `hls.js` can fetch segments over HTTPS without tripping the browser's mixed-content blocker.
+
+The cert + key live in `docker/certs/` and are bind-mounted read-only into the nginx container — they never enter the app image, so cert renewal never requires a web-container rebuild. Dev uses a self-signed cert; production swaps in Let's Encrypt material and runs `docker compose exec nginx nginx -s reload`.
+
+Full design: [docs/EXPLAIN/docker/05-https-tls-termination.md](docs/EXPLAIN/docker/05-https-tls-termination.md). Release checklist (12 sections covering certs, HSTS hardening, nginx hardening, runbooks, compliance): [docs/EXPLAIN/docker/06-https-production-readiness.md](docs/EXPLAIN/docker/06-https-production-readiness.md). Test coverage: 32 tests in `backend/app/tests/test_https_termination.py`.
+
+---
+
+**Stack at a glance:** `Django 5` · `DRF` · `PostgreSQL + pgvector` · `Redis` · `Celery` · `FFmpeg/HLS` · `faster-whisper` · `sentence-transformers` · `librosa` · `nginx 1.27 (TLS terminator)` · `Docker Compose` (12 services: db, pgbouncer, redis_broker, redis_cache, minio, minio-init, nginx, web, celery, celery_feed, celery_media, celery_beat)
 
 ## Storage (MinIO / S3-compatible)
-Derived HLS streams live in object storage (MinIO locally / S3 in prod) with the `hls/` prefix public-read for multi-file playback; original uploads (`uploads/`) stay private via signed URLs. Full architecture, failure analysis, and verification scripts are documented in `docs/minio-s3-architecture.md`.
-# Echo-Flow
+Derived HLS streams live in object storage (MinIO locally / S3 in prod) with the `hls/` prefix public-read for multi-file playback; original uploads (`uploads/`) stay private via signed URLs. The public `hls/` endpoint is served over HTTPS via nginx `:9443` (see [docs/EXPLAIN/docker/05-https-tls-termination.md](docs/EXPLAIN/docker/05-https-tls-termination.md)). Full architecture, failure analysis, and verification scripts are documented in `docs/minio-s3-architecture.md`.

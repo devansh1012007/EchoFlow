@@ -71,9 +71,11 @@ This directory contains comprehensive, code-grounded technical documentation for
 
 ### Docker & Deployment
 - [01-multi-stage-dockerfile.md](docker/01-multi-stage-dockerfile.md) — Build stages, wheelhouse, secret handling
-- [02-docker-compose.md](docker/02-docker-compose.md) — 7 services, health checks, resource limits
+- [02-docker-compose.md](docker/02-docker-compose.md) — 12 services (see discrepancy note in file), health checks, resource limits — **NOTE: original doc describes 7 services; current compose has 12**
 - [03-environment-variables.md](docker/03-environment-variables.md) — Required vars, dev vs prod differences
 - [04-gunicorn-wait-for-db.md](docker/04-gunicorn-wait-for-db.md) — Preload app, post_fork connection reset, DB polling
+- [05-https-tls-termination.md](docker/05-https-tls-termination.md) — nginx TLS terminator: why, how, pros, cons, failure modes (added 2026-09-04)
+- [06-https-production-readiness.md](docker/06-https-production-readiness.md) — 12-section release checklist for HTTPS deployment (added 2026-09-04)
 
 ### Testing & Observability
 - [01-current-state.md](testing/01-current-state.md) — Existing tests, missing test framework, no CI/CD
