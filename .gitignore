@@ -12,37 +12,6 @@ backend/media
 /Startup_related_docs
 /Seed_db_for_testing
 *.vscode
-AGENTS.md
-/wheelhouse
-/wheelhouse2
-/wheelhouse3
-/wheelhouse4-EF
-/.cache
-/cache
-/cache/pip
-/--default-timeout=120
-*.venv
-/frontend/node_modules
-/sample_frontend
-*.vite
-backend/media/
-/frontend/sample_frontend/node_modules
---- .gitignore (原始)
-*.env
-.env
-/hidden folder
-backend/media
-/pycache
-*.log
-/staticfiles
-/backend/staticfiles
-*.db
-**/__pycache__/
-*.pyc
-/Startup_related_docs
-/Seed_db_for_testing
-*.vscode
-AGENTS.md
 /wheelhouse
 /wheelhouse2
 /wheelhouse3
@@ -58,14 +27,12 @@ AGENTS.md
 backend/media/
 /frontend/sample_frontend/node_modules
 
-
-+++ .gitignore (修改后)
 # Docker specific
 .dockerenv
 .dockerinit
 *.dockerignore
 
-# Environment variables
+# Environment variables (allow committed .env.example / env.example as templates)
 .env
 .env.local
 .env.*
@@ -93,8 +60,6 @@ lost+found
 # IDE specific
 .vscode/
 .idea/
-*.swp
-*.swo
 
 # Python
 __pycache__/
@@ -320,6 +285,7 @@ captures/
 .julia/
 .julia_scratchspaces/
 .julia_artifacts/
+.julia_organizations/
 
 # Zig
 zig-cache/
@@ -328,4 +294,5 @@ zig-out/
 # Julia specific directories
 julia-*/
 
+# Local developer scripts (not part of the app)
 /claude-diagnose.sh
