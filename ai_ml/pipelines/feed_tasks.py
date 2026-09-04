@@ -145,7 +145,7 @@ def refill_user_feed(self, user_id, count: int = 50):
     retry_backoff=True,
 )
 def rebuild_global_exploit_pool(self):
-    """Rebuild the global clip:candidates:exploit ZSET. Beat every 5 min."""
+    """Rebuild the global feed:exploit_pool ZSET. Beat every 5 min."""
     from backend.app.services.feed_pool import rebuild_global_exploit_pool as _rebuild
     try:
         n = _rebuild()

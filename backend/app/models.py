@@ -166,23 +166,23 @@ class UserInteraction(models.Model):
         indexes = [models.Index(fields=['user', 'interaction_type'])]
 
     def save(self, *args, **kwargs):
-        # N2 fix: the previous code did the F() counter update OUTSIDE the
-        # transaction.atomic() block, opening a race window between
-        # releasing the row lock and writing the counter. Two concurrent
-        # toggle-like requests for the same (user, clip) could each read
-        # the old is_active=True and each bump the counter, double-counting.
-        # The fix is to wrap the entire read-decide-write sequence in one
-        # transaction.atomic() block. The F() UPDATE is row-atomic at the
-        # DB level; we keep it inside the atomic block to document the
-        # single-unit-of-work contract.
+        # Event-driven metrics pipeline (Group B item 9, completed
+        # 2026-09). The legacy F() counter side-effect on
+        # AudioClip.likes/shares/skips has been removed; the
+        # flush_counters_to_pg task is the only path from Redis to
+        # Postgres for the denormalized counters. This save() now
+        # only does:
         #
-        # Group B item 9: this is the LEGACY path. The architectural
-        # fix is in backend.app.services.counter_store (Redis INCRBY +
-        # batched flusher). During Phase 1 of the rollout, the F() and
-        # the Redis path both run (dual-write). When
-        # ECHOFLOW_DUAL_WRITE_COUNTERS=False is set in compose env, the
-        # F() is bypassed here and the flusher becomes the only path.
-        # Phase 3 (post-rollout) removes this code entirely.
+        #   1. Lock the UserInteraction row to resolve concurrent
+        #      toggle-like requests without double-counting the
+        #      Redis INCRBY delta (N2 fix preserved).
+        #   2. Compute increment_val from the state-change diff.
+        #   3. Fire the counter_store.increment() Redis write
+        #      (fire-and-forget; logged at DEBUG on failure).
+        #
+        # The check_constraint negative-floor and the
+        # atomic-block boundary stay; the F() UPDATE on
+        # AudioClip is gone.
         is_new = self._state.adding
         state_changed = False
         increment_val = 0
@@ -193,7 +193,8 @@ class UserInteraction(models.Model):
                 state_changed = True
                 increment_val = 1 if self.is_active else 0
             else:
-                # Lock the row to prevent concurrent saves from double-counting
+                # Lock the row to prevent concurrent saves from
+                # double-counting the Redis INCRBY.
                 old_instance = UserInteraction.objects.select_for_update().get(pk=self.pk)
                 if old_instance.is_active != self.is_active:
                     state_changed = True
@@ -201,12 +202,6 @@ class UserInteraction(models.Model):
 
             super().save(*args, **kwargs)
 
-            # Group B item 9: write to Redis counter store ALWAYS
-            # (Phase 1 and Phase 2). In Phase 1 the F() also runs
-            # (dual-write). In Phase 2 the F() is bypassed via the
-            # dual_write_enabled() check below, and only the Redis
-            # counter advances. The flusher moves deltas to Postgres
-            # once per beat.
             if state_changed and increment_val != 0:
                 from .services import counter_store
                 _field_map = {'like': 'likes', 'share': 'shares', 'skip': 'skips'}
@@ -218,23 +213,11 @@ class UserInteraction(models.Model):
                         )
                     except Exception as exc:
                         # SECURITY: never let a metrics/counter hook
-                        # break the user-facing write. The counter is
-                        # observability; the F() (when dual-write is
-                        # on) is the source of truth.
+                        # break the user-facing write. The counter
+                        # is observability; losing a single sample
+                        # is acceptable and the flusher will
+                        # reconcile on the next beat.
                         logger.debug(
                             "counter_store.increment failed for %s/%s: %s",
                             self.clip.pk, counter_type, exc,
                         )
-
-                # Phase 2 of the Group B item 9 rollout: if the env
-                # flag is set, skip the F() update. The flusher is
-                # the source of truth. (Phase 1 default: F() runs
-                # alongside Redis INCRBY; Phase 3 will remove this
-                # whole block.)
-                if not counter_store.dual_write_enabled():
-                    return
-
-                if counter_type:
-                    AudioClip.objects.filter(pk=self.clip.pk).update(
-                        **{counter_type: F(counter_type) + increment_val}
-                    )

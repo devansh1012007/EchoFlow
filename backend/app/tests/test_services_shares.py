@@ -1,27 +1,38 @@
 """Service-layer tests for backend.app.services.shares.
 
 send_share must atomically:
-  1. Bump AudioClip.shares (via UserInteraction(type='share') save())
+  1. Bump AudioClip.shares via the Redis INCRBY path
+     (UserInteraction(type='share') save() -> counter_store.increment)
   2. Create a ShareEvent row in the recipient's inbox
+
+The flush_counters_to_pg task applies the Redis delta to
+AudioClip.shares in a periodic batch. The synchronous path no
+longer mutates the AudioClip row.
 """
 import pytest
 
 from backend.app.models import ShareEvent
 from backend.app.services import shares as shares_svc
+from backend.app.services import counter_store
 
 
 pytestmark = pytest.mark.django_db
 
 
 class TestSendShare:
-    def test_creates_shareevent_and_bumps_counter(self, user, other_user, ready_clip):
+    def test_creates_shareevent_and_increments_redis(self, user, other_user, ready_clip):
+        counter_store._reset_backend_for_tests()
+
         shares_svc.send_share(sender=user, clip=ready_clip, receiver=other_user)
 
         assert ShareEvent.objects.filter(
             sender=user, receiver=other_user, clip=ready_clip,
         ).exists()
+        # AudioClip.shares is NOT bumped synchronously anymore;
+        # the counter advance lives in Redis until the flusher runs.
         ready_clip.refresh_from_db()
-        assert ready_clip.shares == 1
+        drained = counter_store.drain()
+        assert drained['counters'][str(ready_clip.id)] == {'shares': 1}
 
     def test_two_shares_create_two_inbox_events(self, user, other_user, ready_clip):
         shares_svc.send_share(sender=user, clip=ready_clip, receiver=other_user)

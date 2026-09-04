@@ -5,7 +5,7 @@ every queue-empty refill. At 10K concurrent users, that's ~83
 SQL/sec on the primary. This module replaces that pattern with
 pre-computed Redis sorted sets:
 
-  * `clip:candidates:exploit`         — global top-N by composite
+  * `feed:exploit_pool`               — global top-N by composite
     score, scored against a global-average user vector. Refreshed
     every 5 minutes.
   * `user:{id}:candidates:explore`    — per-user top-N by composite
@@ -17,6 +17,13 @@ instead of a SQL query. Cold-start / Redis-outage falls back to the
 on-demand SQL path with a 200ms budget.
 
 Design doc: `docs/EXPLAIN/recommendation/03-feed-pre-computation.md`.
+
+Namespace note: the global pool key was renamed from
+`clip:candidates:exploit` to `feed:exploit_pool` so the
+`counter_store` keyspace (`clip:<uuid>:<type>` and
+`clip:<uuid>:user:<id>:completion_*`) is no longer sharing a
+prefix with the feed-pool ZSET. A future migration of the
+counter-store drain to SCAN (instead of Lua KEYS) is now safe.
 """
 from __future__ import annotations
 
@@ -37,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 # Redis keys
-GLOBAL_POOL_KEY = 'clip:candidates:exploit'
+GLOBAL_POOL_KEY = 'feed:exploit_pool'
 
 
 def user_pool_key(user_id) -> str:
@@ -120,7 +127,7 @@ def _compute_global_average_user_vector() -> tuple[Optional[list], Optional[list
 
 
 def rebuild_global_exploit_pool() -> int:
-    """Rebuild the global `clip:candidates:exploit` ZSET.
+    """Rebuild the global `feed:exploit_pool` ZSET.
 
     Returns the number of members written. Called by Celery Beat
     every 5 minutes.

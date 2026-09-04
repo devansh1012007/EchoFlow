@@ -186,11 +186,10 @@ class _RedisBackend:
             _, clip_id, counter_type = parts
             if counter_type not in SIMPLE_COUNTER_TYPES:
                 # Unknown key under our prefix; skip (defense-in-depth
-                # for namespace collision; today the only other writer
-                # is services/feed_pool.py which uses a different
-                # key — clip:candidates:exploit — that is not a
-                # STRING, but if a future module introduces a STRING
-                # under clip: it will land here).
+                # for namespace collision. The feed-pool ZSET
+                # (`feed:exploit_pool`, formerly `clip:candidates:exploit`)
+                # used to live under this prefix but was renamed so the
+                # counter_store keyspace is no longer shared.
                 continue
             counters.setdefault(clip_id, {})[counter_type] = int(value)
 

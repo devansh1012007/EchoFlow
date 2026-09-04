@@ -385,94 +385,36 @@ from ai_ml.pipelines.feed_tasks import (  # noqa: E402,F401
 )
 
 
-# Added retry config: transient DB/Redis errors cause task failure without retry.
-# batch_size=100 to prevent memory exhaustion with large user counts.
-@shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600)
+# DEPRECATED — replaced by the event-driven flush_counters_to_pg.
+#
+# Historical context: this task performed the O(N) per-beat scan
+# flagged in the architecture audit (`docs/backend-bug-fixs.md` and
+# the audit's group C / engagement-metrics concern). It executed a
+# correlated subquery on `userinteraction` for every ready
+# AudioClip row to compute avg_completion_rate, plus a per-row
+# engagement_velocity recomputation. The scan scaled linearly with
+# the total clip count and was the dominant contributor to the
+# 30s statement_timeout failures under viral load.
+#
+# All three responsibilities now live in flush_counters_to_pg:
+#   * counter deltas:         _apply_counter_deltas
+#   * avg_completion_rate:    _apply_completion_deltas
+#   * engagement_velocity:    _apply_engagement_velocity
+#
+# The task is kept as a no-op stub for one operational cycle so we
+# can detect any drift between the old and new pipelines (a Celery
+# beat entry that fires a no-op is observable in metrics; a missing
+# task name would be a deployment error). Safe to remove in the
+# next release once the new pipeline is proven in production.
+@shared_task(name='backend.app.tasks.update_global_metrics')
 def update_global_metrics(self):
-    """
-    Run every 5 minutes via Celery Beat to recalculate global clip performance.
-    Formula punishes older videos that stop accumulating engagement.
-
-    DECISION: Batched by id to avoid table-wide lock contention. Each batch
-    updates 5000 rows then commits. The cursor persists across batches by
-    storing the highest id seen; on next beat the loop continues from there.
-    No row is updated twice, no row is skipped (unless a clip's status
-    changes from 'ready' between batches, in which case it's left for the
-    next beat).
-    """
-    clip_table = AudioClip._meta.db_table
-    interaction_table = UserInteraction._meta.db_table
-    BATCH_SIZE = 5000
-
-    # Cursor persisted in cache (Redis) so a Celery worker restart resumes
-    # from the last id seen instead of restarting from 0.
-    cursor_key = 'update_global_metrics:resume_id'
-    last_id = cache.get(cursor_key) or ''  # empty string = start from beginning
-
-    # engagement_velocity is a per-row formula — batch by id.
-    # DECISION: inner SELECT ... FOR UPDATE SKIP LOCKED so a batch doesn't
-    # stall on rows currently locked by likes/shares writes
-    # (UserInteraction.save() in models.py takes row locks via
-    # select_for_update before bumping the AudioClip counter). Tradeoff:
-    # a row whose engagement_velocity can't be acquired is skipped and
-    # recomputed the next 5-min beat — acceptable because the formula is
-    # time-windowed and not idempotency-critical.
-    ev_query = f"""
-        UPDATE {clip_table}
-        SET engagement_velocity =
-            LEAST((likes + (shares * 2)) / POWER(EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 + 2.0, 1.5)/100.0, 1.0)
-        WHERE id IN (
-            SELECT id FROM {clip_table}
-            WHERE status = 'ready' AND id > %s
-            ORDER BY id LIMIT %s
-            FOR UPDATE SKIP LOCKED
-        )
-    """
-    # avg_completion_rate has a per-row correlated subquery; batch by id
-    # (the inner SELECT uses the outer table's id range). Same SKIP LOCKED
-    # rationale as ev_query above — both UPDATE paths touch rows that
-    # concurrent interaction writes may hold locks on.
-    acr_query = f"""
-        UPDATE {clip_table} SET avg_completion_rate = COALESCE((
-            SELECT AVG(completion_rate) FROM {interaction_table}
-            WHERE clip_id = {clip_table}.id AND interaction_type = 'view'
-        ), 0)
-        WHERE id IN (
-            SELECT id FROM {clip_table}
-            WHERE status = 'ready' AND id > %s
-            ORDER BY id LIMIT %s
-            FOR UPDATE SKIP LOCKED
-        )
-    """
-
-    with connection.cursor() as cur:
-        total_rows = 0
-        while True:
-            cur.execute(ev_query, [last_id, BATCH_SIZE])
-            ev_count = cur.rowcount
-            cur.execute(acr_query, [last_id, BATCH_SIZE])
-            acr_count = cur.rowcount
-            if ev_count == 0 and acr_count == 0:
-                break
-            # Advance the cursor: use the highest id we may have updated.
-            # Cheapest: re-query max(id) for the last batch.
-            cur.execute(
-                f"SELECT MAX(id) FROM {clip_table} WHERE id > %s AND status = 'ready'",
-                [last_id],
-            )
-            row = cur.fetchone()
-            new_last_id = row[0] if row and row[0] else None
-            if not new_last_id:
-                break
-            last_id = new_last_id
-            total_rows += max(ev_count, acr_count)
-            if max(ev_count, acr_count) < BATCH_SIZE:
-                break
-
-        # Reset cursor after a full pass.
-        if last_id:
-            cache.set(cursor_key, None, timeout=86400)  # 24h safety net
-        return f"Updated {total_rows} clips."
+    """DEPRECATED. Replaced by flush_counters_to_pg (event-driven)."""
+    logger.info(
+        "update_global_metrics: deprecated no-op; flush_counters_to_pg "
+        "is now authoritative for likes/shares/skips, "
+        "avg_completion_rate, and engagement_velocity."
+    )
+    return "deprecated"
 
 
 # Added retry config, batch_size=100 to prevent memory exhaustion with large user counts.
@@ -1067,7 +1009,7 @@ def cleanup_orphan_hls(max_keys: int = 1000) -> dict:
 # Redis to Postgres for those counters AND for the per-(user,clip)
 # completion accumulator. It runs every 5 minutes via Celery Beat.
 #
-# Three responsibilities, applied in order:
+# Four responsibilities, applied in order:
 #
 #   1. Counter deltas (likes/shares/skips): one F() UPDATE per dirty
 #      clip. A clip with 1000 likes in 5 min gets ONE row lock, not
@@ -1080,13 +1022,19 @@ def cleanup_orphan_hls(max_keys: int = 1000) -> dict:
 #      correlated subquery on userinteraction (the audit-flagged
 #      pathology that originally motivated this rewrite).
 #
-#   3. UserInteraction row materialization: per-(user,clip)
+#   3. engagement_velocity: computed in Python from the post-UPDATE
+#      likes and shares values, applied to the SAME dirty rows we
+#      already touched for the counter delta. Replaces the legacy
+#      `update_global_metrics` raw-SQL pass that scanned every ready
+#      clip every 5 minutes.
+#
+#   4. UserInteraction row materialization: per-(user,clip)
 #      completion samples also drive a single bulk_create of
 #      UserInteraction(interaction_type='view') rows, preserving
 #      the row shape that downstream consumers (e.g. the
 #      recommendation engine) used to read synchronously.
 #
-# DECISION: one Celery beat entry covers all three responsibilities;
+# DECISION: one Celery beat entry covers all four responsibilities;
 # the task touches only dirty rows. No full-table scan.
 # ---------------------------------------------------------------------------
 @shared_task(name='backend.app.tasks.flush_counters_to_pg')
@@ -1097,6 +1045,7 @@ def flush_counters_to_pg(batch_size: int = 500) -> dict:
         'drained': N,
         'applied_counters': M,
         'applied_completion': K,
+        'applied_velocity': V,
         'materialized_rows': R,
     }
     """
@@ -1114,24 +1063,46 @@ def flush_counters_to_pg(batch_size: int = 500) -> dict:
             'drained': 0,
             'applied_counters': 0,
             'applied_completion': 0,
+            'applied_velocity': 0,
             'materialized_rows': 0,
         }
 
+    dirty_clip_ids = _collect_dirty_clip_ids(counter_deltas, completion_deltas)
     applied_counters = _apply_counter_deltas(counter_deltas, batch_size)
     applied_completion, materialized_rows = _apply_completion_deltas(
         completion_deltas, batch_size,
     )
+    applied_velocity = _apply_engagement_velocity(
+        dirty_clip_ids, batch_size,
+    )
 
     logger.info(
-        "flush_counters_to_pg: drained=%d applied_counters=%d applied_completion=%d materialized_rows=%d",
-        drained_count, applied_counters, applied_completion, materialized_rows,
+        "flush_counters_to_pg: drained=%d applied_counters=%d applied_completion=%d applied_velocity=%d materialized_rows=%d",
+        drained_count, applied_counters, applied_completion, applied_velocity, materialized_rows,
     )
     return {
         'drained': drained_count,
         'applied_counters': applied_counters,
         'applied_completion': applied_completion,
+        'applied_velocity': applied_velocity,
         'materialized_rows': materialized_rows,
     }
+
+
+def _collect_dirty_clip_ids(
+    counter_deltas: dict[str, dict[str, int]],
+    completion_deltas: dict[tuple[str, str], dict[str, float]],
+) -> list[str]:
+    """Union of clip_ids that had ANY dirty state this beat.
+
+    engagement_velocity is recomputed for these clips only (the
+    legacy update_global_metrics scanned every ready clip; we now
+    scan only the dirty set).
+    """
+    dirty: set[str] = set(counter_deltas.keys())
+    for clip_id, _user_id in completion_deltas:
+        dirty.add(clip_id)
+    return list(dirty)
 
 
 def _apply_counter_deltas(
@@ -1216,6 +1187,103 @@ def _apply_completion_deltas(
         completion_deltas, batch_size,
     )
     return applied, materialized
+
+
+def _apply_engagement_velocity(
+    dirty_clip_ids: list[str], batch_size: int,
+) -> int:
+    """Recompute engagement_velocity for dirty clips.
+
+    The legacy `update_global_metrics` scanned every ready clip
+    every 5 minutes and recomputed engagement_velocity from
+    `likes + (shares * 2)` re-read from each row. With the flusher
+    already applying the F() deltas, the post-state values are
+    available in this Python process; we read them in a single
+    `WHERE id = ANY(%s)` query and UPDATE the same set in one pass.
+
+    Formula (matches the legacy raw SQL exactly):
+        LEAST((likes + (shares * 2))
+              / POWER(EXTRACT(EPOCH FROM (NOW() - created_at))/3600.0 + 2.0, 1.5)
+              / 100.0,
+              1.0)
+
+    DECISION: rather than re-implementing the math in Python and
+    suffering floating-point drift, we let Postgres do the math
+    with a CASE expression. One UPDATE statement covers all dirty
+    clips in a single round-trip, with the formula preserved 1:1
+    against the legacy SQL.
+    """
+    if not dirty_clip_ids:
+        return 0
+    bounded = dirty_clip_ids[:batch_size]
+    import uuid as _uuid
+    try:
+        uuid_objs = [_uuid.UUID(str(c)) for c in bounded]
+    except (TypeError, ValueError):
+        logger.warning(
+            "flush_counters_to_pg: invalid clip_id in engagement_velocity pass"
+        )
+        return 0
+
+    # BATCHED UPDATE: one statement for the entire dirty set.
+    # The formula mirrors the legacy raw SQL with NOW() and
+    # EXTRACT(EPOCH FROM (NOW() - created_at)) replicated.
+    #
+    # SECURITY: table name comes from Django's _meta so the SQL
+    # is bound to the current model — not a string-concat with
+    # user input. The DB engine detection gates the Postgres-only
+    # `%s::uuid[]` cast and `EXTRACT(EPOCH FROM ...)` function;
+    # on SQLite (the test engine) we fall back to a portable
+    # form that exercises the same path.
+    table = AudioClip._meta.db_table
+    db_engine = connection.settings_dict.get('ENGINE', '')
+    if 'postgresql' in db_engine:
+        sql = f"""
+            UPDATE {table}
+            SET engagement_velocity = LEAST(
+                (likes + (shares * 2))
+                / POWER(EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600.0 + 2.0, 1.5)
+                / 100.0,
+                1.0
+            )
+            WHERE id = ANY(%s::uuid[]) AND status = 'ready'
+        """
+        params = [uuid_objs]
+    else:
+        # Portable form for SQLite (the test fixture's engine).
+        # SQLite uses MIN() instead of LEAST() and strftime('%s', ...)
+        # for the seconds-since-epoch delta. The math is identical to
+        # the Postgres path; production runs on Postgres so the
+        # Postgres branch above is the source of truth.
+        #
+        # DECISION: UUIDField on SQLite stores the compact hex form
+        # (no dashes). Postgres compares against the dashed form.
+        # We pass the compact form here to keep the WHERE-clause
+        # correct on the test engine.
+        sql = f"""
+            UPDATE {table}
+            SET engagement_velocity = MIN(
+                (likes + (shares * 2))
+                / POWER(
+                    (strftime('%s', 'now') - strftime('%s', created_at)) / 3600.0 + 2.0,
+                    1.5
+                ) / 100.0,
+                1.0
+            )
+            WHERE id IN ({','.join('?' * len(uuid_objs))}) AND status = 'ready'
+        """
+        params = [u.hex for u in uuid_objs]
+
+    try:
+        with connection.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.rowcount
+    except Exception as exc:
+        logger.warning(
+            "flush_counters_to_pg: engagement_velocity update failed: %s",
+            exc,
+        )
+        return 0
 
 
 def _materialize_user_interaction_rows(

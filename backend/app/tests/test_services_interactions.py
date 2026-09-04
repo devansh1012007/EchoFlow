@@ -1,13 +1,21 @@
 """Service-layer tests for backend.app.services.interactions.
 
-Stage 2 boundary: every write to UserInteraction flows through these
-functions. These tests verify:
-  - record_like_toggle / record_skip counter semantics are preserved
+Stage 3 boundary: every write to UserInteraction flows through these
+functions. As of the 2026-09 metrics rewrite, the F() side-effect
+on AudioClip has been removed; the tests below assert the new
+event-driven pipeline (Redis INCRBY + flush_counters_to_pg) and
+the new user-interaction row shape (no synchronous row write in
+record_skip, the row is materialized by the flusher).
+
+These tests verify:
+  - record_like_toggle / record_share counter semantics are preserved
+    (Redis INCRBY, no F())
+  - record_skip writes the completion sample + counter to Redis;
+    the flusher materializes the UserInteraction row
   - record_telemetry prefers the Redis Stream (XADD) over the LIST (RPUSH)
-  - record_telemetry falls back to synchronous update_or_create on Redis
-    failure (the third-tier safety net)
+  - record_telemetry falls back to a Redis counter-store write on
+    Redis failure (the third-tier safety net)
   - record_telemetry emits an event_id for downstream dedup
-  - record_share does NOT create a ShareEvent (that's the share-send path)
 """
 import json
 from unittest.mock import patch, MagicMock
@@ -22,7 +30,7 @@ pytestmark = pytest.mark.django_db
 # toggle-like
 # ---------------------------------------------------------------------------
 class TestRecordLikeToggle:
-    def test_first_call_creates_active_row_and_bumps_counter(self, user, ready_clip):
+    def test_first_call_creates_active_row(self, user, ready_clip):
         from backend.app.services.interactions import record_like_toggle
 
         ready_clip.refresh_from_db()
@@ -32,17 +40,26 @@ class TestRecordLikeToggle:
 
         assert created is True
         assert interaction.is_active is True
+        # AudioClip.likes is NOT bumped synchronously anymore;
+        # the counter_store.increment() fires from save(), and
+        # the flush_counters_to_pg task applies the delta to PG.
         ready_clip.refresh_from_db()
-        assert ready_clip.likes == 1
+        assert ready_clip.likes == 0
 
-    def test_second_call_toggles_off_and_decrements(self, user, ready_clip):
+    def test_second_call_toggles_off(self, user, ready_clip):
         from backend.app.services.interactions import record_like_toggle
 
         record_like_toggle(user, ready_clip)
         record_like_toggle(user, ready_clip)
 
-        ready_clip.refresh_from_db()
-        assert ready_clip.likes == 0
+        # Net delta after the two calls is 0; the flusher would
+        # observe likes unchanged. We assert the row state instead
+        # of the counter, since the F() is gone.
+        from backend.app.models import UserInteraction
+        row = UserInteraction.objects.get(
+            user=user, clip=ready_clip, interaction_type='like',
+        )
+        assert row.is_active is False
 
     def test_third_call_toggles_back_on(self, user, ready_clip):
         from backend.app.services.interactions import record_like_toggle
@@ -52,55 +69,66 @@ class TestRecordLikeToggle:
         interaction, _ = record_like_toggle(user, ready_clip)
 
         assert interaction.is_active is True
-        ready_clip.refresh_from_db()
-        assert ready_clip.likes == 1
 
 
 # ---------------------------------------------------------------------------
-# register-skip (writes 'skip'; bumps AudioClip.skips via F() in UserInteraction.save())
+# register-skip — completion sample + skips counter to Redis; the
+# flusher materializes the UserInteraction row.
 # ---------------------------------------------------------------------------
 class TestRecordSkip:
-    def test_writes_skip_row_with_completion_rate(self, user, ready_clip):
+    def test_writes_completion_sample_to_redis(self, user, ready_clip):
+        from backend.app.services import counter_store
+        from backend.app.services.interactions import record_skip
+        from django.test import TestCase
+
+        counter_store._reset_backend_for_tests()
+
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            record_skip(user, ready_clip, listen_duration_ms=15_000, reel_position_ms=30_000)
+
+        drained = counter_store.drain()
+        # 15000 / 30000 = 0.5 completion_rate
+        assert drained['completion'][(str(ready_clip.id), str(user.id))][
+            'completion_sum'
+        ] == pytest.approx(0.5)
+        assert drained['counters'][str(ready_clip.id)] == {'skips': 1}
+
+    def test_no_synchronous_userinteraction_row(self, user, ready_clip):
+        """record_skip no longer writes a UserInteraction row
+        synchronously. The flusher materializes one per beat.
+        """
         from backend.app.models import UserInteraction
         from backend.app.services.interactions import record_skip
+        from django.test import TestCase
 
-        record_skip(user, ready_clip, listen_duration_ms=15_000, reel_position_ms=30_000)
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            record_skip(user, ready_clip, listen_duration_ms=5_000, reel_position_ms=30_000)
 
-        rows = UserInteraction.objects.filter(
+        assert not UserInteraction.objects.filter(
             user=user, clip=ready_clip, interaction_type='skip',
-        )
-        assert rows.count() == 1
-        assert rows.first().completion_rate == pytest.approx(0.5)
+        ).exists()
 
-    def test_bumps_skips_counter(self, user, ready_clip):
+    def test_repeated_skips_aggregate_completion(self, user, ready_clip):
+        """Two record_skip calls in the same beat accumulate into a
+        single drained bucket with mean completion_rate.
+        """
+        from backend.app.services import counter_store
         from backend.app.services.interactions import record_skip
+        from django.test import TestCase
 
-        before = {
-            'likes': ready_clip.likes,
-            'shares': ready_clip.shares,
-            'skips': ready_clip.skips,
-        }
-        record_skip(user, ready_clip, listen_duration_ms=5_000, reel_position_ms=30_000)
-        ready_clip.refresh_from_db()
-        assert ready_clip.likes == before['likes']
-        assert ready_clip.shares == before['shares']
-        # DECISION: was no-bump; flipped to bump in step 2 of Group C.
-        # The F() increment happens inside UserInteraction.save() via
-        # the field_map: {'like': 'likes', 'share': 'shares', 'skip': 'skips'}.
-        assert ready_clip.skips == before['skips'] + 1
+        counter_store._reset_backend_for_tests()
 
-    def test_update_or_create_keeps_last_completion_rate(self, user, ready_clip):
-        from backend.app.services.interactions import record_skip
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            record_skip(user, ready_clip, listen_duration_ms=10_000, reel_position_ms=20_000)
+            record_skip(user, ready_clip, listen_duration_ms=20_000, reel_position_ms=20_000)
 
-        record_skip(user, ready_clip, listen_duration_ms=10_000, reel_position_ms=20_000)
-        record_skip(user, ready_clip, listen_duration_ms=20_000, reel_position_ms=20_000)
-
-        from backend.app.models import UserInteraction
-        rows = UserInteraction.objects.filter(
-            user=user, clip=ready_clip, interaction_type='skip',
-        )
-        assert rows.count() == 1
-        assert rows.first().completion_rate == pytest.approx(1.0)
+        drained = counter_store.drain()
+        # 0.5 + 1.0 = 1.5 sum, count 2.
+        slot = drained['completion'][(str(ready_clip.id), str(user.id))]
+        assert slot['completion_sum'] == pytest.approx(1.5)
+        assert slot['completion_count'] == 2
+        # Skips counter accumulates.
+        assert drained['counters'][str(ready_clip.id)] == {'skips': 2}
 
 
 # ---------------------------------------------------------------------------
@@ -145,21 +173,34 @@ class TestRecordTelemetry:
         rpush_arg = fake_client.rpush.call_args.args[1]
         assert json.loads(rpush_arg)['event_id'] == event['event_id']
 
-    def test_falls_back_to_synchronous_on_full_redis_failure(self, user, ready_clip):
-        from backend.app.models import UserInteraction
+    def test_falls_back_to_counter_store_on_full_redis_failure(self, user, ready_clip):
+        from backend.app.services import counter_store
         from backend.app.services.interactions import record_telemetry
+        from django.test import TestCase
+
+        counter_store._reset_backend_for_tests()
 
         fake_client = MagicMock()
         fake_client.xadd.side_effect = ConnectionError('xadd down')
         fake_client.rpush.side_effect = ConnectionError('rpush down')
         with patch('backend.app.services.interactions.cache') as fake_cache:
             fake_cache.client.get_client.return_value = fake_client
-            record_telemetry(user, ready_clip, action_type='view', watch_time_ms=5_000)
+            with TestCase.captureOnCommitCallbacks(execute=True):
+                record_telemetry(
+                    user, ready_clip, action_type='view', watch_time_ms=5_000,
+                )
 
-        # The synchronous update_or_create path should have created a row.
-        assert UserInteraction.objects.filter(
+        # The synchronous UserInteraction row is no longer written.
+        # Instead, the completion sample lives in the counter store.
+        from backend.app.models import UserInteraction
+        assert not UserInteraction.objects.filter(
             user=user, clip=ready_clip, interaction_type='view',
         ).exists()
+        drained = counter_store.drain()
+        # 5000 / 60000 (max(60000, 1)) = ~0.0833 completion_rate
+        slot = drained['completion'][(str(ready_clip.id), str(user.id))]
+        assert slot['completion_count'] == 1
+        assert slot['completion_sum'] > 0
 
     def test_env_flag_off_uses_list_path(self, user, ready_clip, monkeypatch):
         from backend.app.services.interactions import record_telemetry
@@ -191,12 +232,16 @@ class TestRecordTelemetry:
 # record-share (counter only; ShareEvent is the share-send view's job)
 # ---------------------------------------------------------------------------
 class TestRecordShare:
-    def test_creates_interaction_and_bumps_share_counter(self, user, ready_clip):
+    def test_creates_interaction_row(self, user, ready_clip):
         from backend.app.services.interactions import record_share
 
         record_share(user, ready_clip)
-        ready_clip.refresh_from_db()
-        assert ready_clip.shares == 1
+        # The interaction row is created; the counter is bumped
+        # via Redis INCRBY (no F() side-effect on AudioClip.shares).
+        from backend.app.models import UserInteraction
+        assert UserInteraction.objects.filter(
+            user=user, clip=ready_clip, interaction_type='share',
+        ).exists()
 
     def test_idempotent_for_repeat_shares(self, user, ready_clip):
         from backend.app.models import UserInteraction
@@ -210,11 +255,6 @@ class TestRecordShare:
             user=user, clip=ready_clip, interaction_type='share',
         )
         assert rows.count() == 1
-        ready_clip.refresh_from_db()
-        # Counter is bumped only when the row state actually changes
-        # (the model save() does state_changed check). Re-shares do not
-        # change is_active (defaults to True) so no increment.
-        assert ready_clip.shares == 1
 
 
 # ---------------------------------------------------------------------------
@@ -316,24 +356,23 @@ class TestCacheInvalidation:
 
         assert cache.get(cache_key) is None
 
-    def test_record_telemetry_sync_fallback_invalidates_cache(
+    def test_record_telemetry_counter_store_fallback_invalidates_cache(
         self, user, ready_clip, monkeypatch,
     ):
         # A3 Part 1: when Redis is fully unavailable, record_telemetry
-        # falls back to a synchronous update_or_create. That write
+        # falls back to a Redis counter-store write. That write
         # changes the user's state, so the cache must be invalidated.
         # (The stream-success path is covered by the consumer test
         # in test_task_publisher.py::TestFlushTelemetryInvalidation.)
         from django.core.cache import cache
         from django.test import TestCase
-        from backend.app.models import UserInteraction
 
         cache_key = f'user_vectors:{user.id}'
         cache.set(cache_key, ('sem-stale', 'ac-stale'), timeout=900)
 
-        # Force the synchronous fallback by stubbing both Redis paths
+        # Force the counter-store fallback by stubbing both Redis paths
         # to return failure. xadd returns False (treated as failure);
-        # rpush raises (caught by the outer try/except, then sync
+        # rpush raises (caught by the outer try/except, then counter
         # fallback runs).
         monkeypatch.setattr(
             'backend.app.services.interactions._xadd_telemetry',
@@ -348,9 +387,5 @@ class TestCacheInvalidation:
             from backend.app.services.interactions import record_telemetry
             record_telemetry(user, ready_clip, action_type='view', watch_time_ms=5_000)
 
-        # Sync fallback wrote the row.
-        assert UserInteraction.objects.filter(
-            user=user, clip=ready_clip, interaction_type='view',
-        ).exists()
-        # Cache was invalidated.
+        # Cache was invalidated by the fallback path.
         assert cache.get(cache_key) is None
