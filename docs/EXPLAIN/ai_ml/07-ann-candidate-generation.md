@@ -43,7 +43,7 @@ composite_query = base_queryset.annotate(
 ).order_by('-composite_score')
 ```
 
-The composite score formula is documented at `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-37` and the weights are fixed by the AI product team:
+The composite score formula is documented at `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-37` and the weights are fixed by the AI product team:
 
 > `composite_score = 0.45 · vector_similarity + 0.30 · avg_completion_rate + 0.25 · engagement_velocity`
 
@@ -103,9 +103,9 @@ HnswIndex(
 | `m` (graph degree) | 16 | 16 |
 | `ef_construction` | 64 | 64 |
 | Operator class | `vector_cosine_ops` | `vector_cosine_ops` |
-| Documented at | `docs/EXPLAIN/ai-ml/02-feature-extraction.md:145-168` | same |
+| Documented at | `docs/EXPLAIN/ai_ml/02-feature-extraction.md:145-168` | same |
 
-The vector-store spec at `docs/EXPLAIN/ai-ml/01-overview.md:103-130` confirms the dimensions and that the **acoustic vector is L2-normalized at write time** (`ai-ml/01-overview.md:113-114`: "Normalize"). The semantic vector from `all-MiniLM-L6-v2` is **already L2-normalized** by the model (sentence-transformers normalize by default; this is documented in the model card and verified by `docs/EXPLAIN/ai-ml/02-feature-extraction.md:119`). Both vectors are safe to use with `vector_cosine_ops` opclass.
+The vector-store spec at `docs/EXPLAIN/ai_ml/01-overview.md:103-130` confirms the dimensions and that the **acoustic vector is L2-normalized at write time** (`ai_ml/01-overview.md:113-114`: "Normalize"). The semantic vector from `all-MiniLM-L6-v2` is **already L2-normalized** by the model (sentence-transformers normalize by default; this is documented in the model card and verified by `docs/EXPLAIN/ai_ml/02-feature-extraction.md:119`). Both vectors are safe to use with `vector_cosine_ops` opclass.
 
 ### 1.5 Goal of this design
 
@@ -197,7 +197,7 @@ It is tempting to fetch top-K by semantic and top-K by acoustic, then merge. **D
 |---|---|---|---|
 | `m` | 16 | Edges per node in the HNSW graph | Standard default; balances recall and memory. 384-dim vectors at m=16 give recall >0.95 at ef_search=40 (pgvector defaults). |
 | `ef_construction` | 64 | Search beam during index build | Higher = better index quality, slower build. 64 is the published default for pgvector and the value chosen in the original migration `0001_initial.py:148,152` (referenced in `docs/event-driven-architecture-plan.md:45`). |
-| `opclasses` | `vector_cosine_ops` | Distance operator class | Matches our use of `CosineDistance`. For inner product, use `vector_ip_ops`; for L2, `vector_l2_ops`. The vectors are L2-normalized at write time (acoustic, see `docs/EXPLAIN/ai-ml/01-overview.md:113-114`; semantic, model default), so cosine is the correct semantic similarity. |
+| `opclasses` | `vector_cosine_ops` | Distance operator class | Matches our use of `CosineDistance`. For inner product, use `vector_ip_ops`; for L2, `vector_l2_ops`. The vectors are L2-normalized at write time (acoustic, see `docs/EXPLAIN/ai_ml/01-overview.md:113-114`; semantic, model default), so cosine is the correct semantic similarity. |
 
 ### 3.2 The `ef_search` parameter
 
@@ -290,7 +290,7 @@ top_n = scored[:N]  # default N=20
 Notes:
 - `sem_dist_lookup` is populated from stage 1's queryset evaluation. The cleanest pattern is to **annotate stage 1 with the semantic distance** (`annotate(sem_dist=CosineDistance('semantic_vector', sem_query))`) and capture `(id, sem_dist)` tuples in a dict so stage 2 doesn't recompute. This is a single distance per row in stage 1's index scan — no extra cost.
 - `CosineDistance('acoustic_vector', ac_query)` in stage 2 is a per-row scan over K rows only, not over the catalog. Postgres has no acoustic HNSW ORDER BY here — the `acoustic_dist` is computed in the heap fetch of the 200-row shortlist. This is `O(K · d_acoustic) = 200 · 128` = 25,600 multiplications, sub-millisecond.
-- The composite formula in §6 matches the formula at `tasks.py:381-386` byte-for-byte. The AI team MUST NOT change the weights without coordinating with the AI product team — they are documented in `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-37`.
+- The composite formula in §6 matches the formula at `tasks.py:381-386` byte-for-byte. The AI team MUST NOT change the weights without coordinating with the AI product team — they are documented in `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-37`.
 
 ### 4.3 The composite score, in PostgreSQL today vs. Python tomorrow
 
@@ -309,7 +309,7 @@ Possible causes: cold-start catalog (scraper is mid-run, only a few hundred clip
 
 **Behavior:** The stage-1 queryset will return fewer than K rows. Stage 2 should re-rank whatever it gets. If zero rows are returned, the endpoint should fall through to the existing `engagement_velocity` fallback (`feed.py:181`). The new code should NOT add new fallback logic — reuse the existing one in the `except` arm of the `try/except` block at `feed.py:167-181`.
 
-The `docs/EXPLAIN/ai-ml/05-cold-start.md` doc (see also `TagsViewSet.initialize_vectors` at `feed.py:189-219`) handles the **user-side** cold start (no `long_term_semantic`); this work item handles the **catalog-side** cold start (no `semantic_vector`). They are independent.
+The `docs/EXPLAIN/ai_ml/05-cold-start.md` doc (see also `TagsViewSet.initialize_vectors` at `feed.py:189-219`) handles the **user-side** cold start (no `long_term_semantic`); this work item handles the **catalog-side** cold start (no `semantic_vector`). They are independent.
 
 ### 5.2 HNSW returns the same clip multiple times
 
@@ -323,7 +323,7 @@ The dedup is one line: `candidates = list(dict.fromkeys(candidate_ids))` preserv
 
 ### 5.3 A candidate's `acoustic_vector` is null
 
-The pipeline writes `acoustic_vector` immediately after `process_audio_to_hls` step 2 (`docs/EXPLAIN/ai-ml/01-overview.md:18-26`). In practice it is set whenever `semantic_vector` is set, because both are written in the same Celery task before `status='ready'`. But the schema permits `null=True` (`models.py:72`), and a defensive code path is required.
+The pipeline writes `acoustic_vector` immediately after `process_audio_to_hls` step 2 (`docs/EXPLAIN/ai_ml/01-overview.md:18-26`). In practice it is set whenever `semantic_vector` is set, because both are written in the same Celery task before `status='ready'`. But the schema permits `null=True` (`models.py:72`), and a defensive code path is required.
 
 **Behavior:** If `ac_dist` is null (because `acoustic_vector` is null), use `ac_dist=1.0` (maximum distance) for that clip. The clip will be ranked by its semantic and engagement components only. This is the **least surprising** fallback because:
 - A null acoustic vector is data-shape noise, not a signal.
@@ -387,7 +387,7 @@ def composite_score(
     engagement_velocity: float,
 ) -> float:
     """
-    Composite recommendation score. See docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-37.
+    Composite recommendation score. See docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-37.
 
     Both cosine distances are in [0, 1] for L2-normalized vectors (we always pass
     normalized vectors from calculate_time_decayed_vectors; the model produces
@@ -490,7 +490,7 @@ def rerank_candidates_numpy(
 
 ### 6.1 The weights are non-negotiable
 
-The weights `0.45 / 0.30 / 0.25` come from the AI product team's documented scoring formula (`docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-37` and `docs/EXPLAIN/recommendation/02-scoring.md` if present). The AI team MUST NOT introduce a config knob for the weights in this work item — there is a separate proposal to make weights per-user/segment configurable (the "Hardcoded weights" row in `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:288`), and that is out of scope here.
+The weights `0.45 / 0.30 / 0.25` come from the AI product team's documented scoring formula (`docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-37` and `docs/EXPLAIN/recommendation/02-scoring.md` if present). The AI team MUST NOT introduce a config knob for the weights in this work item — there is a separate proposal to make weights per-user/segment configurable (the "Hardcoded weights" row in `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:288`), and that is out of scope here.
 
 The `RECOMMENDATION_CANDIDATE_K` knob is a tuning parameter for the **HNSW beam**, not for the ranking formula.
 
@@ -629,7 +629,7 @@ This is the end-to-end sequence the AI team follows. Steps are in dependency ord
 
 1. **Add `RECOMMENDATION_CANDIDATE_K` to `backend/EchoFlow/settings.py`** at the bottom of the file (after line 513, `VERSION = '1.0.0'`):
    ```python
-   # DECISION: Two-stage retrieval parameter. See docs/EXPLAIN/ai-ml/07-ann-candidate-generation.md.
+   # DECISION: Two-stage retrieval parameter. See docs/EXPLAIN/ai_ml/07-ann-candidate-generation.md.
    # Defaults to 200 — balanced recall (>95%) and Python-loop cost (~2ms) for catalogs up to 1M.
    # Override via RECOMMENDATION_CANDIDATE_K env var for A/B tests.
    RECOMMENDATION_CANDIDATE_K = int(os.environ.get('RECOMMENDATION_CANDIDATE_K', '200'))
@@ -710,11 +710,11 @@ This is the end-to-end sequence the AI team follows. Steps are in dependency ord
 
 ### 9.7 Documentation updates
 
-10. **Update `docs/EXPLAIN/ai-ml/04-recommendation-engine.md`** to reference this doc in the "Known Issues & Limitations" table — the row for "Global metrics full-table UPDATE" can be removed and replaced with "ANN candidate generation (moved to two-stage — see [07](../ai-ml/07-ann-candidate-generation.md))".
+10. **Update `docs/EXPLAIN/ai_ml/04-recommendation-engine.md`** to reference this doc in the "Known Issues & Limitations" table — the row for "Global metrics full-table UPDATE" can be removed and replaced with "ANN candidate generation (moved to two-stage — see [07](../ai_ml/07-ann-candidate-generation.md))".
 
 11. **Update `docs/EXPLAIN/recommendation/README.md`** (create if missing) with a section linking to this doc and the related P2.x materialization plans.
 
-12. **Update `docs/unfixed-issues-2026-09-03.md`**: change Group A item 6 from "OPEN" to "FIXED — see `docs/EXPLAIN/ai-ml/07-ann-candidate-generation.md`. Implementation: PR #XXXX." Add a one-paragraph summary of what changed.
+12. **Update `docs/unfixed-issues-2026-09-03.md`**: change Group A item 6 from "OPEN" to "FIXED — see `docs/EXPLAIN/ai_ml/07-ann-candidate-generation.md`. Implementation: PR #XXXX." Add a one-paragraph summary of what changed.
 
 ### 9.8 Migration check
 
@@ -750,9 +750,9 @@ The AI team MUST NOT do the following in this work item. These are explicitly ca
 | Change the HNSW index parameters (`m`, `ef_construction`) | The current `m=16, ef_construction=64` is documented as the appropriate tier for 10K-1M vectors (`docs/EXPLAIN/postgresql/02-vector-indexes.md:191-194`). Rebuilding requires `CREATE INDEX CONCURRENTLY` against a 100K-row table — multi-hour maintenance window. Defer to P3. | `docs/event-driven-architecture-plan.md:675` |
 | Add a Redis candidate pool (`clip:candidates:exploit` sorted set) | This is the P2.2 materialization (`docs/unfixed-issues-2026-09-03.md:204-209`). It is the **next** optimization after this one lands, not part of it. The two-stage in-DB design here is the prerequisite for the Redis pool to make sense. | `docs/unfixed-issues-2026-09-03.md:204-209` |
 | Implement real-time re-ranking based on telemetry | The event-driven architecture plan (`docs/event-driven-architecture-plan.md:521-590`) defines the `event_outbox` table and the consumer groups that would feed a real-time re-ranker. That is P1.4 (outbox) + P2.3 (consumer). Defer. | `docs/event-driven-architecture-plan.md:521-590` |
-| Unify `calculate_time_decayed_vectors` and `calculate_blended_query_vectors` | Documented inconsistency at `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:282-289`. Separate work item; orthogonal to candidate generation. | `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:108-112` |
-| Add per-user/segment configurable weights | `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:288` documents this. Requires a config schema, A/B framework, and a kill-switch. Not part of this PR. | `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:288` |
-| Add MMR or diversity penalty | Filter-bubble mitigation. Orthogonal to retrieval; can be applied as a post-stage-2 rerank. Future work. | `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:289` |
+| Unify `calculate_time_decayed_vectors` and `calculate_blended_query_vectors` | Documented inconsistency at `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:282-289`. Separate work item; orthogonal to candidate generation. | `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:108-112` |
+| Add per-user/segment configurable weights | `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:288` documents this. Requires a config schema, A/B framework, and a kill-switch. Not part of this PR. | `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:288` |
+| Add MMR or diversity penalty | Filter-bubble mitigation. Orthogonal to retrieval; can be applied as a post-stage-2 rerank. Future work. | `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:289` |
 | Build an acoustic-only second pass | The 70% semantic weight in the composite makes acoustic-only retrieval a marginal recall gain. If recall testing shows the bottleneck, add as a follow-up. | This doc, §2.5 |
 
 ---
@@ -786,8 +786,8 @@ If the catalog has 0 ready clips, the stage-1 queryset returns 0 rows. The behav
 
 ### 11.5 Vector normalization
 
-- **Semantic vector (`models.py:71`)**: 384-dim, produced by `sentence-transformers/all-MiniLM-L6-v2`. **L2-normalized at write time** — the model normalizes by default (verified in `docs/EXPLAIN/ai-ml/02-feature-extraction.md:119`).
-- **Acoustic vector (`models.py:72`)**: 128-dim, produced by `librosa` concatenation of MFCC + Chroma + Mel. **L2-normalized at write time** by `extract_acoustic_vector()` (`docs/EXPLAIN/ai-ml/01-overview.md:113-114`).
+- **Semantic vector (`models.py:71`)**: 384-dim, produced by `sentence-transformers/all-MiniLM-L6-v2`. **L2-normalized at write time** — the model normalizes by default (verified in `docs/EXPLAIN/ai_ml/02-feature-extraction.md:119`).
+- **Acoustic vector (`models.py:72`)**: 128-dim, produced by `librosa` concatenation of MFCC + Chroma + Mel. **L2-normalized at write time** by `extract_acoustic_vector()` (`docs/EXPLAIN/ai_ml/01-overview.md:113-114`).
 
 Because both vectors are L2-normalized:
 - `CosineDistance` equals `1.0 - InnerProduct` for them, which is the **fastest** distance computation in pgvector (no normalization required per row).
@@ -917,7 +917,7 @@ These are decisions the AI team should make during implementation. The defaults 
 
 | Reference | Path |
 |---|---|
-| Composite formula spec | `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-37` |
+| Composite formula spec | `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-37` |
 | HNSW index definitions | `backend/app/models.py:83-99` |
 | Current single-stage query (suggestions) | `backend/app/views/feed.py:153-186` |
 | Current single-stage query (refill) | `backend/app/tasks.py:347-456` |

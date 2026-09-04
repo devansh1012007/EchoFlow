@@ -188,7 +188,7 @@ EchoFlow/
 │   ├── scripts/                # Seed scripts (seed_db.py, seed_db2.py)
 │   └── staticfiles/            # collectstatic output (generated)
 ├── frontend/                   # Sample Vite/React client (HLS.js playback)
-├── ai-ml/                      # ML pipeline experiments
+├── ai_ml/                      # ML pipeline experiments
 │   ├── models/                 # Whisper / embedding / KeyBERT / acoustic wrappers
 │   ├── pipelines/              # audio_ingest, cold_start, recommendation
 │   └── eval/                   # feed_metrics, vector_quality

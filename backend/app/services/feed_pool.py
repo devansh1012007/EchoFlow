@@ -31,7 +31,7 @@ from django.db.models import Avg, Count, F, FloatField, ExpressionWrapper
 from pgvector.django import CosineDistance
 
 from ..models import AudioClip, UserInteraction, User
-from ..tasks import calculate_time_decayed_vectors
+from ai_ml.pipelines.recommendation import calculate_time_decayed_vectors
 
 logger = logging.getLogger(__name__)
 

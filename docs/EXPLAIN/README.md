@@ -28,12 +28,12 @@ This directory contains comprehensive, code-grounded technical documentation for
 - [05-pages-components.md](frontend/05-pages-components.md) — Page components, ReelCard, ReelList, and UI flows
 
 ### AI/ML Pipeline
-- [01-overview.md](ai-ml/01-overview.md) — Pipeline stages, models, and integration points
-- [02-feature-extraction.md](ai-ml/02-feature-extraction.md) — Acoustic (librosa) and semantic (sentence-transformers) vectors
-- [03-transcription-tagging.md](ai-ml/03-transcription-tagging.md) — Whisper transcription and KeyBERT tag extraction
-- [04-recommendation-engine.md](ai-ml/04-recommendation-engine.md) — Composite scoring, vector blending, feed mixing
-- [05-cold-start.md](ai-ml/05-cold-start.md) — Tag-based vector bootstrapping for new users
-- [06-ml-models-lazy-loading.md](ai-ml/06-ml-models-lazy-loading.md) — Thread-safe model initialization in Celery workers
+- [01-overview.md](ai_ml/01-overview.md) — Pipeline stages, models, and integration points
+- [02-feature-extraction.md](ai_ml/02-feature-extraction.md) — Acoustic (librosa) and semantic (sentence-transformers) vectors
+- [03-transcription-tagging.md](ai_ml/03-transcription-tagging.md) — Whisper transcription and KeyBERT tag extraction
+- [04-recommendation-engine.md](ai_ml/04-recommendation-engine.md) — Composite scoring, vector blending, feed mixing
+- [05-cold-start.md](ai_ml/05-cold-start.md) — Tag-based vector bootstrapping for new users
+- [06-ml-models-lazy-loading.md](ai_ml/06-ml-models-lazy-loading.md) — Thread-safe model initialization in Celery workers
 
 ### Redis & Celery
 - [01-redis-usage.md](redis-celery/01-redis-usage.md) — Cache, feed queues, broker, and session storage

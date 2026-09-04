@@ -564,7 +564,7 @@ Clips with unknown/unallowed licenses skipped with warning.
 
 **Code references:**
 - `backend/app/views.py:719-799` (TagsViewSet.initialize_vectors)
-- `ai-ml/pipelines/cold_start.py` (stub for future migration)
+- `ai_ml/pipelines/cold_start.py` (stub for future migration)
 
 ---
 

@@ -141,6 +141,12 @@ LABEL org.opencontainers.image.title="echoflow-api" \
 # --chown avoids a full layer-duplicating `chown -R` pass.
 COPY --chown=appuser:appgroup backend/ ./backend/
 COPY --chown=appuser:appgroup manage.py wait_for_db.py gunicorn.conf.py ./
+# The feed recommendation engine lives in /ai_ml/. Required by
+# backend.app.tasks (re-export shim) which does
+# `from ai_ml.pipelines.feed_tasks import refill_user_feed` at
+# Django app-loading time. Without this COPY the production image
+# would crash on first request.
+COPY --chown=appuser:appgroup ai_ml/ ./ai_ml/
 
 # Self-describing liveness for the HTTP role (web is this image's primary
 # deployment). celery/celery_feed share this image but answer queue traffic,
@@ -179,6 +185,7 @@ COPY --from=py-deps-media --chown=appuser:appgroup \
 # Same explicit allowlist as the api stage.
 COPY --chown=appuser:appgroup backend/ ./backend/
 COPY --chown=appuser:appgroup manage.py wait_for_db.py gunicorn.conf.py ./
+COPY --chown=appuser:appgroup ai_ml/ ./ai_ml/
 
 # Worker-role liveness: passes ONLY if THIS container's Celery consumer
 # answers an inspect ping on its own node name (celery@$(hostname)).

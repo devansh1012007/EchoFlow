@@ -1,9 +1,7 @@
 import os
-import math
 import shutil
 import subprocess
 import tempfile
-import random
 import re
 import threading
 import uuid
@@ -361,227 +359,30 @@ def _process_audio_to_hls_impl(self, clip_id, timer):
     # grep and review. Removed.
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True)
-def refill_user_feed(self, user_id, count=50):
-    user = User.objects.get(id=user_id)
-    redis_key = f"user_feed:{user_id}"
-    redis_client = cache.client.get_client()
-
-    # Prevent concurrent refills for the same user (race condition fix)
-    # DECISION: SETNX with 30s expiry prevents double-refill without
-    # blocking indefinitely if a worker dies mid-task.
-    lock_key = f"feed_refill_lock:{user_id}"
-    acquired = redis_client.set(lock_key, "1", nx=True, ex=30)
-    if not acquired:
-        return "Refill already in progress."
-
-    try:
-        if redis_client.llen(redis_key) >= 20:
-            return "Queue sufficient."
-
-        # DECISION: Use the refill histogram with source=cold until
-        # we know which path we took. The adapter lets us set the
-        # outcome before __exit__.
-        from . import metrics
-        with metrics.time_feed_refill(source='cold') as timer:
-            seen_ids = list(UserInteraction.objects.filter(user=user,created_at__gte=timezone.now() - timedelta(days=30)).values_list('clip_id', flat=True))
-            queued_ids = [vid.decode('utf-8') for vid in redis_client.lrange(redis_key, 0, -1)]
-            seen_ids.extend(queued_ids)
-
-            sem_query, ac_query = calculate_time_decayed_vectors(user)
-            base_queryset = AudioClip.objects.filter(status='ready').exclude(id__in=seen_ids)
-            clip_ids_to_push = []
-
-            # Pool-fast path: read from pre-computed Redis sorted sets
-            # (see services/feed_pool.py and
-            # docs/EXPLAIN/recommendation/03-feed-pre-computation.md).
-            # The 80% exploit slice comes from the global pool; the 20%
-            # explore slice from the per-user pool. If the pools are
-            # empty (cold-start catalog, Redis outage, or Beat task
-            # hasn't run yet) we fall through to the SQL path below.
-            # DECISION: Pool-first. SQL fallback adds 20-200 ms; the
-            # pool path is constant ~2 ms. At 10K concurrent users
-            # this saves ~95% of the SQL load on the primary.
-            from .services.feed_pool import get_user_candidates
-            pool_candidates = get_user_candidates(user_id, count)
-            if pool_candidates is not None:
-                timer.set_outcome('success')  # will be replaced if backfill happens
-                # Re-instrument: the source for a successful pool
-                # read is 'pool'. We restart the timer so the
-                # histogram captures the right labels.
-                # (Using a fresh timer avoids the awkward
-                # label-swap pattern. The cost is one extra
-                # observation in the test environment.)
-                # For simplicity, we observe manually here and
-                # let the outer context manager's exit still record
-                # an 'cold' sample — the pool path will dominate
-                # the metrics, the 'cold' label will just be
-                # a small over-count in mixed-mode tests. This is
-                # acceptable noise.
-                seen_set: set[str] = set(seen_ids)
-                for cid in pool_candidates:
-                    if cid not in seen_set:
-                        seen_set.add(cid)
-                        clip_ids_to_push.append(cid)
-                if len(clip_ids_to_push) < count:
-                    backfill = base_queryset.exclude(
-                        id__in=list(seen_set)
-                    ).order_by('-engagement_velocity', '-created_at')[: count - len(clip_ids_to_push)]
-                    for c in backfill:
-                        clip_ids_to_push.append(str(c.id))
-                # Manually observe the pool-path latency on the
-                # 'pool' source label.
-                import time as _time
-                pool_obs_duration = max(0.0, _time.monotonic() - (timer._start or _time.monotonic()))
-                metrics.feed_refill_duration_seconds.labels(
-                    source='pool', outcome='success'
-                ).observe(pool_obs_duration)
-            elif sem_query and ac_query:
-                # SQL fallback. Same as the pre-pool implementation.
-                # Observe on the 'sql' source.
-                composite_query = base_queryset.annotate(
-                    sem_dist=CosineDistance('semantic_vector', sem_query),
-                    ac_dist=CosineDistance('acoustic_vector', ac_query),
-                    vector_similarity=ExpressionWrapper(
-                        1.0 - ((F('sem_dist') + F('ac_dist')) / 4.0),
-                        output_field=FloatField()
-                    ),
-                    composite_score=ExpressionWrapper(
-                        (F('vector_similarity') * 0.45) +
-                        (F('avg_completion_rate') * 0.30) +
-                        (F('engagement_velocity') * 0.25),
-                        output_field=FloatField()
-                    )
-                ).order_by('-composite_score')
-
-                seen_clip_ids: set[str] = set()
-                deduped: list[str] = []
-
-                exploit_count = int(count * 0.8)
-                exploit_clips = composite_query[:exploit_count]
-                for c in exploit_clips:
-                    cid = str(c.id)
-                    if cid not in seen_clip_ids:
-                        seen_clip_ids.add(cid)
-                        deduped.append(cid)
-
-                followed_creators = user.following.all()
-                network_clips = base_queryset.filter(
-                    creator__in=followed_creators
-                ).order_by('-created_at')[:5]
-                for c in network_clips:
-                    cid = str(c.id)
-                    if cid not in seen_clip_ids:
-                        seen_clip_ids.add(cid)
-                        deduped.append(cid)
-
-                explore_count = count - len(deduped)
-                if explore_count > 0:
-                    explore_clips = base_queryset.exclude(
-                        id__in=list(seen_clip_ids)
-                    ).order_by('-engagement_velocity')[:explore_count]
-                    for c in explore_clips:
-                        cid = str(c.id)
-                        if cid not in seen_clip_ids:
-                            seen_clip_ids.add(cid)
-                            deduped.append(cid)
-
-                clip_ids_to_push = deduped
-                import time as _time
-                sql_obs_duration = max(0.0, _time.monotonic() - (timer._start or _time.monotonic()))
-                metrics.feed_refill_duration_seconds.labels(
-                    source='sql', outcome='success'
-                ).observe(sql_obs_duration)
-            else:
-                # Cold start
-                cold_clips = base_queryset.order_by('-engagement_velocity', '-created_at')[:count]
-                seen_clip_ids: set[str] = set()
-                for c in cold_clips:
-                    cid = str(c.id)
-                    if cid not in seen_clip_ids:
-                        seen_clip_ids.add(cid)
-                        clip_ids_to_push.append(cid)
-    finally:
-        try:
-            redis_client.delete(lock_key)
-        except Exception:
-            pass
-
-    if not clip_ids_to_push:
-        return "No new clips to push."
-
-    random.shuffle(clip_ids_to_push)
-    redis_client.rpush(redis_key, *clip_ids_to_push)
-    redis_client.expire(redis_key, 86400)
-    return f"Added {len(clip_ids_to_push)} composite-ranked clips."
-
-def calculate_time_decayed_vectors(user, limit=50):
-    recent_interactions = UserInteraction.objects.filter(
-        user=user
-    ).select_related('clip').order_by('-created_at')[:limit]
-    
-    if recent_interactions is None or len(recent_interactions) == 0:
-        return user.long_term_semantic, user.long_term_acoustic
-
-    now = timezone.now()
-    sem_vectors, ac_vectors, weights = [], [], []
-
-    for interaction in recent_interactions:
-        if interaction.clip.semantic_vector is None:continue
-
-        # 1. Time Decay: A like from today is worth more than a like from last month
-        hours_ago = (now - interaction.created_at).total_seconds() / 3600.0
-        time_weight = 1.0 / (1.0 + math.log1p(max(0, hours_ago)))
-
-        # 2. Dwell Time Weight: Actual completion rate dictates value
-        comp_weight = interaction.completion_rate if interaction.completion_rate > 0 else 0.1
-
-        # 3. Explicit Intent: Boost shares, penalize instant skips
-        intent_weight = 1.0
-        if interaction.interaction_type in ['like', 'share']:
-            intent_weight = 1.5
-        elif interaction.interaction_type == 'skip' and interaction.completion_rate < 0.2:
-            intent_weight = -0.5 
-
-        final_weight = time_weight * comp_weight * intent_weight
-        
-        if interaction.clip.acoustic_vector is not None:
-            ac_vectors.append(np.array(interaction.clip.acoustic_vector) * final_weight)
-            
-        if interaction.clip.semantic_vector is not None:
-            sem_vectors.append(np.array(interaction.clip.semantic_vector) * final_weight)
-        weights.append(final_weight)
-
-    sum_weights = sum(weights)
-    if sum_weights == 0:
-        return user.long_term_semantic, user.long_term_acoustic
-    if sem_vectors and ac_vectors:
-        weighted_sem = np.sum(sem_vectors, axis=0) / sum_weights
-        weighted_ac = np.sum(ac_vectors, axis=0) / sum_weights
-    else:
-        return user.long_term_semantic, user.long_term_acoustic
-    # Blend context with baseline
-    ALPHA = 0.7
-    if user.long_term_semantic is not None:
-        final_sem = (ALPHA * weighted_sem) + ((1 - ALPHA) * np.array(user.long_term_semantic))
-        final_ac = (ALPHA * weighted_ac) + ((1 - ALPHA) * np.array(user.long_term_acoustic))
-    else:
-        final_sem, final_ac = weighted_sem, weighted_ac
-
-    norm_sem = np.linalg.norm(final_sem)
-    if norm_sem > 0:
-        final_sem = final_sem / norm_sem
-    else:
-        # Fallback to long term baseline if norm is non-computable
-        final_sem = np.array(user.long_term_semantic) if user.long_term_semantic else final_sem
-
-    norm_ac = np.linalg.norm(final_ac)
-    if norm_ac > 0:
-        final_ac = final_ac / norm_ac
-    else:
-        final_ac = np.array(user.long_term_acoustic) if user.long_term_acoustic else final_ac
-
-    return final_sem.tolist(), final_ac.tolist()
+# ---------------------------------------------------------------------------
+# Feed recommendation engine — re-export shim.
+#
+# DECISION: The actual task bodies and the pure-Python ranking logic
+# live in `ai_ml.pipelines.feed_tasks` and `ai_ml.pipelines.recommendation`.
+# This module re-exports the same names so that pre-migration call sites
+# (`from backend.app.tasks import refill_user_feed`,
+#  `from backend.app.tasks import calculate_time_decayed_vectors`)
+# continue to work without source-level edits. The task names are
+# pinned in the new module with `name='backend.app.tasks.<func>'` so
+# `CELERY_TASK_ROUTES` and `CELERY_BEAT_SCHEDULE` resolve unchanged.
+#
+# See ai_ml/README.md "Future Migration" for the full rationale.
+# Imported eagerly here (not lazily) so a circular import
+# (ai_ml.pipelines.recommendation -> backend.app.models) is
+# resolved at Django app-loading time, not at first task dispatch.
+# ---------------------------------------------------------------------------
+from ai_ml.pipelines.recommendation import calculate_time_decayed_vectors  # noqa: E402,F401
+from ai_ml.pipelines.feed_tasks import (  # noqa: E402,F401
+    refill_user_feed,
+    rebuild_global_exploit_pool,
+    dispatch_user_pool_rebuilds,
+    rebuild_user_explore_pool,
+)
 
 
 # Added retry config: transient DB/Redis errors cause task failure without retry.
@@ -1108,80 +909,15 @@ def scrape_and_import(self, source_name, limit=5, clip_length=300):
 
 
 # ---------------------------------------------------------------------------
-# Feed candidate pool (Redis pre-computation)
-# See backend/app/services/feed_pool.py and
-# docs/EXPLAIN/recommendation/03-feed-pre-computation.md.
+# Feed candidate pool (Redis pre-computation) tasks moved to
+# ai_ml.pipelines.feed_tasks. They are re-exported via the shim
+# at the top of this file so `from backend.app.tasks import
+# rebuild_global_exploit_pool` (and the two siblings) still resolves.
+# CELERY_BEAT_SCHEDULE and CELERY_TASK_ROUTES in
+# backend/EchoFlow/settings.py key off the original task names,
+# which are pinned in the new module with
+# `name='backend.app.tasks.<func>'`.
 # ---------------------------------------------------------------------------
-
-
-@shared_task(bind=True, max_retries=2, default_retry_delay=30,
-             autoretry_for=RETRYABLE_ERRORS, retry_backoff=True)
-def rebuild_global_exploit_pool(self):
-    """Rebuild the global clip:candidates:exploit ZSET. Beat every 5 min."""
-    from .services.feed_pool import rebuild_global_exploit_pool as _rebuild
-    try:
-        n = _rebuild()
-        return f"wrote {n} members to global exploit pool"
-    except Exception as exc:
-        logger.exception("rebuild_global_exploit_pool failed: %s", exc)
-        raise
-
-
-@shared_task(bind=True, max_retries=1, default_retry_delay=60,
-             autoretry_for=RETRYABLE_ERRORS, retry_backoff=True)
-def dispatch_user_pool_rebuilds(self):
-    """Fan out per-user pool rebuilds across the next hour.
-
-    The Beat cadence is hourly; this task enqueues N
-    `rebuild_user_explore_pool` tasks with a small jitter so the
-    workers absorb them gradually instead of in a herd.
-
-    HACK: A true rolling fan-out would use crontab-style scheduling
-    per user via django_celery_beat, but that's heavy and this
-    gets us 90% of the benefit with one Beat entry.
-    """
-    from datetime import timedelta
-    from django.utils import timezone
-    from .models import User
-
-    one_hour = 3600
-    batch_size = max(
-        1, int(os.environ.get('FEED_POOL_USER_REBUILD_BATCH', '200'))
-    )
-    # Spread the batch across the hour by enqueueing each one with
-    # an explicit countdown. ETA = now + jitter_in_seconds.
-    import random as _r
-    active_threshold = timezone.now() - timedelta(days=30)
-    user_ids = list(
-        User.objects.filter(last_login__gte=active_threshold)
-        .order_by('last_login')
-        .values_list('id', flat=True)[:batch_size]
-    )
-    enqueued = 0
-    for i, uid in enumerate(user_ids):
-        # Spread across the hour: each task gets a 0..3600s countdown.
-        countdown = int(i * (one_hour / max(len(user_ids), 1)))
-        publish(
-            rebuild_user_explore_pool,
-            uid,
-            countdown=countdown,
-        )
-        enqueued += 1
-    return f"fanned out {enqueued} user pool rebuilds across the next hour"
-
-
-@shared_task(bind=True, max_retries=2, default_retry_delay=30,
-             autoretry_for=RETRYABLE_ERRORS, retry_backoff=True)
-def rebuild_user_explore_pool(self, user_id):
-    """Rebuild a single user's user:{id}:candidates:explore ZSET."""
-    from .services.feed_pool import rebuild_user_explore_pool as _rebuild
-    try:
-        n = _rebuild(user_id)
-        return f"wrote {n} members to user {user_id} explore pool"
-    except Exception as exc:
-        logger.exception("rebuild_user_explore_pool user=%s failed: %s",
-                         user_id, exc)
-        raise
 
 
 # ---------------------------------------------------------------------------

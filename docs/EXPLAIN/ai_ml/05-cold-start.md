@@ -188,4 +188,4 @@ Modal closes → FeedPage loads personalized feed
 
 ---
 
-*Source: `backend/app/views.py:772-799`, `frontend/sample_frontend/src/components/feed/OnboardingModal.tsx`, `ai-ml/pipelines/cold_start.py`*
+*Source: `backend/app/views.py:772-799`, `frontend/sample_frontend/src/components/feed/OnboardingModal.tsx`, `ai_ml/pipelines/cold_start.py`*

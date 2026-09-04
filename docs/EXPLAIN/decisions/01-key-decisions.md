@@ -364,8 +364,8 @@ raise ImproperlyConfigured("FIELD_ENCRYPTION_KEY is missing...")
 # TODO: Add correlation middleware. LOGGING config does not include a request ID field.
 ```
 
-### 8. Model Migration to ai-ml/
-**Files:** `ai-ml/models/*.py`, `ai-ml/pipelines/*.py`
+### 8. Model Migration to ai_ml/
+**Files:** `ai_ml/models/*.py`, `ai_ml/pipelines/*.py`
 ```python
 # TODO: Migrate from backend.app.tasks.get_whisper_model() etc.
 ```

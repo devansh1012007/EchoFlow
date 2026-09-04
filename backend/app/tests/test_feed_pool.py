@@ -242,17 +242,27 @@ class TestSettingsContract:
         assert schedule['dispatch-user-pool-rebuilds']['schedule'] == 3600.0
 
     def test_refill_user_feed_pool_first_path(self):
-        # The refill task must check the pool BEFORE the SQL path.
+        # The refill path must check the pool BEFORE the SQL path.
         # We assert via source check because exercising the actual
         # SQL vs pool code path requires a real DB+Redis.
+        #
+        # DECISION: After the feed-engine-to-ai_ml migration (2026-09),
+        # the pool-first / SQL-fallback logic lives in
+        # `ai_ml.pipelines.recommendation.build_feed_candidates` (pure
+        # Python, testable without Celery). The Celery wrapper
+        # `refill_user_feed` now just calls that helper. The invariant
+        # this test guards has moved with the code.
         import inspect
-        from backend.app import tasks
-        src = inspect.getsource(tasks.refill_user_feed)
+        from ai_ml.pipelines.recommendation import build_feed_candidates
+        src = inspect.getsource(build_feed_candidates)
         pool_first_idx = src.find('get_user_candidates')
         sql_query_idx = src.find('composite_query')
-        assert pool_first_idx > 0
+        assert pool_first_idx > 0, (
+            "build_feed_candidates must call get_user_candidates (pool-first). "
+            "If pool-first was removed the entire pre-computation design is wasted."
+        )
         assert sql_query_idx > pool_first_idx, (
-            "refill_user_feed must check the pool before falling back to SQL. "
+            "build_feed_candidates must check the pool before falling back to SQL. "
             "If SQL is checked first the entire pre-computation design is wasted."
         )
 
