@@ -166,3 +166,111 @@ class TestRouterConfigurationContract:
             "DATABASE_ROUTERS registration must be gated on 'read' in DATABASES. "
             "Otherwise enabling the router without a replica crashes every read."
         )
+
+
+class TestRouterConditionalActivation:
+    """Contract tests for the activation-side wiring of the read-replica
+    router. These exercise `override_settings(DATABASES=...)` to simulate
+    the moment `READ_DATABASE_URL` is set in the environment and assert the
+    router correctly activates (and deactivates) without touching the
+    router functions directly.
+
+    See `docs/EXPLAIN/database/05-read-replica-design.md` §"Activation
+    Playbook" for the operational sequence these tests guard.
+    """
+
+    def test_router_activates_when_read_alias_present(self):
+        # When 'read' is added to DATABASES (via override_settings to
+        # simulate `READ_DATABASE_URL` being set), settings.DATABASE_ROUTERS
+        # must include the read router. This is the activation contract:
+        # the env var is the only thing that flips the bit.
+        from django.conf import settings as dj_settings
+        base_default = dj_settings.DATABASES['default']
+        with override_settings(
+            DATABASES={
+                'default': base_default,
+                'read': {
+                    'ENGINE': 'django.db.backends.postgresql',
+                    'NAME': 'echoflow_db',
+                    'USER': 'echoflow',
+                    'PASSWORD': 'x',
+                    'HOST': 'db_read',
+                    'PORT': '5432',
+                    'OPTIONS': {'options': '-c default_transaction_read_only=on'},
+                },
+            },
+        ):
+            assert 'read' in dj_settings.DATABASES
+            # The settings-level conditional is verified statically in
+            # TestRouterConfigurationContract::test_router_only_registered_when_read_configured;
+            # here we verify the runtime consequence: when the alias is
+            # present, the router's `_has_read_alias()` returns True.
+            from backend.app import db_routers
+            assert db_routers._has_read_alias() is True
+
+    def test_router_inert_when_read_alias_absent(self):
+        # Default state: 'read' is not in DATABASES. The router must
+        # be inert — every read falls back to 'default'. This is the
+        # pre-activation state in production today.
+        from django.conf import settings as actual_settings
+        # Sanity: the test conftest forces SQLite + no 'read' alias.
+        assert 'read' not in actual_settings.DATABASES
+        with override_settings(DATABASES={'default': actual_settings.DATABASES['default']}):
+            from backend.app import db_routers
+            assert db_routers._has_read_alias() is False
+            # And the router function returns None (falls back to default).
+            class _Meta:
+                app_label = APP_LABEL
+            class _Model:
+                _meta = _Meta()
+            assert db_for_read(_Model) is None
+
+    def test_queryset_under_atomic_block_falls_back_to_primary(self):
+        # When 'read' IS configured but the call is inside transaction.atomic(),
+        # the router must return None (fall back to 'default'). This is the
+        # "read-your-own-writes" guard: a read inside a write transaction
+        # must see the just-written state, which the replica may not have
+        # yet.
+        from django.conf import settings as actual_settings
+        from backend.app import db_routers
+        from django.db import transaction
+        base_default = actual_settings.DATABASES['default']
+        with override_settings(
+            DATABASES={
+                'default': base_default,
+                'read': {
+                    'ENGINE': 'django.db.backends.postgresql',
+                    'NAME': 'echoflow_db',
+                    'USER': 'echoflow',
+                    'PASSWORD': 'x',
+                    'HOST': 'db_read',
+                    'PORT': '5432',
+                    'OPTIONS': {'options': '-c default_transaction_read_only=on'},
+                },
+            },
+        ):
+            assert db_routers._has_read_alias() is True
+
+            class _Meta:
+                app_label = APP_LABEL
+            class _Model:
+                _meta = _Meta()
+
+            # Outside an atomic block: router routes to 'read'.
+            assert db_for_read(_Model) == 'read'
+
+            # Inside an atomic block: router must refuse to route. We
+            # monkey-patch `transaction.get_connection` to return an
+            # object that claims `in_atomic_block=True` without requiring
+            # an actual database connection (the test runs against
+            # SQLite + LocMem, where opening a real transaction for a
+            # router-level unit test is unnecessary).
+            class _FakeConnection:
+                in_atomic_block = True
+
+            original_get_connection = transaction.get_connection
+            transaction.get_connection = lambda: _FakeConnection()
+            try:
+                assert db_for_read(_Model) is None
+            finally:
+                transaction.get_connection = original_get_connection

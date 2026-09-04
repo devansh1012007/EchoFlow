@@ -97,6 +97,14 @@ jobs:
         run: |
           python manage.py test backend.app --verbosity 2
 
+      # Integration test suite (pgvector HNSW, real Postgres row-level locks,
+      # real Redis Streams, S3 semantics). The `postgres` + `redis` services
+      # above provide the infrastructure; these tests are auto-skipped on
+      # SQLite + LocMem via `conftest.py::_skip_integration_without_real_services`.
+      - name: Run integration tests (Postgres + Redis)
+        run: |
+          pytest backend/app/tests/ -m integration --tb=short
+
       # DECISION: collectstatic has no --check flag (that's migrate). --dry-run alone
       # exercises finders + WhiteNoise storage config without writing files.
       - name: Check static files
