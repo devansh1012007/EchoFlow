@@ -1002,3 +1002,187 @@ user's request at the end of the session.
    (see #16).
 7. **Add Prometheus + Grafana services** per the design doc
    (so the TUI can be retired).
+
+---
+
+# Part 3 — Group C Completion (2026-09-04)
+
+This section is the operation dump for the Group C follow-up work
+requested at the end of the Group A session. The user asked: "I want
+you to now make a plan for fixing group C of the backend-bug-fixes.md.
+Group C — Silent bugs the agent saw but did not fix."
+
+Before any code was touched, every one of the 7 items in Group C
+was verified against the current source by two explore agents
+(parallel). The plan was then reviewed and the user selected:
+
+- Issue 19 scope: **Make AudioClip.skips actually count**
+- Issue 23 probe: **pydub AudioSegment**
+- Issue 23 cap: **300 seconds (5 min)**
+- Doc correction: **Only update backend-bug-fixs.md**
+
+Branch: `main` (all work on the trunk).
+
+## 18. Verification results
+
+| # | Issue | Verdict | Evidence |
+|---|-------|---------|----------|
+| 18 | `Comment.likes` dead code | **REAL** | 0 writers, 1 reader (serializer). CHECK constraint defended an always-zero column. |
+| 19 | `register_skip` writes `'view'` not `'skip'` | **REAL** | `services/interactions.py:136` literal `'view'`. Test `test_does_not_bump_any_denormalized_counter` locked it in. |
+| 20 | `03-logging.md` stale | **REAL** | Cited `settings.py:341-378`. Actual: `settings.py:480-528`. Listed "no correlation IDs" as a gap that is already shipped. |
+| 21 | `.env` ships with `DJANGO_DEBUG=True` | **PARTIALLY REAL** | `.env.example` is `False` (correct). Local untracked `.env` is `True` — not a repo issue but a developer-experience hazard. |
+| 22 | `DATABASE_URL` uses `${VAR}` refs | **FALSE POSITIVE** | Verified empirically: `docker compose config` on the actual stack (v5.3.1) DOES recursively substitute `${VAR}` in `.env` values. The premise that Compose doesn't is wrong. |
+| 23 | No max-duration at upload | **REAL** | Only checked in worker after S3 round-trip. No `MAX_DURATION` constant exists. |
+| 24 | `migrations_test/` empty | **FALSE POSITIVE** | Has 15-line `__init__.py` that overrides the pgvector `0001_initial` for SQLite tests. Load-bearing; referenced in `conftest.py:78-82`. |
+
+## 19. What was fixed
+
+| Commit | Item | What |
+|---|---|---|
+| `a9ff27a` | **#18** Drop `Comment.likes` | Model field + CHECK constraint removed. Serializer dropped 'likes'. Migration 0004 generated. |
+| `92bb508` | **#19** `register_skip` writes 'skip' | Service now writes `interaction_type='skip'`. Test flipped from no-bump to bump. `AudioClip.skips` now actually counts. |
+| `7c52d87` | **#23** Max-duration at upload | `MAX_DURATION_SECONDS=300` setting. pydub probe in serializer. Test fabricates 6-min WAV, asserts 400. |
+| `2772c47` | **#20** Rewrite `03-logging.md` | Doc rewritten against current `LOGGING` dict. "No correlation IDs" gap marked as "Currently Shipped". |
+| `6f841af` | **#21** CI check for `DJANGO_DEBUG=True` | `scripts/check_no_tracked_env.sh` added. CI step runs it on every PR. AGENTS.md subsection added. |
+
+## 20. False positives — what was checked and why
+
+**#22 `DATABASE_URL` uses `${VAR}` refs:** Empirically tested with
+the actual installed stack (`docker compose version v5.3.1`,
+`docker 29.6.2`):
+
+```
+$ docker compose config | grep DATABASE_URL
+DATABASE_URL: postgres://echoflow:Str0ng_P4ssw0rd_2024_secure@db:5432/echoflow_db
+```
+
+The `${DB_USER}` and `${DB_PASSWORD}` references in the user's
+local `.env` ARE recursively substituted by Compose v2.17+ when
+the referenced vars are defined in the same `.env` file. The
+audit doc's premise was wrong. **No code change needed.**
+
+**#24 `migrations_test/` empty directory:** Listed as "empty
+leftover from a previous attempt" in three audit docs. The
+directory is NOT empty — it contains a 15-line `__init__.py` that
+overrides the pgvector-specific `0001_initial` migration for
+SQLite tests:
+
+```python
+TEST_MIGRATIONS_DIR = Path(__file__).resolve().parent / 'backend' / 'app' / 'tests' / 'migrations_test'
+fake_migrations = types.ModuleType('backend.app.migrations_test')
+fake_migrations.__file__ = str(TEST_MIGRATIONS_DIR / '__init__.py')
+sys.modules['backend.app.migrations_test'] = fake_migrations
+settings.MIGRATION_MODULES = {'app': 'backend.app.migrations_test'}
+```
+
+(`conftest.py:78-82`). Removing the directory would break
+`pytest backend/app/tests/`. The audit docs are wrong. **No code
+change needed.**
+
+## 21. Trade-offs accepted
+
+1. **Group C #19: F() contention on viral clips gets worse.**
+   Each `register_skip` call now acquires a row lock on
+   `AudioClip` (via the F() expression in
+   `UserInteraction.save()`). On a clip that gets 100 skips/second
+   this is 100 lock-and-release cycles. The architectural fix is
+   Group B item 9 (Redis INCRBY + batch flush). User explicitly
+   chose correctness over performance here.
+
+2. **Group C #23: +200-500ms to every upload.** Pydub parses
+   the audio to extract duration. Same cost as ffprobe subprocess.
+   No faster option that doesn't pull a heavier dependency.
+
+3. **Group C #23: pydub in the web image.** Already present in
+   the media image (used by the worker). Adds ~6MB to the web
+   image. User explicitly chose pydub over ffprobe for cleaner
+   API surface.
+
+4. **Group C #23: in-memory read of upload.** The duration probe
+   reads the whole upload into memory (via BytesIO). Django
+   normally streams. Acceptable for 100MB cap; flagged as TODO
+   if memory pressure becomes a problem.
+
+5. **Group C #5 (Step 5) CI check is regex-based.** A file
+   named `.env.production` with `DJANGO_DEBUG=True` would pass
+   the check. The .gitignore is the real protection for
+   non-boilerplate env files.
+
+## 22. Things given up (out of scope for this pass)
+
+1. **Group B item 9: F() counter architectural fix (Redis INCRBY).**
+   Required by the Issue 19 tradeoff above. Not in this session.
+
+2. **Per-user rate limits on `register_skip`.** A user could
+   now amplify the F() contention by spamming the endpoint.
+   Mitigation belongs in Group B.
+
+3. **Worker-time duration cross-check.** A malicious client could
+   forge a 5-min audio with embedded metadata that says 1-min
+   and confuse the worker. The worker should also re-validate.
+   Hardening, not correctness — out of scope.
+
+4. **`task_prerun` correlation_id propagation to Celery workers.**
+   Now listed as an "Open Gap" in the rewritten logging doc
+   (instead of being implied as not-shipped). Not in this pass.
+
+5. **Updating `unfixed-issues-2026-09-03.md` and
+   `event-driven-architecture-plan.md`.** Per user choice, only
+   `backend-bug-fixs.md` was updated. The other two still
+   contain the false-positive entries for #22 and #24.
+
+6. **Issue #24 audit-doc correction in other files.** The
+   "empty directory" claim in `unfixed-issues-2026-09-03.md:126`
+   and `event-driven-architecture-plan.md:124,653` is
+   contradicted by reality. Not corrected per user choice.
+
+## 23. Test results
+
+`pytest backend/app/tests/`: **138 passed, 4 skipped, 0 failed**
+(one new test: `test_upload_rejects_over_max_duration`).
+
+Test count progression across this session:
+- After Group A #8: 137 passed, 4 skipped
+- After Group C #18: 137 passed, 4 skipped (no new test; field dropped)
+- After Group C #19: 137 passed, 4 skipped (no new test; flipped existing)
+- After Group C #23: **138 passed, 4 skipped, 0 failed** (+1 test)
+- After Group C #20 + #21: 138 passed, 4 skipped (doc + CI only)
+
+## 24. Commits
+
+```
+a9ff27a  fix(backend): drop Comment.likes dead code (Group C item 18)
+92bb508  fix(backend): register_skip writes 'skip' not 'view' (Group C item 19)
+7c52d87  fix(backend): max-duration validation at upload time (Group C item 23)
+2772c47  docs(testing): rewrite 03-logging.md to match current LOGGING config (Group C item 20)
+6f841af  ci: defensive check that no tracked env file has DJANGO_DEBUG=True (Group C item 21)
+```
+
+5 commits, ~4 files of code, 1 doc, 1 CI script.
+
+## 25. What I'd do next (priority order, not in this pass)
+
+1. **Group B item 9: F() counter architectural fix.** Required by
+   the Issue 19 tradeoff. Move `UserInteraction.save()` counter
+   increments to Redis INCRBY; add a `flush_counter_deltas`
+   Celery task to bulk-update `AudioClip.likes/shares/skips` from
+   the Redis deltas. The only path that truly eliminates viral
+   contention.
+
+2. **Group B item 10: N11 cache invalidation wiring.** The
+   `invalidate_user_vectors_cache` helper exists in
+   `services/interactions.py` but is never called. Wire it into
+   `record_like_toggle` and `record_skip`.
+
+3. **`task_prerun` correlation_id propagation to Celery
+   workers.** The middleware sets it for HTTP requests; the
+   worker should set it from task headers so async task logs
+   can be correlated back to the originating request.
+
+4. **Worker-time duration cross-check.** Defense-in-depth on top
+   of the new upload-time check.
+
+5. **Per-endpoint rate limit on `register_skip`.** A user could
+   amplify the F() contention by spamming the endpoint. The
+   DRF throttles in settings.py don't currently scope to
+   this endpoint.
