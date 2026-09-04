@@ -542,7 +542,7 @@ Never revert or overwrite unrelated work.
 
 For risky changes:
 
-1. create a dedicated branch from the current working branch
+1. create a dedicated branch/Worktree from the current working branch/Worktree
 2. make the smallest required change
 3. validate
 4. review the complete diff
@@ -832,7 +832,7 @@ Does the repository documentation still describe the implementation?
 
 ### Git
 
-Is the branch correct? Is the diff clean? Are unrelated files excluded?
+Is the branch/Worktree correct? Is the diff clean? Are unrelated files excluded?
 
 ### Uncertainty
 
@@ -1116,7 +1116,7 @@ A fix that survives independent review is preferred over one validated only by i
 
 For a large multi-agent mission:
 
-* create one dedicated branch for the mission
+* create one dedicated branch or Worktree for the mission
 * never work directly on the main branch
 * keep commits small and logically grouped
 * commit verified units of work frequently
@@ -1125,7 +1125,7 @@ For a large multi-agent mission:
 * ensure one agent does not overwrite another agent's changes
 * never force-push or rewrite history without explicit authorization
 
-The lead agent is responsible for integration and final branch integrity.
+The lead agent is responsible for integration and final branch/Worktree integrity.
 
 ## 12. Completion Standard
 
