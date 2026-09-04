@@ -295,3 +295,62 @@ class TestCacheInvalidation:
             invalidate_user_vectors_cache as view_helper,
         )
         assert svc_helper is view_helper
+
+    def test_record_share_invalidates_user_vectors_cache(
+        self, user, ready_clip,
+    ):
+        # A3 Part 1: record_share mutates the user's interaction
+        # history (a share is a strong signal for /suggestions/).
+        # The cache must be invalidated so the next recompute sees
+        # the new row.
+        from django.core.cache import cache
+        from django.test import TestCase
+        from backend.app.services.interactions import record_share
+
+        cache_key = f'user_vectors:{user.id}'
+        cache.set(cache_key, ('sem-stale', 'ac-stale'), timeout=900)
+        assert cache.get(cache_key) is not None
+
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            record_share(user, ready_clip)
+
+        assert cache.get(cache_key) is None
+
+    def test_record_telemetry_sync_fallback_invalidates_cache(
+        self, user, ready_clip, monkeypatch,
+    ):
+        # A3 Part 1: when Redis is fully unavailable, record_telemetry
+        # falls back to a synchronous update_or_create. That write
+        # changes the user's state, so the cache must be invalidated.
+        # (The stream-success path is covered by the consumer test
+        # in test_task_publisher.py::TestFlushTelemetryInvalidation.)
+        from django.core.cache import cache
+        from django.test import TestCase
+        from backend.app.models import UserInteraction
+
+        cache_key = f'user_vectors:{user.id}'
+        cache.set(cache_key, ('sem-stale', 'ac-stale'), timeout=900)
+
+        # Force the synchronous fallback by stubbing both Redis paths
+        # to return failure. xadd returns False (treated as failure);
+        # rpush raises (caught by the outer try/except, then sync
+        # fallback runs).
+        monkeypatch.setattr(
+            'backend.app.services.interactions._xadd_telemetry',
+            lambda _event: False,
+        )
+        monkeypatch.setattr(
+            'backend.app.services.interactions._rpush_telemetry',
+            lambda _event: (_ for _ in ()).throw(ConnectionError('redis down')),
+        )
+
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            from backend.app.services.interactions import record_telemetry
+            record_telemetry(user, ready_clip, action_type='view', watch_time_ms=5_000)
+
+        # Sync fallback wrote the row.
+        assert UserInteraction.objects.filter(
+            user=user, clip=ready_clip, interaction_type='view',
+        ).exists()
+        # Cache was invalidated.
+        assert cache.get(cache_key) is None

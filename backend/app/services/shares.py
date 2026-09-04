@@ -5,6 +5,12 @@ Stage 2 boundary. A share has two side-effects today:
   2. Insert a ShareEvent row in the recipient's inbox.
 
 Both must happen together; the ViewSet no longer has to know that.
+
+A3 cache invalidation: record_share (called below) registers a
+transaction.on_commit hook that invalidates the sender's cached
+user_vectors. The on_commit fires only when this @transaction.atomic
+block (and any wrapping outer atomic) commits — a rolled-back
+share leaves the cache untouched, which is the correct behavior.
 """
 from __future__ import annotations
 

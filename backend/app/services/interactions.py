@@ -9,16 +9,18 @@ moved to a Redis INCRBY + batcher without touching any view.
 Behavior contract (preserved from pre-refactor views/interactions.py):
   * toggle_like: get_or_create + toggle is_active; bumps AudioClip.likes
     on state change via UserInteraction.save()'s F() side-effect.
-  * register_skip: writes an interaction_type='view' row (NOT 'skip'),
-    no counter is bumped (view is excluded from the field_map in
-    UserInteraction.save()).
+  * register_skip: writes an interaction_type='skip' row. The F() in
+    UserInteraction.save() bumps AudioClip.skips via the field_map
+    (Group C item 19 fix; previously this was 'view' with no counter).
   * record_telemetry: emits a JSON event to a Redis Stream (primary)
     with a Redis list as fallback. The stream consumer
-    (tasks.flush_telemetry_stream) bulk-inserts UserInteraction rows.
+    (tasks.flush_telemetry_stream) bulk-inserts UserInteraction rows
+    AND invalidates each affected user's cached user_vectors.
     On Redis failure it falls back to the synchronous update_or_create
     so the event is not dropped.
   * record_share: get_or_create the share interaction (bumps shares)
-    AND creates a ShareEvent row.
+    AND creates a ShareEvent row. Invalidates the sender's cached
+    user_vectors so /suggestions/ picks up the new interaction.
 
 STREAM DETAILS:
   Stream key:    stream:interaction.events
@@ -225,6 +227,11 @@ def record_telemetry(
             "telemetry: redis enqueue failed (%s); falling back to synchronous write",
             exc,
         )
+        # A3 cache invalidation: the synchronous fallback writes
+        # directly to the DB, bypassing the stream consumer's bulk
+        # invalidation. Invalidate the user's cache here so /suggestions/
+        # sees the new state. The stream-consumer path (success) is
+        # covered in tasks.flush_telemetry_stream.
         UserInteraction.objects.update_or_create(
             user=user, clip=clip, interaction_type=action_type,
             defaults={
@@ -233,6 +240,7 @@ def record_telemetry(
                 'is_active': True,
             },
         )
+        transaction.on_commit(lambda: invalidate_user_vectors_cache(user.id))
     return event
 
 
@@ -242,8 +250,15 @@ def record_share(user, clip: AudioClip) -> UserInteraction:
     Does NOT create a ShareEvent — that is the inbox fan-out, owned by
     the share-send view (callers do both: this function for the counter,
     ShareEvent.objects.create for the inbox).
+
+    A3 cache invalidation: a share is a state change for the user
+    (their share history is part of the recommendation signal). The
+    shared clip's vector weight should influence the user's next
+    /suggestions/ request. Defer to on_commit so a rolled-back
+    transaction doesn't leave a stale invalidation.
     """
     interaction, _ = UserInteraction.objects.get_or_create(
         user=user, clip=clip, interaction_type='share',
     )
+    transaction.on_commit(lambda: invalidate_user_vectors_cache(user.id))
     return interaction

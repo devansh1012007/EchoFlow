@@ -801,7 +801,7 @@ def flush_telemetry_stream(self, max_events=500, block_ms=5000):
     already has the row from the prior run, so this is correct.
     """
     import json
-    from ..services.interactions import STREAM_KEY, CONSUMER_GROUP
+    from .services.interactions import STREAM_KEY, CONSUMER_GROUP
 
     client = cache.client.get_client()
     # Ensure the consumer group exists. MKSTREAM creates the stream on
@@ -881,21 +881,47 @@ def flush_telemetry_stream(self, max_events=500, block_ms=5000):
         pending_entries.append((entry_id, event, user_id, clip_id))
 
     # Batch-resolve FKs once for all entries that survived dedup.
+    # DECISION: the stream payload carries str IDs (Redis Stream field
+    # values are always bytes/strings). The DB models use BigAutoField
+    # for User.id and UUIDField for AudioClip.id. Pre-PR, the code
+    # passed the str IDs directly to .get() against the int-keyed
+    # User.objects.in_bulk dict, which silently mismatched and fired
+    # the "missing user/clip" warning path even when the data was
+    # present. We cast to the correct type per field here. The
+    # AudioClip.id cast goes through UUID() to handle the
+    # BigAutoField vs UUIDField type difference.
     interactions: list[UserInteraction] = []
     if pending_entries:
-        user_ids = {pid[2] for pid in pending_entries}
-        clip_ids = {pid[3] for pid in pending_entries}
+        user_ids: set[int] = set()
+        clip_ids: set = set()
+        for _entry_id, _event, user_id, clip_id in pending_entries:
+            try:
+                user_ids.add(int(user_id))
+            except (TypeError, ValueError):
+                pass
+            try:
+                import uuid as _uuid
+                clip_ids.add(_uuid.UUID(str(clip_id)))
+            except (TypeError, ValueError, AttributeError):
+                pass
         try:
-            users_by_id = User.objects.in_bulk(user_ids)
-            clips_by_id = AudioClip.objects.in_bulk(clip_ids)
+            users_by_id = User.objects.in_bulk(user_ids) if user_ids else {}
+            clips_by_id = AudioClip.objects.in_bulk(clip_ids) if clip_ids else {}
         except Exception as exc:
             logger.error("flush_telemetry_stream: in_bulk failed (%s); routing all to DLQ", exc)
             for entry_id, _event, _u, _c in pending_entries:
                 dlq_ids.append(entry_id)
         else:
+            import uuid as _uuid
             for entry_id, event, user_id, clip_id in pending_entries:
-                user = users_by_id.get(user_id)
-                clip = clips_by_id.get(clip_id)
+                try:
+                    user = users_by_id.get(int(user_id))
+                except (TypeError, ValueError):
+                    user = None
+                try:
+                    clip = clips_by_id.get(_uuid.UUID(str(clip_id)))
+                except (TypeError, ValueError, AttributeError):
+                    clip = None
                 if user is None or clip is None:
                     logger.warning(
                         "flush_telemetry_stream: missing user/clip for %s; ACKing (data will be lost)",
@@ -923,6 +949,25 @@ def flush_telemetry_stream(self, max_events=500, block_ms=5000):
                     dlq_ids.append(entry_id)
                 else:
                     processed_ids.remove(entry_id)
+        else:
+            # A3 cache invalidation: bulk_create succeeded, so each
+            # affected user's user_vectors cache is now stale. Invalidate
+            # each unique user once. One DEL per user is O(1) on Redis;
+            # the alternative (one DEL per event) would be N calls for
+            # N events from the same user, which is wasteful. Tradeoff:
+            # a failure here only means the cache stays stale for up to
+            # 15 min (the TTL), which is the same behavior as before this
+            # wiring — never worse.
+            from .services.interactions import invalidate_user_vectors_cache
+            unique_user_ids = {i.user_id for i in interactions}
+            for uid in unique_user_ids:
+                try:
+                    invalidate_user_vectors_cache(uid)
+                except Exception as exc:
+                    logger.warning(
+                        "flush_telemetry_stream: cache invalidation failed for user %s (%s)",
+                        uid, exc,
+                    )
 
     # ACK everything we handled successfully.
     if processed_ids:

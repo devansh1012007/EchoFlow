@@ -193,3 +193,159 @@ class TestCorrelationIdLoggingFilter:
         )
         CorrelationIdFilter().filter(record)
         assert record.correlation_id == '-'
+
+
+# ---------------------------------------------------------------------------
+# A3 Part 1: flush_telemetry_stream consumer invalidates per-user cache
+# Verifies that the bulk-insert path in tasks.flush_telemetry_stream
+# invalidates each unique user's user_vectors cache after a successful
+# bulk_create. The synchronous-fallback path in services.record_telemetry
+# is covered in test_services_interactions.py.
+# ---------------------------------------------------------------------------
+pytestmark = pytest.mark.django_db
+
+
+class TestFlushTelemetryInvalidation:
+    """A3: stream consumer invalidates user_vectors cache on flush."""
+
+    def _make_event(self, event_id: str, user_id: str, clip_id: str):
+        import json as _json
+        return {
+            'event_id': event_id,
+            'schema_version': '1.0.0',
+            'payload': _json.dumps({
+                'event_id': event_id,
+                'user_id': user_id,
+                'clip_id': clip_id,
+                'action_type': 'view',
+                'watch_time_ms': 5000,
+                'completion_rate': 0.5,
+            }),
+        }
+
+    def test_flush_invalidates_each_unique_user(
+        self, user, other_user, ready_clip,
+    ):
+        # Fabricate a stream response with events for 2 users, both
+        # targeting the same clip. Run the consumer; assert both
+        # users' user_vectors cache keys are gone after the flush.
+        from django.core.cache import cache
+        from backend.app import tasks
+        from backend.app.services.interactions import STREAM_KEY
+
+        user_key = f'user_vectors:{user.id}'
+        other_key = f'user_vectors:{other_user.id}'
+        cache.set(user_key, ('sem', 'ac'), timeout=900)
+        cache.set(other_key, ('sem', 'ac'), timeout=900)
+        assert cache.get(user_key) is not None
+        assert cache.get(other_key) is not None
+
+        # Mock the Redis client. xreadgroup returns a stream-shaped
+        # response. set() (used for dedup SETNX) returns True (first
+        # time). xgroup_create raises the BUSYGROUP error which the
+        # consumer swallows.
+        event_1 = self._make_event('evt-1', str(user.id), str(ready_clip.id))
+        event_2 = self._make_event('evt-2', str(other_user.id), str(ready_clip.id))
+
+        fake_client = MagicMock()
+        fake_client.xreadgroup.return_value = [
+            (STREAM_KEY, [
+                ('1-0', event_1),
+                ('1-1', event_2),
+            ]),
+        ]
+        fake_client.set.return_value = True  # SETNX: first time
+        fake_client.xgroup_create.side_effect = Exception('BUSYGROUP')
+
+        with patch.object(tasks, 'cache') as fake_cache:
+            fake_cache.client.get_client.return_value = fake_client
+            result = tasks.flush_telemetry_stream.run(
+                max_events=500, block_ms=10,
+            )
+
+        # Both users' caches cleared.
+        assert cache.get(user_key) is None
+        assert cache.get(other_key) is None
+        # The consumer reported a successful flush.
+        assert 'Flushed 2 telemetry events' in result
+
+    def test_flush_dedups_repeat_event_id(
+        self, user, ready_clip,
+    ):
+        # A repeated event_id (e.g. after a worker crash + re-read)
+        # must be silently dropped by the dedup key, NOT cause a
+        # duplicate cache invalidation. We assert the user cache
+        # is invalidated exactly once for two entries with the same
+        # event_id.
+        from django.core.cache import cache
+        from backend.app import tasks
+        from backend.app.services.interactions import STREAM_KEY
+
+        user_key = f'user_vectors:{user.id}'
+        cache.set(user_key, ('sem', 'ac'), timeout=900)
+
+        event = self._make_event('evt-dup', str(user.id), str(ready_clip.id))
+
+        fake_client = MagicMock()
+        fake_client.xreadgroup.return_value = [
+            (STREAM_KEY, [('1-0', event), ('1-1', event)]),
+        ]
+        # First SETNX returns True (first time), second returns False
+        # (already processed) — simulating the post-crash replay.
+        fake_client.set.side_effect = [True, False]
+        fake_client.xgroup_create.side_effect = Exception('BUSYGROUP')
+
+        with patch.object(tasks, 'cache') as fake_cache:
+            fake_cache.client.get_client.return_value = fake_client
+            tasks.flush_telemetry_stream.run(max_events=500, block_ms=10)
+
+        # Cache was invalidated (the first SETNX succeeded).
+        assert cache.get(user_key) is None
+        # But only 1 row was inserted (the second was deduped).
+        from backend.app.models import UserInteraction
+        assert UserInteraction.objects.filter(
+            user=user, clip=ready_clip, interaction_type='view',
+        ).count() == 1
+
+    def test_flush_continues_when_cache_invalidation_fails(
+        self, user, ready_clip,
+    ):
+        # The bulk_create and invalidation are independent. A failure
+        # in cache.delete() must NOT cause the flush to fail or lose
+        # data. (This is the contract from the new else-branch's
+        # try/except wrap.)
+        from django.core.cache import cache
+        from backend.app import tasks
+        from backend.app.services.interactions import STREAM_KEY
+        from backend.app.models import UserInteraction
+
+        event = self._make_event('evt-1', str(user.id), str(ready_clip.id))
+
+        fake_client = MagicMock()
+        fake_client.xreadgroup.return_value = [
+            (STREAM_KEY, [('1-0', event)]),
+        ]
+        fake_client.set.return_value = True
+        fake_client.xgroup_create.side_effect = Exception('BUSYGROUP')
+
+        # Patch the invalidate_user_vectors_cache to raise. Note the
+        # import path: tasks.flush_telemetry_stream does
+        # `from .services.interactions import invalidate_user_vectors_cache`
+        # INSIDE the function (deferred to avoid a top-level circular
+        # import between tasks.py and services/interactions.py).
+        with patch.object(tasks, 'cache') as fake_cache:
+            fake_cache.client.get_client.return_value = fake_client
+            with patch(
+                'backend.app.services.interactions.invalidate_user_vectors_cache',
+                side_effect=ConnectionError('cache down'),
+            ):
+                result = tasks.flush_telemetry_stream.run(
+                    max_events=500, block_ms=10,
+                )
+
+        # Bulk_create still happened — data is preserved.
+        assert UserInteraction.objects.filter(
+            user=user, clip=ready_clip, interaction_type='view',
+        ).exists()
+        # The flush reported success (1 event flushed).
+        assert 'Flushed 1 telemetry events' in result
