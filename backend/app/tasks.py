@@ -4,7 +4,9 @@ import shutil
 import subprocess
 import tempfile
 import random
+import re
 import threading
+import uuid
 import numpy as np
 import logging
 import librosa
@@ -19,6 +21,7 @@ from datetime import timedelta
 from django.core.cache import cache
 from pgvector.django import CosineDistance
 from .models import AudioClip, UserInteraction, User
+from .services.task_publisher import publish
 from celery.utils.log import get_task_logger
 
 logger = get_task_logger(__name__)
@@ -980,7 +983,7 @@ def cleanup_stuck_processing(threshold_minutes=15, max_per_run=50):
             clip.save(update_fields=['status'])
             give_up += 1
             continue
-        process_audio_to_hls.delay(str(clip.id))
+        publish(process_audio_to_hls, str(clip.id))
         re_enqueued += 1
     if give_up:
         return f"Re-enqueued {re_enqueued}, gave up on {give_up} (>{int(give_up_threshold.total_seconds() // 60)}m) clips."
@@ -1040,7 +1043,7 @@ def scrape_and_import(self, source_name, limit=5, clip_length=300):
                 original_source_id=original_id,
             )
 
-            process_audio_to_hls.delay(str(clip.id))
+            publish(process_audio_to_hls, str(clip.id))
             logger.info("Imported clip %s from %s", clip.id, source_name)
 
         except Exception as e:
@@ -1113,7 +1116,11 @@ def dispatch_user_pool_rebuilds(self):
     for i, uid in enumerate(user_ids):
         # Spread across the hour: each task gets a 0..3600s countdown.
         countdown = int(i * (one_hour / max(len(user_ids), 1)))
-        rebuild_user_explore_pool.apply_async(args=[uid], countdown=countdown)
+        publish(
+            rebuild_user_explore_pool,
+            uid,
+            countdown=countdown,
+        )
         enqueued += 1
     return f"fanned out {enqueued} user pool rebuilds across the next hour"
 
@@ -1130,5 +1137,221 @@ def rebuild_user_explore_pool(self, user_id):
         logger.exception("rebuild_user_explore_pool user=%s failed: %s",
                          user_id, exc)
         raise
+
+
+# ---------------------------------------------------------------------------
+# Group B item 12: periodic cleanup of orphan HLS objects.
+#
+# Background: signals.cleanup_audioclip_storage removes the HLS tree
+# on every AudioClip delete. If the S3 delete fails (network, creds,
+# bucket perm), the failure is swallowed (WARNING log) and the orphan
+# files persist forever. This task is the periodic safety net.
+#
+# How it works:
+# 1. listdir('hls/') returns the immediate child names. These are the
+#    clip_ids of the HLS trees.
+# 2. Filter to UUID-shaped names (defense-in-depth: a stray non-UUID
+#    directory in hls/ would never be in the AudioClip table anyway,
+#    so we skip them rather than delete them).
+# 3. Diff against AudioClip.objects.values_list('id', flat=True).
+# 4. Bounded to max_keys per run. If the bucket has more orphans than
+#    max_keys, the next day's run picks up the rest. This is the
+#    back-pressure: a runaway orphan situation cannot page the
+#    operator.
+# 5. Idempotent: re-running is safe. A second run finds zero orphans
+#    because the first run deleted them.
+#
+# Race condition: cleanup_orphan_hls vs post_delete signal. The signal
+# fires after the row is deleted; the orphan scan runs at 03:00 UTC.
+# The window where both could try to delete the same prefix is
+# negligible (signal runs in ms, scan runs once a day). If a signal
+# deletes the prefix between the listdir and the per-prefix delete,
+# listdir(prefix) returns empty, the for loop is a no-op.
+# ---------------------------------------------------------------------------
+_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+
+
+@shared_task(name='backend.app.tasks.cleanup_orphan_hls')
+def cleanup_orphan_hls(max_keys: int = 1000) -> dict:
+    """Scan hls/ prefix; delete prefixes whose clip_id is not in DB.
+
+    Returns a dict with scanned and deleted counts. Logs a WARNING
+    if scanned == max_keys (suggests more orphans than fit in one
+    run; the next run will pick up the rest).
+    """
+    from . import metrics
+
+    if not hasattr(default_storage, 'listdir'):
+        logger.warning(
+            "cleanup_orphan_hls: default_storage has no listdir(); "
+            "skipping (this storage backend is not listable). "
+            "If using a real S3 backend, ensure boto3 is installed."
+        )
+        return {'scanned': 0, 'deleted': 0, 'skipped': 'no_listdir'}
+
+    try:
+        # listdir returns (dirs, files) at the given path; we only
+        # care about the dirs (the clip_id subdirs under hls/).
+        hls_top_level, _files = default_storage.listdir('hls')
+    except FileNotFoundError:
+        # InMemoryStorage and some S3-compatible backends raise on
+        # a missing prefix instead of returning empty. Treat as
+        # "nothing to clean" — this is a no-op, not an error.
+        return {'scanned': 0, 'deleted': 0}
+    except Exception as exc:
+        logger.warning("cleanup_orphan_hls: listdir('hls/') failed: %s", exc)
+        return {'scanned': 0, 'deleted': 0, 'skipped': 'listdir_failed'}
+
+    if not hls_top_level:
+        return {'scanned': 0, 'deleted': 0}
+
+    candidate_ids = [name for name in hls_top_level if _UUID_RE.match(name)]
+    if not candidate_ids:
+        return {'scanned': 0, 'deleted': 0}
+
+    bounded = candidate_ids[:max_keys]
+    if len(candidate_ids) > max_keys:
+        logger.warning(
+            "cleanup_orphan_hls: found %d candidate prefixes but "
+            "bounded to %d; next run will pick up the rest",
+            len(candidate_ids), max_keys,
+        )
+
+    existing_clip_ids = set(
+        AudioClip.objects.filter(
+            id__in=[uuid.UUID(s) for s in bounded],
+        ).values_list('id', flat=True)
+    )
+
+    # DECISION: inline the prefix-deletion logic here rather than
+    # calling signals._delete_s3_prefix, which captures its own
+    # default_storage at import time. The task runs in a separate
+    # process (celery_media) and may be tested with a fake storage;
+    # inline keeps the storage reference dynamic. 6 lines of
+    # duplication, but they live next to the code that calls them.
+    def _delete_prefix(prefix: str) -> bool:
+        """Delete all files under prefix. Returns True if any file
+        was actually deleted; False if the prefix was empty or missing.
+        """
+        try:
+            _dirs, files = default_storage.listdir(prefix)
+        except FileNotFoundError:
+            # Already deleted (or never existed); nothing to do.
+            return False
+        except Exception as exc:
+            logger.warning(
+                "cleanup_orphan_hls: listdir(%s) failed: %s", prefix, exc,
+            )
+            return False
+        if not files:
+            return False
+        for fname in files:
+            key = f"{prefix}/{fname}".replace(os.sep, '/')
+            try:
+                default_storage.delete(key)
+            except Exception as exc:
+                logger.warning(
+                    "cleanup_orphan_hls: delete(%s) failed: %s", key, exc,
+                )
+        return True
+
+    deleted = 0
+    for orphan_id in bounded:
+        try:
+            if uuid.UUID(orphan_id) in existing_clip_ids:
+                continue
+            if _delete_prefix(f'hls/{orphan_id}'):
+                metrics.orphan_hls_cleaned_total.inc()
+                deleted += 1
+        except Exception as exc:
+            logger.warning(
+                "cleanup_orphan_hls: failed to delete hls/%s: %s",
+                orphan_id, exc,
+            )
+
+    logger.info(
+        "cleanup_orphan_hls: scanned=%d, deleted=%d (bounded at %d)",
+        len(bounded), deleted, max_keys,
+    )
+    return {'scanned': len(bounded), 'deleted': deleted}
+
+
+# ---------------------------------------------------------------------------
+# Group B item 9: periodic counter flusher.
+#
+# Background: UserInteraction.save() (in models.py) writes counter
+# deltas to Redis (counter_store.increment) AND, in Phase 1, to
+# Postgres via the F() side-effect (dual_write_enabled() = True).
+#
+# This task is the periodic safety net. It drains the Redis deltas
+# and applies them to Postgres. The behavior depends on the rollout
+# phase:
+#
+#   - Phase 1 (dual-write ON, default): The F() already wrote the
+#     delta to Postgres when the user request landed. The flusher
+#     drains Redis (preventing unbounded growth) but DOES NOT touch
+#     Postgres. Without this drain, Redis keys would accumulate
+#     forever. Behavior: read-and-discard.
+#
+#   - Phase 2 (dual-write OFF, post-env-flip): The F() is bypassed
+#     in the model. The flusher is the ONLY path from Redis to
+#     Postgres. Behavior: read-and-apply via a single UPDATE per
+#     clip (one row lock per clip, not per counter event).
+#
+# DECISION: one Celery beat entry covers both phases; the task
+# branches on dual_write_enabled(). No risk of double-counting
+# because exactly one path is active in any given phase.
+# ---------------------------------------------------------------------------
+@shared_task(name='backend.app.tasks.flush_counters_to_pg')
+def flush_counters_to_pg(batch_size: int = 500) -> dict:
+    """Drain Redis counter deltas; apply to Postgres if dual-write is off.
+
+    Returns: {drained: N, applied: M, dual_write: bool}
+    """
+    from .services import counter_store
+
+    deltas = counter_store.drain()
+    drained = sum(len(v) for v in deltas.values())
+
+    if counter_store.dual_write_enabled():
+        # Phase 1: F() already wrote to Postgres. Just log.
+        logger.info(
+            "flush_counters_to_pg: phase=dual_write drained=%d (no-op)",
+            drained,
+        )
+        return {'drained': drained, 'applied': 0, 'dual_write': True}
+
+    # Phase 2: apply deltas to Postgres. One UPDATE per clip, not
+    # per counter event. This is the row-lock optimization: a clip
+    # with 1000 likes in 5 min gets ONE row lock, not 1000.
+    applied = 0
+    items = list(deltas.items())[:batch_size]
+    for clip_id, counter_deltas in items:
+        if not counter_deltas:
+            continue
+        try:
+            update_kwargs = {
+                f'{ct}_delta': delta for ct, delta in counter_deltas.items()
+            }
+            # SQL: UPDATE app_audioclip SET likes = likes + :likes_delta,
+            # shares = shares + :shares_delta, skips = skips + :skips_delta
+            # WHERE id = :clip_id
+            from django.db.models import F as _F
+            expr = {}
+            for ct, delta in counter_deltas.items():
+                expr[ct] = _F(ct) + delta
+            AudioClip.objects.filter(pk=clip_id).update(**expr)
+            applied += 1
+        except Exception as exc:
+            logger.warning(
+                "flush_counters_to_pg: failed to apply deltas for %s: %s",
+                clip_id, exc,
+            )
+
+    logger.info(
+        "flush_counters_to_pg: phase=single_write drained=%d applied=%d (batch=%d)",
+        drained, applied, batch_size,
+    )
+    return {'drained': drained, 'applied': applied, 'dual_write': False}
 
 

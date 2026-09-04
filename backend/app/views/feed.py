@@ -15,7 +15,9 @@ from rest_framework.response import Response
 
 from ..models import AudioClip, UserInteraction
 from ..serializers import FeedClipSerializer
+from ..services.interactions import invalidate_user_vectors_cache
 from ..tasks import refill_user_feed, calculate_time_decayed_vectors
+from ..services.task_publisher import publish
 from ._pagination import FeedCursorPagination
 
 
@@ -47,12 +49,12 @@ def get_user_vectors(user):
     return sem, ac
 
 
-def invalidate_user_vectors_cache(user_id):
-    """Drop the user's cached vectors. Call this on state-changing events
-    (like, share, skip, telemetry) so the next /suggestions/ request
-    re-computes with fresh data.
-    """
-    cache.delete(_USER_VECTORS_KEY.format(user_id=user_id))
+# invalidate_user_vectors_cache is imported from
+# backend.app.services.interactions at the top of this file. The
+# helper is a single source of truth there; the import in this module
+# is for backwards-compat with anything that imports the name from
+# views/feed (the audit doc references this path; the test
+# test_adversarial_pass3.py:472 checks hasattr here).
 
 
 class FastFeedViewSet(viewsets.ViewSet):
@@ -73,7 +75,7 @@ class FastFeedViewSet(viewsets.ViewSet):
             clip_ids_bytes = redis_client.lpop(redis_key, 10)
 
             if not clip_ids_bytes:
-                refill_user_feed.delay(user_id, count=40)
+                publish(refill_user_feed, user_id, count=40)
                 # N6 fix: refill_user_feed.delay() is async. The second
                 # lpop immediately after runs in the same request thread,
                 # *before* the worker has executed the refill. On a cold
@@ -224,6 +226,6 @@ class TagsViewSet(viewsets.ViewSet):
         user.long_term_acoustic = (np.mean(ac_vectors, axis=0)).tolist()
         user.save()
 
-        refill_user_feed.delay(user.id, count=30)
+        publish(refill_user_feed, user.id, count=30)
 
         return Response({"status": "Algorithm initialized. Feed is ready."}, status=200)

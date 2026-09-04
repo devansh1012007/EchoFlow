@@ -517,7 +517,7 @@ def rebuild_user_explore_pool(self, user_id):
     for the hour's duration (extending the existing 15-min cache at
     views/feed.py:30 to 1 hour for this rebuild path). The 15-min
     user_vectors cache is invalidated by the user's next interaction
-    (services/interactions.py:50-55 — see the invalidate_user_vectors_cache
+    (backend/app/views/feed.py:50-55 — see the invalidate_user_vectors_cache
     helper exposed but not yet wired).
     """
     ...

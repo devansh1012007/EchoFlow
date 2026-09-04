@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from backend.app.scrapers import downloader, normalizer, uploader
 from backend.app.scrapers.sources import SOURCES
 from backend.app.tasks import process_audio_to_hls
+from backend.app.services.task_publisher import publish
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ class Command(BaseCommand):
                     original_source_id=original_id,
                 )
 
-                process_audio_to_hls.delay(str(clip.id))
+                publish(process_audio_to_hls, str(clip.id))
                 self.stdout.write(self.style.SUCCESS(f'Imported clip {clip.id}'))
 
             except Exception as e:

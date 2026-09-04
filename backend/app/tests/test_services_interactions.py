@@ -215,3 +215,83 @@ class TestRecordShare:
         # (the model save() does state_changed check). Re-shares do not
         # change is_active (defaults to True) so no increment.
         assert ready_clip.shares == 1
+
+
+# ---------------------------------------------------------------------------
+# Group B item 10: cache invalidation wiring
+# Verifies that record_like_toggle and record_skip invalidate the
+# user_vectors cache so the next /suggestions/ request recomputes
+# from current state.
+# ---------------------------------------------------------------------------
+class TestCacheInvalidation:
+    def test_record_like_toggle_invalidates_user_vectors_cache(
+        self, user, ready_clip,
+    ):
+        from django.core.cache import cache
+        from django.test import TestCase
+        from backend.app.services.interactions import record_like_toggle
+
+        cache_key = f'user_vectors:{user.id}'
+        cache.set(cache_key, ('sem-stale', 'ac-stale'), timeout=900)
+        assert cache.get(cache_key) is not None
+
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            record_like_toggle(user, ready_clip)
+
+        assert cache.get(cache_key) is None
+
+    def test_record_skip_invalidates_user_vectors_cache(
+        self, user, ready_clip,
+    ):
+        from django.core.cache import cache
+        from django.test import TestCase
+        from backend.app.services.interactions import record_skip
+
+        cache_key = f'user_vectors:{user.id}'
+        cache.set(cache_key, ('sem-stale', 'ac-stale'), timeout=900)
+
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            record_skip(
+                user, ready_clip,
+                listen_duration_ms=5000, reel_position_ms=30000,
+            )
+
+        assert cache.get(cache_key) is None
+
+    def test_invalidation_deferred_until_commit(
+        self, user, ready_clip,
+    ):
+        # If the surrounding transaction rolls back, the cache key
+        # must NOT be invalidated (the user's state didn't actually
+        # change). The on_commit deferral guarantees this.
+        from django.core.cache import cache
+        from django.db import transaction, IntegrityError
+        from django.test import TestCase
+        from backend.app.services.interactions import record_like_toggle
+
+        cache_key = f'user_vectors:{user.id}'
+        cache.set(cache_key, ('sem-stale', 'ac-stale'), timeout=900)
+
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                with TestCase.captureOnCommitCallbacks(execute=False) as callbacks:
+                    record_like_toggle(user, ready_clip)
+                # atomic rollback discards on_commit hooks
+                raise IntegrityError('simulated rollback')
+
+        # on_commit hooks were cleared by the rollback; cache untouched
+        assert cache.get(cache_key) == ('sem-stale', 'ac-stale')
+
+    def test_helper_is_exported_from_both_locations(
+        self, user, ready_clip,
+    ):
+        # Single source of truth: services.interactions owns it;
+        # views.feed re-exports it for backwards-compat (the audit
+        # doc references views.feed:50 as the definition site).
+        from backend.app.services.interactions import (
+            invalidate_user_vectors_cache as svc_helper,
+        )
+        from backend.app.views.feed import (
+            invalidate_user_vectors_cache as view_helper,
+        )
+        assert svc_helper is view_helper

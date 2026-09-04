@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import dj_database_url
+from celery.schedules import crontab
 from django.core.exceptions import ImproperlyConfigured
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -340,6 +341,27 @@ CELERY_BEAT_SCHEDULE = {
         # countdown so the workers absorb them gradually.
         'task': 'backend.app.tasks.dispatch_user_pool_rebuilds',
         'schedule': 3600.0,  # every hour
+    },
+    'cleanup-orphan-hls': {
+        # Group B item 12: defense-in-depth for post_delete signal
+        # failures. Scans hls/ for prefixes whose clip_id is not
+        # in AudioClip and deletes them. Bounded to 1000/run so
+        # a runaway situation cannot page the operator. Daily at
+        # 03:00 UTC (off-peak; uses crontab below instead of float
+        # schedule to pin the hour).
+        'task': 'backend.app.tasks.cleanup_orphan_hls',
+        'schedule': crontab(minute=0, hour=3),
+    },
+    'flush-counters-to-pg': {
+        # Group B item 9: drain the Redis counter store and apply
+        # to Postgres (or just drain during Phase 1 dual-write).
+        # Every 5 minutes; matches update_global_metrics cadence.
+        # Phase 1 (default): the F() in UserInteraction.save() also
+        # runs, so this task is a read-and-discard. Phase 2 (set
+        # ECHOFLOW_DUAL_WRITE_COUNTERS=False in compose env): the
+        # F() is bypassed and this task becomes the only path.
+        'task': 'backend.app.tasks.flush_counters_to_pg',
+        'schedule': 300.0,
     },
 }
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'

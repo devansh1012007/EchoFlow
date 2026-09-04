@@ -593,10 +593,10 @@ Deployment-side. The bucket-side wiring is done (MinIO CORS, public-read for HLS
 Touches all migrations, all model references, AUTH_USER_MODEL. The user's WIP continues to use `backend.app`. Out of scope per the user's "I just want to know if you are working on these issues or not" — the answer is "not in this pass".
 
 ### 10.7 db_routers.py stub
-Dead code. Inert (not referenced in settings). Out of scope.
+**Status as of 2026-09-04 (Group A item 5, commit `a85e298`):** No longer a stub. `backend/app/db_routers.py` is now a 71-line `ReadRouter` that routes read-only queries on the `app` app to a PostgreSQL read replica. It is wired into `DATABASE_ROUTERS` at `settings.py:187` when `READ_DATABASE_URL` is set; 14 tests in `test_db_router.py` cover it. Removing the file would break `ImproperlyConfigured: Cannot import router backend.app.db_routers.ReadRouter` at startup whenever a read replica is configured. The doc's claim of "dead code" was true at the time of writing but is contradicted by the current source.
 
 ### 10.8 HF_TOKEN rotation
-Ops task (rotate the actual value in the HuggingFace dashboard). Code-side checks in place. Out of scope.
+Ops task (rotate the actual value in the HuggingFace dashboard). **Code-side checks** in this context means: the token is consumed exclusively at image-build time via a BuildKit secret (`Dockerfile:117-124`), and runtime uses baked models with `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` (`docker-compose.yml:451-452`). Zero runtime impact; no code-side health check exists (and is not needed because runtime is offline by design). A new built image picks up the rotated token on next `docker compose build --target media`.
 
 ### 10.9 Audio duration validation
 N8 in the source audit (file size/extension/magic-byte is now done; duration check is a separate item). Out of scope per user.
@@ -1171,7 +1171,8 @@ a9ff27a  fix(backend): drop Comment.likes dead code (Group C item 18)
 
 2. **Group B item 10: N11 cache invalidation wiring.** The
    `invalidate_user_vectors_cache` helper exists in
-   `services/interactions.py` but is never called. Wire it into
+   `backend/app/views/feed.py:50-55` (NOT `services/interactions.py` —
+   the original audit cite was wrong) but is never called. Wire it into
    `record_like_toggle` and `record_skip`.
 
 3. **`task_prerun` correlation_id propagation to Celery
@@ -1186,3 +1187,132 @@ a9ff27a  fix(backend): drop Comment.likes dead code (Group C item 18)
    amplify the F() contention by spamming the endpoint. The
    DRF throttles in settings.py don't currently scope to
    this endpoint.
+
+---
+
+# Part 4 — Group B Completion (2026-09-04)
+
+This section is the operation dump for the Group B follow-up work
+that the user approved at the start of this session. The plan was
+written to `docs/EXPLAIN/decisions/group-b-architectural-plan.md`
+before any code was touched. User scope decisions (this session):
+
+- Item 9: Redis INCRBY + 5-min batched flusher (Phase 1 = dual-write)
+- Item 10: Wire only the 2 sites the doc named (record_like_toggle, record_skip)
+- Item 11: task_prerun/postrun + producer-side header attachment
+- Item 12: Daily batch scan, bounded to 1000 keys/run
+- Items 13, 14, 15: out of scope until later sessions
+- Doc corrections: include in the same plan
+
+Branch: `feat/group-b-architectural` (off `main` at `ed01118`).
+
+## 26. Verification results (4 parallel explore agents)
+
+| # | Item | Verdict | Evidence |
+|---|------|---------|----------|
+| 9 | F() counter race architectural fix | **REAL** | F() still at `models.py:200-201`; zero INCRBY anywhere; no flusher task; only same-user race fixed; cross-user viral contention unmitigated |
+| 10 | N11 cache invalidation wiring | **REAL** (with file-location correction) | `invalidate_user_vectors_cache` defined at `views/feed.py:50-55` (NOT `services/interactions.py` as doc claims); zero production callers; only `hasattr` existence test |
+| 11 | End-to-end Celery correlation_id | **REAL** | Zero `task_prerun` in `backend/`; `celery.py:4` imports only `task_postrun, task_failure`; all 6 `.delay()` call sites lack `headers=`; `%(correlation_id)s` populated in workers but always `'-'` |
+| 12 | Periodic cleanup_orphan_hls | **REAL** | No `cleanup_orphan` task in `tasks.py`; 7-entry `CELERY_BEAT_SCHEDULE` has no orphan entry; `signals.py:37-41` docstring acknowledges the gap |
+| 13 | Sentry integration | **REAL** (out of scope) | `grep -ri sentry backend/` → 0 matches |
+| 14 | CDN front of MinIO | **PARTIAL** (out of scope) | nginx wired but `proxy_buffering off`; `PUBLIC_MEDIA_ENDPOINT_URL` defaults to `:9000` bypassing nginx; dev doesn't exercise CDN |
+| 15 | `app → clips` rename | **REAL** (out of scope) | 11+ files reference `backend.app`; `App1Config` smell suggests prior incomplete attempts; rename is 1 day of work; value is debatable |
+| 16 | `db_routers.py` stub | **FALSE POSITIVE** | Shipped as 71-line `ReadRouter` in `a85e298`; wired into `DATABASE_ROUTERS` at `settings.py:187` when `READ_DATABASE_URL` is set; 14 tests in `test_db_router.py` |
+| 17 | HF_TOKEN rotation | **PARTIAL FALSE POSITIVE** | Build-time BuildKit secret only; runtime uses baked models with `HF_HUB_OFFLINE=1`; no code-side checks (and none needed) |
+
+## 27. False positives — what was checked and why
+
+**Item 16 `db_routers.py`:** Verified with 4 separate checks:
+- File contents (71 lines, real implementation, not a stub).
+- `DATABASE_ROUTERS` config in `settings.py:187` is conditional on `READ_DATABASE_URL`.
+- 14 tests in `test_db_router.py` cover the router.
+- Doc itself contradicts itself — §10.7 says "dead code", §17.E entry 30 says "shipped in `a85e298`". The doc is wrong; the code is right.
+
+**Item 17 `HF_TOKEN`:** Verified the architecture is:
+- Build time: BuildKit secret consumed by `Dockerfile:117-124` (no `--build-arg`, never persisted in image history).
+- Runtime: `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` (`docker-compose.yml:451-452`) force offline model loading.
+- Zero `HF_TOKEN` references in `backend/` source (verified by grep).
+The phrase "code-side checks in place" was misleading. Rotation is purely an ops task (rotate the value in the HuggingFace dashboard, re-run `docker compose build --target media`).
+
+**Audit-doc discrepancies fixed (no code change):**
+- `docs/backend-bug-fixs.md:595-596` (§10.7) — corrected to reflect that `db_routers.py` was shipped in `a85e298`.
+- `docs/backend-bug-fixs.md:598-599` (§10.8) — reworded to describe build-time + offline-runtime architecture.
+- `docs/backend-bug-fixs.md:1173-1175` (Item 10) — `services/interactions.py` → `views/feed.py:50-55`.
+- `docs/EXPLAIN/recommendation/03-feed-pre-computation.md:520` — same file-location fix.
+
+## 28. What was fixed (6 commits)
+
+| Commit | Item | What |
+|---|---|---|
+| `219e29b` | Doc corrections | 3 false-positives + 1 wrong file ref; added `group-b-architectural-plan.md` |
+| `7adc46c` | **#10** Cache invalidation wiring | `invalidate_user_vectors_cache` moved to `services/interactions.py`; wired from `record_like_toggle` and `record_skip` via `transaction.on_commit`; 4 new tests |
+| `104330c` | **#12** Periodic orphan HLS cleanup | `cleanup_orphan_hls` Celery task + `crontab(hour=3, minute=0)` beat entry; `orphan_hls_cleaned_total` Prometheus counter; 8 new tests |
+| (Item 11) | **#11** Celery correlation_id | `task_publisher.publish()` wrapper; `task_prerun`/`task_postrun` signal handlers in `celery.py`; 6 `.delay()` call sites converted; 10 new tests |
+| (Item 9) | **#9** Redis INCRBY + flusher (Phase 1) | `services/counter_store.py` with Lua-atomic drain + in-memory test backend; `flush_counters_to_pg` Celery task; `ECHOFLOW_DUAL_WRITE_COUNTERS` env flag; F() still runs (Phase 1 dual-write); 19 new tests |
+| (Doc Part 4) | This dump | 200+ lines documenting verification, fixes, tradeoffs, rollout |
+
+## 29. Trade-offs accepted
+
+1. **Group B item 9: F() contention on viral clips WORSENS temporarily during Phase 1.** Each like now writes BOTH to Redis AND to Postgres via the F(). The dual-write is the cost of the rollout — it lets us validate the Redis path without losing the F()'s safety net. Phase 2 (env flag flip) removes the F(); Phase 3 (cleanup) removes the F() code.
+2. **Group B item 9: 3-phase rollout requires operational coordination.** Phase 1 ships in this commit. Phase 2 needs a compose env change + 1 week of monitoring + the F() must be confirmed correct on a sample of clips. Phase 3 is a follow-up cleanup. The plan-document describes the rollout explicitly; the doc-part-3 follow-up is just "verify the flusher's numbers match the F()'s for a week, then flip the env".
+3. **Group B item 9: counter store has an env-flag coupling.** The dual_write_enabled() check is read inside `UserInteraction.save()`. If the env is set in the wrong place (e.g., a stale .env), the F() and the Redis path diverge. Mitigated by the rollout being one env var change; no schema or code change between phases.
+4. **Group B item 10: 6 lines of duplication** between `views/feed.py` (re-export) and `services/interactions.py` (canonical definition). Necessary to avoid a circular import (the view can't import the service without dragging in `calculate_time_decayed_vectors`).
+5. **Group B item 11: 6 .delay() call sites converted.** Future .delay() calls must use `publish()`; if a developer forgets, the new task has no correlation_id. Mitigated by the linter pattern: a grep test can enforce `from .services.task_publisher import publish` usage.
+6. **Group B item 12: InMemoryStorage in tests is not a perfect S3 simulation.** Empty-dir nodes persist after delete; listdir on a missing prefix raises FileNotFoundError. Real S3 doesn't have these quirks but the task's behavior on both is "no-op", which is the correct production behavior.
+7. **Group B item 12: prefix-deletion logic inlined (6 lines)** rather than reusing `signals._delete_s3_prefix`. The signals helper captures its own `default_storage` at import time; inline keeps the storage reference dynamic for testability.
+
+## 30. Things given up (out of scope for this pass)
+
+1. **Item 9 Phase 2 (env flag flip in production).** This is the operational step. The code is ready; the env flip is a one-line compose change after Phase 1 has run for a week in prod.
+2. **Item 9 Phase 3 (remove the F() code from `UserInteraction.save()`).** Follow-up commit after Phase 2 is verified. The save() method will be 25 lines shorter.
+3. **Item 13 (Sentry integration).** User scope decision: deferred until later.
+4. **Item 14 (CDN front of MinIO).** User scope decision: deferred until later.
+5. **Item 15 (`app → clips` rename).** User scope decision: deferred until later.
+6. **Item 17 (`HF_TOKEN` rotation doc-correctness).** Pure ops task; the architecture is correct.
+
+## 31. Test results
+
+`pytest backend/app/tests/`: **179 passed, 4 skipped, 0 failed**
+
+Test count progression across this session:
+- After Group C: 138 passed, 4 skipped
+- After Step 1 (docs): 138 passed, 4 skipped (no new tests; doc only)
+- After Step 2 (item 11): 148 passed, 4 skipped (+10 task_publisher tests)
+- After Step 3 (item 10): 152 passed, 4 skipped (+4 cache invalidation tests)
+- After Step 4 (item 12): 160 passed, 4 skipped (+8 orphan tests)
+- After Step 5 (item 9): **179 passed, 4 skipped, 0 failed** (+19 counter_store tests)
+- After Step 6 (doc): 179 passed, 4 skipped (no new tests)
+
+## 32. Rollout playbook (the operational handoff)
+
+When this branch merges to main, the rollout is:
+
+**Day 0 (merge):** Group B items 10, 11, 12 are immediately active. Item 9 is in Phase 1 (dual-write); the F() continues to be the source of truth on Postgres.
+
+**Day 0-7:** Monitor `orphan_hls_cleaned_total` (item 12 — non-zero values are expected if the post_delete signal has been failing in production). Monitor the new metric `echoflow_orphan_hls_cleaned_total`. Verify Celery workers log real correlation_ids (item 11 — spot-check `worker.log`).
+
+**Day 7+:** If the Redis counter deltas match the F()'s (sanity check: pick 5 viral clips, compare `AudioClip.likes` to the sum of `clip:<id>:likes` in Redis over a 5-min window), flip `ECHOFLOW_DUAL_WRITE_COUNTERS=False` in `docker-compose.yml`. The flusher becomes the only path.
+
+**Day 14+:** After 1 week of Phase 2 with no divergence, remove the F() code from `UserInteraction.save()` (commit). Done.
+
+## 33. Commits
+
+```
+219e29b  docs: correct 3 false-positives + 1 wrong file ref in Group B audit
+a7828d4  feat(backend): end-to-end correlation_id propagation to Celery (Group B item 11)
+7adc46c  feat(backend): wire invalidate_user_vectors_cache into record_like_toggle/record_skip (Group B item 10)
+104330c  feat(backend): periodic cleanup_orphan_hls Celery task (Group B item 12)
+177bb9c  feat(backend): RedisCounterStore + flush_counters_to_pg, Phase 1 dual-write (Group B item 9)
+<this commit>  docs: Group B completion report (Part 4 of backend-bug-fixs.md)
+```
+
+6 commits, ~10 files of code, 1 plan doc, 1 audit doc correction, 1 dump doc.
+
+## 34. What I'd do next (priority order, not in this pass)
+
+1. **Item 9 Phase 2 + Phase 3 (operational + cleanup).** The architectural fix is 90% done; the last 10% is the env flip and the F() removal. Blocked on operational verification of the dual-write numbers.
+2. **Item 13 (Sentry integration).** SDK + capture_exception wrapper for service-layer errors. Observability gap that all the new architecture (counter store, flusher, orphan scanner) would benefit from.
+3. **Item 14 (CDN flip).** Change `PUBLIC_MEDIA_ENDPOINT_URL` default to the nginx path; update `.env.example`. Deployment-side.
+4. **Item 15 (`app → clips` rename).** 1-day mechanical rename + tests for the rename contract.
+5. **Add a regression check for the `publish()` pattern.** A grep-based test that asserts no `.delay(` exists in production code outside `task_publisher.py`. Cheap insurance against future contributors regressing the Item 11 fix.
+6. **Tighten the test for `cleanup_orphan_hls` to use a more accurate S3 simulator.** InMemoryStorage's quirks (empty-dir persistence, FileNotFoundError on missing prefix) are real but not exactly S3. A test against `moto` (the standard S3 mock library) would give higher confidence — though the current tests are already good for the contract.

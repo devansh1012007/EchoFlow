@@ -163,6 +163,16 @@ celery_tasks_processed_total = Counter(
 #   outcome: success | retry | failure
 
 
+orphan_hls_cleaned_total = Counter(
+    'echoflow_orphan_hls_cleaned_total',
+    'HLS prefixes deleted by the cleanup_orphan_hls Celery task. '
+    'A non-zero value indicates post_delete signal failures, '
+    'DBA-force-deletes, or pipeline interruptions.',
+)
+# No labels: the task is single-purpose; the only meaningful signal
+# is the running count. A non-zero delta is what an operator alerts on.
+
+
 # ---------------------------------------------------------------------------
 # Convenience decorators
 # ---------------------------------------------------------------------------

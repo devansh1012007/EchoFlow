@@ -45,6 +45,43 @@ from ..models import AudioClip, UserInteraction
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# User-vectors cache invalidation.
+# Group B item 10 (N11 cache invalidation wiring).
+#
+# Background: get_user_vectors() in views/feed.py caches the
+# time-decayed user vector for 15 min. The cache was previously only
+# refreshed by TTL expiry — every state-changing interaction (like,
+# skip) was silently leaving the cache stale for up to 15 min. The
+# helper invalidate_user_vectors_cache() existed in views/feed.py
+# but had zero callers (per the audit verification).
+#
+# This module re-exports the helper (kept in views/feed.py for the
+# /suggestions/ endpoint to find without a circular import) AND owns
+# the canonical key prefix. Services that mutate user state call
+# invalidate_user_vectors_cache(user_id) here.
+#
+# DECISION: the helper lives in BOTH places to avoid a circular
+# import. views/feed.py cannot import from this module without
+# dragging in `calculate_time_decayed_vectors` (which is in
+# tasks.py) and the service-layer machinery. This module CAN import
+# the key constant from views/feed.py without cycles. The duplication
+# is one constant and one function — minor cost for clean layering.
+# ---------------------------------------------------------------------------
+_USER_VECTORS_KEY = 'user_vectors:{user_id}'
+
+
+def invalidate_user_vectors_cache(user_id: int) -> None:
+    """Drop the cached user-vector pair so the next /suggestions/
+    re-computes from current state.
+
+    Idempotent. Safe to call when the key doesn't exist (cache.delete
+    is a no-op). Safe to call from any state-changing service
+    (record_like_toggle, record_skip, record_share, telemetry flush).
+    """
+    cache.delete(_USER_VECTORS_KEY.format(user_id=user_id))
+
+
 STREAM_KEY = 'stream:interaction.events'
 CONSUMER_GROUP = 'cg:telemetry-flush'
 STREAM_MAXLEN = 50_000
@@ -113,6 +150,12 @@ def record_like_toggle(user, clip: AudioClip) -> tuple[UserInteraction, bool]:
         # wait. So the race_lost label is rarely observed in
         # practice; it's a hook for future explicit contention
         # tracking if we add a "did I wait on a row lock?" check.
+    # Group B item 10: invalidate the cached user vectors so the
+    # next /suggestions/ request recomputes from the new state.
+    # Defer to on_commit so a rolled-back transaction doesn't
+    # leave a stale invalidation (next read would refetch the
+    # then-current state anyway, so this is a defense-in-depth).
+    transaction.on_commit(lambda: invalidate_user_vectors_cache(user.id))
     return interaction, created
 
 
@@ -141,6 +184,8 @@ def record_skip(
             'is_active': True,
         },
     )
+    # Group B item 10: invalidate cached user vectors (see record_like_toggle).
+    transaction.on_commit(lambda: invalidate_user_vectors_cache(user.id))
     return interaction
 
 

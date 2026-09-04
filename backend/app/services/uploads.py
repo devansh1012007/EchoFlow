@@ -13,6 +13,7 @@ from django.db import transaction
 
 from ..models import AudioClip
 from ..tasks import process_audio_to_hls
+from .task_publisher import publish
 
 
 def finalize_upload(clip: AudioClip) -> None:
@@ -22,4 +23,7 @@ def finalize_upload(clip: AudioClip) -> None:
     if the row actually persisted. If the surrounding transaction rolls
     back, no orphaned task is enqueued.
     """
-    transaction.on_commit(lambda: process_audio_to_hls.delay(clip.id))
+    # Group B item 11: route through publish() so the correlation_id
+    # from the upload request reaches the worker. Without this, the
+    # worker log line for this task has correlation_id='-'.
+    transaction.on_commit(lambda: publish(process_audio_to_hls, str(clip.id)))
