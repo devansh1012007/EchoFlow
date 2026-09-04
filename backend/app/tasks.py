@@ -1276,3 +1276,82 @@ def cleanup_orphan_hls(max_keys: int = 1000) -> dict:
     return {'scanned': len(bounded), 'deleted': deleted}
 
 
+# ---------------------------------------------------------------------------
+# Group B item 9: periodic counter flusher.
+#
+# Background: UserInteraction.save() (in models.py) writes counter
+# deltas to Redis (counter_store.increment) AND, in Phase 1, to
+# Postgres via the F() side-effect (dual_write_enabled() = True).
+#
+# This task is the periodic safety net. It drains the Redis deltas
+# and applies them to Postgres. The behavior depends on the rollout
+# phase:
+#
+#   - Phase 1 (dual-write ON, default): The F() already wrote the
+#     delta to Postgres when the user request landed. The flusher
+#     drains Redis (preventing unbounded growth) but DOES NOT touch
+#     Postgres. Without this drain, Redis keys would accumulate
+#     forever. Behavior: read-and-discard.
+#
+#   - Phase 2 (dual-write OFF, post-env-flip): The F() is bypassed
+#     in the model. The flusher is the ONLY path from Redis to
+#     Postgres. Behavior: read-and-apply via a single UPDATE per
+#     clip (one row lock per clip, not per counter event).
+#
+# DECISION: one Celery beat entry covers both phases; the task
+# branches on dual_write_enabled(). No risk of double-counting
+# because exactly one path is active in any given phase.
+# ---------------------------------------------------------------------------
+@shared_task(name='backend.app.tasks.flush_counters_to_pg')
+def flush_counters_to_pg(batch_size: int = 500) -> dict:
+    """Drain Redis counter deltas; apply to Postgres if dual-write is off.
+
+    Returns: {drained: N, applied: M, dual_write: bool}
+    """
+    from .services import counter_store
+
+    deltas = counter_store.drain()
+    drained = sum(len(v) for v in deltas.values())
+
+    if counter_store.dual_write_enabled():
+        # Phase 1: F() already wrote to Postgres. Just log.
+        logger.info(
+            "flush_counters_to_pg: phase=dual_write drained=%d (no-op)",
+            drained,
+        )
+        return {'drained': drained, 'applied': 0, 'dual_write': True}
+
+    # Phase 2: apply deltas to Postgres. One UPDATE per clip, not
+    # per counter event. This is the row-lock optimization: a clip
+    # with 1000 likes in 5 min gets ONE row lock, not 1000.
+    applied = 0
+    items = list(deltas.items())[:batch_size]
+    for clip_id, counter_deltas in items:
+        if not counter_deltas:
+            continue
+        try:
+            update_kwargs = {
+                f'{ct}_delta': delta for ct, delta in counter_deltas.items()
+            }
+            # SQL: UPDATE app_audioclip SET likes = likes + :likes_delta,
+            # shares = shares + :shares_delta, skips = skips + :skips_delta
+            # WHERE id = :clip_id
+            from django.db.models import F as _F
+            expr = {}
+            for ct, delta in counter_deltas.items():
+                expr[ct] = _F(ct) + delta
+            AudioClip.objects.filter(pk=clip_id).update(**expr)
+            applied += 1
+        except Exception as exc:
+            logger.warning(
+                "flush_counters_to_pg: failed to apply deltas for %s: %s",
+                clip_id, exc,
+            )
+
+    logger.info(
+        "flush_counters_to_pg: phase=single_write drained=%d applied=%d (batch=%d)",
+        drained, applied, batch_size,
+    )
+    return {'drained': drained, 'applied': applied, 'dual_write': False}
+
+

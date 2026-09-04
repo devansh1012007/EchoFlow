@@ -175,9 +175,18 @@ class UserInteraction(models.Model):
         # transaction.atomic() block. The F() UPDATE is row-atomic at the
         # DB level; we keep it inside the atomic block to document the
         # single-unit-of-work contract.
+        #
+        # Group B item 9: this is the LEGACY path. The architectural
+        # fix is in backend.app.services.counter_store (Redis INCRBY +
+        # batched flusher). During Phase 1 of the rollout, the F() and
+        # the Redis path both run (dual-write). When
+        # ECHOFLOW_DUAL_WRITE_COUNTERS=False is set in compose env, the
+        # F() is bypassed here and the flusher becomes the only path.
+        # Phase 3 (post-rollout) removes this code entirely.
         is_new = self._state.adding
         state_changed = False
         increment_val = 0
+        counter_type = None
 
         with transaction.atomic():
             if is_new:
@@ -192,11 +201,40 @@ class UserInteraction(models.Model):
 
             super().save(*args, **kwargs)
 
+            # Group B item 9: write to Redis counter store ALWAYS
+            # (Phase 1 and Phase 2). In Phase 1 the F() also runs
+            # (dual-write). In Phase 2 the F() is bypassed via the
+            # dual_write_enabled() check below, and only the Redis
+            # counter advances. The flusher moves deltas to Postgres
+            # once per beat.
             if state_changed and increment_val != 0:
-                field_map = {'like': 'likes', 'share': 'shares', 'skip': 'skips'}
-                field_to_update = field_map.get(self.interaction_type)
+                from .services import counter_store
+                _field_map = {'like': 'likes', 'share': 'shares', 'skip': 'skips'}
+                counter_type = _field_map.get(self.interaction_type)
+                if counter_type:
+                    try:
+                        counter_store.increment(
+                            str(self.clip.pk), counter_type, increment_val,
+                        )
+                    except Exception as exc:
+                        # SECURITY: never let a metrics/counter hook
+                        # break the user-facing write. The counter is
+                        # observability; the F() (when dual-write is
+                        # on) is the source of truth.
+                        logger.debug(
+                            "counter_store.increment failed for %s/%s: %s",
+                            self.clip.pk, counter_type, exc,
+                        )
 
-                if field_to_update:
+                # Phase 2 of the Group B item 9 rollout: if the env
+                # flag is set, skip the F() update. The flusher is
+                # the source of truth. (Phase 1 default: F() runs
+                # alongside Redis INCRBY; Phase 3 will remove this
+                # whole block.)
+                if not counter_store.dual_write_enabled():
+                    return
+
+                if counter_type:
                     AudioClip.objects.filter(pk=self.clip.pk).update(
-                        **{field_to_update: F(field_to_update) + increment_val}
+                        **{counter_type: F(counter_type) + increment_val}
                     )
