@@ -153,7 +153,7 @@ gunicorn.conf.py   # Gunicorn config
 **NOT copied:** `frontend/`, `docs/`, `wheelhouse/`, `.github/`, `Dockerfile`, etc.
 
 ### Healthcheck
-- Probes `http://localhost:8000/health/`
+- Probes `http://localhost:8000/health/` **with `X-Forwarded-Proto: https` header**
 - Used by `web` service
 - **Overridden** for Celery workers (uses Celery ping)
 
@@ -208,7 +208,7 @@ ENV TRANSFORMERS_OFFLINE=1
 
 ## Build Commands
 
-### Docker Compose (All)
+### Docker Compose (All — 12 services: db, pgbouncer, redis_broker, redis_cache, minio, minio-init, nginx, web, celery, celery_feed, celery_media, celery_beat)
 ```bash
 docker compose build
 ```
