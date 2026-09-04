@@ -522,6 +522,56 @@ services:
         soft: 65536
         hard: 65536
 
+  # DECISION: nginx as the only public-facing entrypoint. Listens on :80
+  # (HTTP, redirects to HTTPS), :443 (Django API over TLS) and :9443
+  # (MinIO over TLS so browsers can fetch HLS segments without mixed-content
+  # blocks). Internal hops — gunicorn→nginx, nginx→minio — stay on plain
+  # HTTP over the docker network; TLS is terminated once at the edge.
+  #
+  # The cert + key are bind-mounted from ./docker/certs/ (self-signed for
+  # dev; replace with Let's Encrypt fullchain + privkey in prod). No cert
+  # material enters the application image, so renewal never requires a
+  # web-container rebuild.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: echoflow_nginx
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "9443:9443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/certs:/etc/nginx/certs:ro
+    healthcheck:
+      # wget is shipped in nginx:alpine; -q silences the success path,
+      # --spider does a HEAD so we don't transfer a body. The 301-to-HTTPS
+      # redirect is the expected response on :80 and verifies TLS is
+      # functional end-to-end.
+      test: ["CMD", "wget", "-q", "--spider", "https://localhost/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+          pids: 100
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
 # Define persistent storage
 volumes:
   postgres_data:

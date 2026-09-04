@@ -1,6 +1,6 @@
 import { AudioClip, FeedResponse, Comment, ShareEvent, UserProfile } from '../types';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://100.124.196.125:8005';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://localhost';
 
 // --- Token management ---
 export function setTokens(tokens: { access: string; refresh: string }) {
