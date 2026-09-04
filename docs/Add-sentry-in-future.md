@@ -1,0 +1,7 @@
+Sentry is an error tracking and performance monitoring service. You deploy a small SDK in your app, and it automatically:
+1. Captures exceptions — when code raises an error that isn't caught (or even when it is, optionally), Sentry gets the stack trace, the variables in scope, the request that triggered it, the user who hit it, and the line of code that failed.
+2. Groups similar errors — if 1000 users hit the same bug, Sentry groups them into 1 "issue" instead of 1000 noisy alerts.
+3. Sends you alerts — Slack, email, PagerDuty when an error spike happens or a new error appears.
+4. Records performance — transaction traces showing which parts of a request were slow (database, Redis, external API).
+5. Captures context — the user agent, IP, environment (staging vs prod), release version, the user's id, custom tags you set (like "user's premium tier" or "request correlation_id").
+The practical difference for EchoFlow today: right now, if an exception happens in production, the only record is a Python logger.exception(...) line in the worker's log file. The log gets rotated. The error never reaches you unless someone is actively tailing logs. With Sentry, the same exception is captured, deduped against past similar errors, and shown on a dashboard with full context — without anyone having to be watching.
