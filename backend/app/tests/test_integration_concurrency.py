@@ -9,9 +9,12 @@ a single lock — the very behavior we're trying to stress-test cannot be
 exercised. Postgres row-level locks (`SELECT ... FOR UPDATE`) are the
 actual production code path; these tests guard that path.
 
-Companion: backend/app/services/interactions.py (F() updates under
-transaction.atomic), backend/app/models.py (UserInteraction.save with
-select_for_update).
+Companion: backend/app/services/interactions.py (Redis INCRBY counter
+store path under transaction.atomic), backend/app/models.py
+(UserInteraction.save with select_for_update). The flusher
+(flush_counters_to_pg) collapses per-event row locks to one
+UPDATE per clip; the integration test below guards the row-level
+lock behavior at the ORM layer.
 """
 import threading
 

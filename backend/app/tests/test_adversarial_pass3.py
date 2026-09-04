@@ -85,31 +85,45 @@ class TestN2CounterRace:
     """Audit N2: select_for_update() lock was released before super().save()
     and the F() counter update, allowing concurrent toggle-like to double-count.
     The fix wraps everything in one transaction.atomic() block.
+
+    After the 2026-09 metrics rewrite, the F() side-effect has been
+    removed. The counter advance is observed in the Redis INCRBY
+    delta (counter_store) and materialized to Postgres via
+    flush_counters_to_pg. These tests assert the new pipeline.
     """
 
-    def test_toggle_sequence_keeps_counter_consistent(self, user, ready_clip):
+    def test_toggle_sequence_keeps_redis_counter_consistent(
+        self, user, ready_clip,
+    ):
+        from backend.app.services import counter_store
         from backend.app.services.interactions import record_like_toggle
-        for i in range(5):
-            interaction, _ = record_like_toggle(user, ready_clip)
-            ready_clip.refresh_from_db()
-            # 5 toggles from inactive default: 1, 0, 1, 0, 1 (last state = active)
-            assert ready_clip.likes in (0, 1)
-        assert ready_clip.likes == 1
-        assert interaction.is_active is True
+
+        counter_store._reset_backend_for_tests()
+
+        # 5 toggles from inactive default: state sequence is
+        # inactive -> active -> inactive -> active -> inactive -> active.
+        # Net deltas: +1, -1, +1, -1, +1 (final state active).
+        for _ in range(5):
+            record_like_toggle(user, ready_clip)
+
+        drained = counter_store.drain()
+        # Net +1 after 5 toggles (started at 0, ended at active).
+        assert drained['counters'][str(ready_clip.id)] == {'likes': 1}
 
     @pytest.mark.integration
     @pytest.mark.django_db(transaction=True)
     def test_concurrent_toggles_do_not_double_count(self, user, ready_clip):
-        """5 threads each call record_like_toggle 10 times. The counter must
-        remain in {0, 1} (one like row) regardless of interleaving. With
-        the previous code, the F() update was outside the atomic block and
-        could double-count under load.
+        """5 threads each call record_like_toggle 10 times. The Redis
+        INCRBY net must remain in {0, 1} (one like row) regardless
+        of interleaving. With the previous F() code, double-counts
+        could occur under load because the row lock was released
+        before the F().
 
         Marked `integration` because SQLite's database-level locking
-        prevents true concurrency; the test only exercises real Postgres
-        row-level locks. The conftest autouse fixture skips this on
-        SQLite automatically; no inline skip needed.
+        prevents true concurrency; the test only exercises real
+        Postgres row-level locks.
         """
+        from backend.app.services import counter_store
         from backend.app.services.interactions import record_like_toggle
 
         results = []
@@ -128,22 +142,29 @@ class TestN2CounterRace:
         for t in threads:
             t.join(timeout=30)
 
-        ready_clip.refresh_from_db()
+        drained = counter_store.drain()
         assert not errors, f"Worker errors: {errors[:3]}"
-        # Counter must be non-negative and bounded
-        assert 0 <= ready_clip.likes <= 1, (
-            f"Concurrent toggles corrupted counter: likes={ready_clip.likes}"
+        # Net delta is bounded by 0/1 since the toggle pairs up.
+        likes_delta = drained['counters'].get(str(ready_clip.id), {}).get('likes', 0)
+        assert likes_delta in (0, 1), (
+            f"Concurrent toggles corrupted counter: delta={likes_delta}"
         )
 
     def test_share_counter_atomic(self, user, ready_clip):
-        """Same atomic-block fix applies to shares (uses the same F() side-effect)."""
+        """Idempotent share (get_or_create) means a single Redis INCRBY."""
+        from backend.app.services import counter_store
         from backend.app.services.interactions import record_share
-        # 5 sequential shares
+
+        counter_store._reset_backend_for_tests()
+
         for _ in range(5):
             record_share(user, ready_clip)
-            ready_clip.refresh_from_db()
-        # Each share is idempotent (get_or_create), so shares = 1, not 5
-        assert ready_clip.shares == 1
+
+        drained = counter_store.drain()
+        # 5 shares: only the first creates the row and fires
+        # counter_store.increment; the rest hit the existing row
+        # (state_changed=False, no increment).
+        assert drained['counters'][str(ready_clip.id)] == {'shares': 1}
 
 
 # ---------------------------------------------------------------------------

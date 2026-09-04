@@ -34,7 +34,7 @@ class TestFeedPoolModule:
             GLOBAL_POOL_KEY,
             user_pool_key,
         )
-        assert GLOBAL_POOL_KEY == 'clip:candidates:exploit'
+        assert GLOBAL_POOL_KEY == 'feed:exploit_pool'
         assert user_pool_key(42) == 'user:42:candidates:explore'
 
     def test_redis_helper_uses_django_redis(self):
@@ -86,7 +86,7 @@ class TestGetUserCandidates:
     def test_global_pool_only(self, monkeypatch):
         from backend.app.services import feed_pool
         fake_redis = _FakeRedisClient({
-            'clip:candidates:exploit': {
+            'feed:exploit_pool': {
                 'a': 0.95, 'b': 0.90, 'c': 0.85, 'd': 0.80, 'e': 0.75,
             },
         })
@@ -100,7 +100,7 @@ class TestGetUserCandidates:
     def test_global_and_per_user_combined(self, monkeypatch):
         from backend.app.services import feed_pool
         fake_redis = _FakeRedisClient({
-            'clip:candidates:exploit': {
+            'feed:exploit_pool': {
                 'g1': 0.99, 'g2': 0.95, 'g3': 0.90, 'g4': 0.85,
                 'g5': 0.80, 'g6': 0.75, 'g7': 0.70, 'g8': 0.65,
             },

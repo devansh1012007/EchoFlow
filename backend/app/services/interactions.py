@@ -1,26 +1,27 @@
 """Interaction service layer.
 
-Stage 2 of the relational-to-event-driven plan: every write to
-`UserInteraction` flows through these functions, never directly through
-ORM in a view. Today each function delegates to the same ORM call the
-view previously made; tomorrow the F() counter side-effect can be
-moved to a Redis INCRBY + batcher without touching any view.
+Stage 3 of the relational-to-event-driven plan: every write to
+`UserInteraction` flows through these functions, never directly
+through ORM in a view. As of the 2026-09 metrics rewrite, the
+F() counter side-effect on AudioClip has been removed; all
+counter writes go through Redis (counter_store) and the
+flush_counters_to_pg task is the only path from Redis to
+Postgres.
 
 Behavior contract (preserved from pre-refactor views/interactions.py):
-  * toggle_like: get_or_create + toggle is_active; bumps AudioClip.likes
-    on state change via UserInteraction.save()'s F() side-effect.
-  * register_skip: writes an interaction_type='skip' row. The F() in
-    UserInteraction.save() bumps AudioClip.skips via the field_map
-    (Group C item 19 fix; previously this was 'view' with no counter).
+  * toggle_like: get_or_create + toggle is_active; the UserInteraction
+    save() fires a Redis INCRBY via counter_store (no F()).
+  * register_skip: writes a completion sample + skip counter to
+    Redis. The flusher materializes a UserInteraction row per
+    (user, clip) per beat.
   * record_telemetry: emits a JSON event to a Redis Stream (primary)
     with a Redis list as fallback. The stream consumer
     (tasks.flush_telemetry_stream) bulk-inserts UserInteraction rows
     AND invalidates each affected user's cached user_vectors.
-    On Redis failure it falls back to the synchronous update_or_create
-    so the event is not dropped.
-  * record_share: get_or_create the share interaction (bumps shares)
-    AND creates a ShareEvent row. Invalidates the sender's cached
-    user_vectors so /suggestions/ picks up the new interaction.
+    On Redis failure it falls back to a Redis counter-store write
+    so the event is not lost.
+  * record_share: get_or_create the share interaction. The
+    UserInteraction save() fires a Redis INCRBY on shares.
 
 STREAM DETAILS:
   Stream key:    stream:interaction.events
@@ -131,13 +132,13 @@ def _rpush_telemetry(event: dict) -> None:
 
 
 def record_like_toggle(user, clip: AudioClip) -> tuple[UserInteraction, bool]:
-    """Toggle the user's like on `clip`. Returns (interaction, created)."""
-    # DECISION: Instrumented with the toggle_like histogram. This is
-    # the F() counter hot path (UserInteraction.save() fires the
-    # update on AudioClip.likes). The metric labels distinguish
-    # 'success' from 'race_lost' (F() under contention) — when
-    # race_lost rate climbs, the atomic-block fix in the model is
-    # being exercised and contention is real.
+    """Toggle the user's like on `clip`. Returns (interaction, created).
+
+    The counter increment is O(1): the UserInteraction.save() hook
+    (in models.py) calls counter_store.increment() (Redis INCRBY)
+    on every state change. The flush_counters_to_pg task applies
+    the deltas to AudioClip.likes once per beat.
+    """
     from .. import metrics
     with metrics.time_toggle_like() as timer:
         interaction, created = UserInteraction.objects.get_or_create(
@@ -287,11 +288,16 @@ def record_telemetry(
 
 
 def record_share(user, clip: AudioClip) -> UserInteraction:
-    """Log a share interaction. Bumps AudioClip.shares via the F() side-effect.
+    """Log a share interaction.
 
-    Does NOT create a ShareEvent — that is the inbox fan-out, owned by
-    the share-send view (callers do both: this function for the counter,
-    ShareEvent.objects.create for the inbox).
+    Bumps AudioClip.shares via the Redis INCRBY fired inside
+    UserInteraction.save() (counter_store.increment path). The
+    flush_counters_to_pg task applies the delta to Postgres once
+    per beat.
+
+    Does NOT create a ShareEvent — that is the inbox fan-out, owned
+    by the share-send view (callers do both: this function for the
+    counter, ShareEvent.objects.create for the inbox).
 
     A3 cache invalidation: a share is a state change for the user
     (their share history is part of the recommendation signal). The

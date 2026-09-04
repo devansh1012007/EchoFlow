@@ -381,7 +381,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     'rebuild-global-exploit-pool': {
         # P2.2: Global candidate pool. Single SELECT + ZADD rebuild
-        # of the clip:candidates:exploit ZSET. See
+        # of the feed:exploit_pool ZSET. See
         # backend/app/services/feed_pool.py and
         # docs/EXPLAIN/recommendation/03-feed-pre-computation.md.
         'task': 'backend.app.tasks.rebuild_global_exploit_pool',

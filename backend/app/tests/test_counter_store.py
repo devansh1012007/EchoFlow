@@ -232,10 +232,13 @@ class TestFlushCountersToPg:
 
         result = flush_counters_to_pg.run()
 
-        assert result['drained'] == 0
-        assert result['applied_counters'] == 0
-        assert result['applied_completion'] == 0
-        assert result['materialized_rows'] == 0
+        assert result == {
+            'drained': 0,
+            'applied_counters': 0,
+            'applied_completion': 0,
+            'applied_velocity': 0,
+            'materialized_rows': 0,
+        }
         ready_clip.refresh_from_db()
         assert ready_clip.likes == before_likes
 
@@ -333,10 +336,12 @@ class TestFlushCountersToPg:
         second = flush_counters_to_pg.run()
 
         assert first['applied_counters'] == 1
+        assert first['applied_velocity'] == 1
         assert second == {
             'drained': 0,
             'applied_counters': 0,
             'applied_completion': 0,
+            'applied_velocity': 0,
             'materialized_rows': 0,
         }
         ready_clip.refresh_from_db()
