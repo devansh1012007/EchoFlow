@@ -33,3 +33,24 @@ class TestSendShare:
     def test_inbox_unread_count(self, user, other_user, ready_clip):
         shares_svc.send_share(sender=user, clip=ready_clip, receiver=other_user)
         assert ShareEvent.objects.filter(receiver=other_user, is_read=False).count() == 1
+
+    def test_send_share_invalidates_user_vectors_cache(
+        self, user, other_user, ready_clip,
+    ):
+        # A3 Part 1: send_share is the view-callable path that
+        # creates both the UserInteraction (counter) and the
+        # ShareEvent (inbox). It must invalidate the sender's
+        # cached user_vectors via the @transaction.atomic + on_commit
+        # deferral. The cache key is cleared only after the outer
+        # atomic commits.
+        from django.core.cache import cache
+        from django.test import TestCase
+
+        cache_key = f'user_vectors:{user.id}'
+        cache.set(cache_key, ('sem-stale', 'ac-stale'), timeout=900)
+        assert cache.get(cache_key) is not None
+
+        with TestCase.captureOnCommitCallbacks(execute=True):
+            shares_svc.send_share(sender=user, clip=ready_clip, receiver=other_user)
+
+        assert cache.get(cache_key) is None

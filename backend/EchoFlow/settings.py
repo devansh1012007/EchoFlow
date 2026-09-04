@@ -152,9 +152,43 @@ WSGI_APPLICATION = 'backend.EchoFlow.wsgi.application'
 DATABASES = {
     'default': dj_database_url.config(
             default=os.environ.get('DATABASE_URL', ''),
-            conn_max_age=600
+            conn_max_age=600,
+            conn_health_checks=True,
         )
 }
+# SEC: per-session safety timeouts. Without these, a single slow
+# query (e.g. update_global_metrics over a large AudioClip table) or
+# a stuck transaction can hold a backend connection indefinitely.
+# With PgBouncer's DEFAULT_POOL_SIZE=25 in front of web/celery, 25
+# slow queries would exhaust the pool and the app would stop
+# accepting new connections. Each timeout trades a worse error
+# (QueryCanceled / lock timeout / fatal "terminating connection due
+# to idle-in-transaction timeout") for a better failure mode: the
+# connection is freed and the request returns a 5xx the caller can
+# retry. See docs/backend-bug-fixs.md item A1 and
+# docs/EXPLAIN/decisions/partial-issues-completion-plan.md §1 for
+# trade-off analysis.
+#
+# psycopg2's `options` connection parameter (a single string) is the
+# documented way to set GUC_REQUIRES_RELOAD server variables. We
+# build the string here. Each `-c name=value` is a libpq option
+# passed to the server at connect time. The same string format is
+# used by `psql -c`. See:
+# https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNECT-OPTIONS
+#
+# The `options` kwarg is psycopg2-specific; SQLite (used in tests)
+# does not accept it. Skip when the engine is not Postgres.
+# `dj_database_url` may return an empty dict when DATABASE_URL is
+# unset; check the engine key to be safe.
+if DATABASES['default'].get('ENGINE', '').endswith('postgresql'):
+    if 'OPTIONS' not in DATABASES['default']:
+        DATABASES['default']['OPTIONS'] = {}
+    DATABASES['default']['OPTIONS']['options'] = (
+        '-c statement_timeout=30s '
+        '-c idle_in_transaction_session_timeout=60s '
+        '-c lock_timeout=10s '
+        '-c connect_timeout=10s'
+    )
 
 # DECISION: optional 'read' connection for routing pure reads to a
 # PostgreSQL streaming replica. See backend/app/db_routers.py and
@@ -175,10 +209,17 @@ if os.environ.get('READ_DATABASE_URL'):
         # will refuse the write with
         # `ERROR: cannot execute INSERT in a read-only transaction`.
         conn_health_checks=True,
-        options={
-            '-c default_transaction_read_only=on',
-        },
     )
+    # Same psycopg2 `options` parameter pattern as the default
+    # connection. Pre-PR, the read block passed `options={...}` as
+    # a kwarg to dj_database_url.config(), which the library does
+    # not accept — settings would crash the moment READ_DATABASE_URL
+    # was set. Fixing in this PR to unblock the A5 read-replica
+    # activation plan. Only apply when the engine is Postgres.
+    if DATABASES['read'].get('ENGINE', '').endswith('postgresql'):
+        if 'OPTIONS' not in DATABASES['read']:
+            DATABASES['read']['OPTIONS'] = {}
+        DATABASES['read']['OPTIONS']['options'] = '-c default_transaction_read_only=on'
 
 # DECISION: register ReadRouter only when the replica is configured.
 # Enabling the router without READ_DATABASE_URL set would route reads
