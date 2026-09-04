@@ -55,6 +55,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Group C item 21: Defensive check that no tracked env file
+      # has DJANGO_DEBUG=True. .env is gitignored; this protects
+      # against future boilerplate files being committed with DEBUG on.
+      - name: Check no tracked env file has DJANGO_DEBUG=True
+        run: bash scripts/check_no_tracked_env.sh
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
