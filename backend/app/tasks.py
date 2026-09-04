@@ -1058,81 +1058,259 @@ def cleanup_orphan_hls(max_keys: int = 1000) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Group B item 9: periodic counter flusher.
+# Periodic counter flusher — event-driven metrics pipeline.
 #
 # Background: UserInteraction.save() (in models.py) writes counter
-# deltas to Redis (counter_store.increment) AND, in Phase 1, to
-# Postgres via the F() side-effect (dual_write_enabled() = True).
+# deltas to Redis (counter_store.increment) for the simple clip-global
+# counters (likes/shares/skips). The synchronous UserInteraction F()
+# side-effect has been removed; this task is the only path from
+# Redis to Postgres for those counters AND for the per-(user,clip)
+# completion accumulator. It runs every 5 minutes via Celery Beat.
 #
-# This task is the periodic safety net. It drains the Redis deltas
-# and applies them to Postgres. The behavior depends on the rollout
-# phase:
+# Three responsibilities, applied in order:
 #
-#   - Phase 1 (dual-write ON, default): The F() already wrote the
-#     delta to Postgres when the user request landed. The flusher
-#     drains Redis (preventing unbounded growth) but DOES NOT touch
-#     Postgres. Without this drain, Redis keys would accumulate
-#     forever. Behavior: read-and-discard.
+#   1. Counter deltas (likes/shares/skips): one F() UPDATE per dirty
+#      clip. A clip with 1000 likes in 5 min gets ONE row lock, not
+#      1000. This collapses the prior row-lock contention that
+#      motivated the event-driven migration.
 #
-#   - Phase 2 (dual-write OFF, post-env-flip): The F() is bypassed
-#     in the model. The flusher is the ONLY path from Redis to
-#     Postgres. Behavior: read-and-apply via a single UPDATE per
-#     clip (one row lock per clip, not per counter event).
+#   2. avg_completion_rate: per-(user,clip) completion samples are
+#      drained as (sum, count) pairs. The flusher divides to recover
+#      the mean and applies it to AudioClip.avg_completion_rate. NO
+#      correlated subquery on userinteraction (the audit-flagged
+#      pathology that originally motivated this rewrite).
 #
-# DECISION: one Celery beat entry covers both phases; the task
-# branches on dual_write_enabled(). No risk of double-counting
-# because exactly one path is active in any given phase.
+#   3. UserInteraction row materialization: per-(user,clip)
+#      completion samples also drive a single bulk_create of
+#      UserInteraction(interaction_type='view') rows, preserving
+#      the row shape that downstream consumers (e.g. the
+#      recommendation engine) used to read synchronously.
+#
+# DECISION: one Celery beat entry covers all three responsibilities;
+# the task touches only dirty rows. No full-table scan.
 # ---------------------------------------------------------------------------
 @shared_task(name='backend.app.tasks.flush_counters_to_pg')
 def flush_counters_to_pg(batch_size: int = 500) -> dict:
-    """Drain Redis counter deltas; apply to Postgres if dual-write is off.
+    """Drain Redis counter deltas; apply to Postgres.
 
-    Returns: {drained: N, applied: M, dual_write: bool}
+    Returns: {
+        'drained': N,
+        'applied_counters': M,
+        'applied_completion': K,
+        'materialized_rows': R,
+    }
     """
     from .services import counter_store
 
-    deltas = counter_store.drain()
-    drained = sum(len(v) for v in deltas.values())
+    drained = counter_store.drain()
+    counter_deltas: dict = drained.get('counters', {})
+    completion_deltas: dict = drained.get('completion', {})
+    drained_count = sum(len(v) for v in counter_deltas.values()) + sum(
+        1 for _ in completion_deltas
+    )
 
-    if counter_store.dual_write_enabled():
-        # Phase 1: F() already wrote to Postgres. Just log.
-        logger.info(
-            "flush_counters_to_pg: phase=dual_write drained=%d (no-op)",
-            drained,
-        )
-        return {'drained': drained, 'applied': 0, 'dual_write': True}
+    if not counter_deltas and not completion_deltas:
+        return {
+            'drained': 0,
+            'applied_counters': 0,
+            'applied_completion': 0,
+            'materialized_rows': 0,
+        }
 
-    # Phase 2: apply deltas to Postgres. One UPDATE per clip, not
-    # per counter event. This is the row-lock optimization: a clip
-    # with 1000 likes in 5 min gets ONE row lock, not 1000.
+    applied_counters = _apply_counter_deltas(counter_deltas, batch_size)
+    applied_completion, materialized_rows = _apply_completion_deltas(
+        completion_deltas, batch_size,
+    )
+
+    logger.info(
+        "flush_counters_to_pg: drained=%d applied_counters=%d applied_completion=%d materialized_rows=%d",
+        drained_count, applied_counters, applied_completion, materialized_rows,
+    )
+    return {
+        'drained': drained_count,
+        'applied_counters': applied_counters,
+        'applied_completion': applied_completion,
+        'materialized_rows': materialized_rows,
+    }
+
+
+def _apply_counter_deltas(
+    counter_deltas: dict[str, dict[str, int]], batch_size: int,
+) -> int:
+    """Apply likes/shares/skips F() updates. One UPDATE per dirty clip.
+
+    A clip with all three deltas gets a single row lock + single
+    UPDATE. The previous O(N) per-event approach serialized 1000
+    likes behind 1000 row locks; this collapses to 1.
+    """
+    if not counter_deltas:
+        return 0
+    items = list(counter_deltas.items())[:batch_size]
     applied = 0
-    items = list(deltas.items())[:batch_size]
-    for clip_id, counter_deltas in items:
-        if not counter_deltas:
+    for clip_id, counter_deltas_per_clip in items:
+        if not counter_deltas_per_clip:
             continue
         try:
-            update_kwargs = {
-                f'{ct}_delta': delta for ct, delta in counter_deltas.items()
-            }
-            # SQL: UPDATE app_audioclip SET likes = likes + :likes_delta,
-            # shares = shares + :shares_delta, skips = skips + :skips_delta
-            # WHERE id = :clip_id
             from django.db.models import F as _F
-            expr = {}
-            for ct, delta in counter_deltas.items():
-                expr[ct] = _F(ct) + delta
+            expr = {
+                ct: _F(ct) + delta
+                for ct, delta in counter_deltas_per_clip.items()
+            }
             AudioClip.objects.filter(pk=clip_id).update(**expr)
             applied += 1
         except Exception as exc:
             logger.warning(
-                "flush_counters_to_pg: failed to apply deltas for %s: %s",
+                "flush_counters_to_pg: counter update failed for %s: %s",
+                clip_id, exc,
+            )
+    return applied
+
+
+def _apply_completion_deltas(
+    completion_deltas: dict[tuple[str, str], dict[str, float]],
+    batch_size: int,
+) -> tuple[int, int]:
+    """Apply completion-rate deltas to AudioClip.avg_completion_rate and
+    materialize a UserInteraction row per (user, clip) per beat.
+
+    Returns: (clip_updates_applied, rows_materialized)
+    """
+    if not completion_deltas:
+        return 0, 0
+
+    # Aggregate per-clip mean completion rate. Multiple (user,clip)
+    # samples in the same beat get weighted-averaged into one
+    # AudioClip.avg_completion_rate value per clip. The aggregation
+    # is total_sum / total_count over the drained samples.
+    per_clip_sum: dict[str, float] = {}
+    per_clip_count: dict[str, int] = {}
+    for (clip_id, _user_id), slot in completion_deltas.items():
+        s = float(slot.get('completion_sum', 0.0))
+        c = int(slot.get('completion_count', 0))
+        if c <= 0:
+            continue
+        per_clip_sum[clip_id] = per_clip_sum.get(clip_id, 0.0) + s
+        per_clip_count[clip_id] = per_clip_count.get(clip_id, 0) + c
+
+    # Apply per-clip avg_completion_rate with one UPDATE per dirty clip.
+    applied = 0
+    for clip_id, total_count in list(per_clip_count.items())[:batch_size]:
+        if total_count <= 0:
+            continue
+        mean = per_clip_sum[clip_id] / total_count
+        try:
+            AudioClip.objects.filter(pk=clip_id).update(avg_completion_rate=mean)
+            applied += 1
+        except Exception as exc:
+            logger.warning(
+                "flush_counters_to_pg: completion update failed for %s: %s",
                 clip_id, exc,
             )
 
-    logger.info(
-        "flush_counters_to_pg: phase=single_write drained=%d applied=%d (batch=%d)",
-        drained, applied, batch_size,
+    # Materialize one UserInteraction row per (user, clip) per beat.
+    # The unique_together (user, clip, interaction_type) constraint
+    # is satisfied by using a fixed action_type='view' for the
+    # aggregated completion row. The row's completion_rate is the
+    # weighted mean across the drained samples for that (user, clip).
+    materialized = _materialize_user_interaction_rows(
+        completion_deltas, batch_size,
     )
-    return {'drained': drained, 'applied': applied, 'dual_write': False}
+    return applied, materialized
+
+
+def _materialize_user_interaction_rows(
+    completion_deltas: dict[tuple[str, str], dict[str, float]],
+    batch_size: int,
+) -> int:
+    """Bulk-create one UserInteraction row per drained (user, clip) tuple.
+
+    Each (user, clip) bucket from the drain becomes exactly one
+    UserInteraction row with interaction_type='view' and the
+    aggregated completion_rate. We use update_or_create so a
+    re-flush of the same (user, clip) within the same beat is
+    idempotent (the unique_together constraint would otherwise
+    fail).
+
+    The clip-global avg_completion_rate was already applied in
+    _apply_completion_deltas; this only materializes the per-user
+    row so the recommendation engine can read its existing
+    UserInteraction-shaped inputs.
+    """
+    if not completion_deltas:
+        return 0
+
+    from .models import UserInteraction
+    from django.contrib.auth import get_user_model
+
+    UserModel = get_user_model()
+    items = list(completion_deltas.items())[:batch_size]
+    if not items:
+        return 0
+
+    # Batch-resolve the FKs. The keys here are stringified UUIDs and
+    # stringified user IDs (the counter_store keys are uniformly
+    # string-coerced via `str(...)` at the call sites).
+    clip_ids: set = set()
+    user_id_strs: set[str] = set()
+    for (clip_id, user_id), _slot in items:
+        clip_ids.add(clip_id)
+        user_id_strs.add(user_id)
+
+    try:
+        import uuid as _uuid
+        uuid_clip_ids = {_uuid.UUID(str(c)) for c in clip_ids}
+        clips_by_id = AudioClip.objects.in_bulk(uuid_clip_ids)
+    except (TypeError, ValueError):
+        logger.warning("flush_counters_to_pg: invalid clip_id in completion drain")
+        return 0
+    try:
+        int_user_ids = {int(u) for u in user_id_strs}
+    except (TypeError, ValueError):
+        int_user_ids = set()
+    try:
+        users_by_id = UserModel.objects.in_bulk(int_user_ids) if int_user_ids else {}
+    except Exception as exc:
+        logger.warning("flush_counters_to_pg: user in_bulk failed: %s", exc)
+        users_by_id = {}
+
+    written = 0
+    for (clip_id, user_id), slot in items:
+        # Resolve clip.
+        try:
+            import uuid as _uuid
+            clip_obj = clips_by_id.get(_uuid.UUID(str(clip_id)))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if clip_obj is None:
+            continue
+        try:
+            user_obj = users_by_id.get(int(user_id))
+        except (TypeError, ValueError):
+            user_obj = None
+        if user_obj is None:
+            continue
+        s = float(slot.get('completion_sum', 0.0))
+        c = int(slot.get('completion_count', 0))
+        if c <= 0:
+            continue
+        mean = s / c
+        try:
+            UserInteraction.objects.update_or_create(
+                user=user_obj,
+                clip=clip_obj,
+                interaction_type='view',
+                defaults={
+                    'completion_rate': mean,
+                    'watch_time_ms': 0,
+                    'is_active': True,
+                },
+            )
+            written += 1
+        except Exception as exc:
+            logger.warning(
+                "flush_counters_to_pg: materialize row failed for clip=%s user=%s: %s",
+                clip_id, user_id, exc,
+            )
+    return written
 
 
