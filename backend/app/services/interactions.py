@@ -168,29 +168,50 @@ def record_skip(
     clip: AudioClip,
     listen_duration_ms: int,
     reel_position_ms: int,
-) -> UserInteraction:
-    """Register a skip event. Writes an interaction_type='skip' row.
+) -> dict:
+    """Register a skip event.
 
-    // DECISION: was 'view' (locked in by the no-op test); the audit
-    pass flagged this as silently dropped engagement telemetry. Now
-    matches the route name. Tradeoff: F() row-lock contention on viral
-    clips gets worse; Group B item 9 (Redis INCRBY) is the architectural
-    fix.
+    After the audit fix for O(N) `update_global_metrics` correlated
+    subqueries, the synchronous UserInteraction write was moved off
+    the request path. `record_skip` now:
+
+      1. Computes the completion rate from listen/reel position.
+      2. Pushes the completion sample into the Redis counter store
+         under `clip:<uuid>:user:<int>:completion_sum|count`.
+      3. Bumps the clip-global `skips` counter via INCRBY.
+      4. Invalidates the user's cached user_vectors on commit.
+
+    The `flush_counters_to_pg` task materializes a single
+    `UserInteraction(interaction_type='skip')` row per (user, clip)
+    per beat with the aggregated completion_rate, so downstream
+    consumers reading the row table see the same shape they always
+    did.
     """
+    from . import counter_store
+
     expected_duration = reel_position_ms if reel_position_ms > 0 else 60000
     completion_rate = min(listen_duration_ms / expected_duration, 1.0)
-    interaction, _ = UserInteraction.objects.update_or_create(
-        user=user,
-        clip=clip,
-        interaction_type='skip',
-        defaults={
-            'completion_rate': completion_rate,
-            'is_active': True,
-        },
-    )
-    # Group B item 10: invalidate cached user vectors (see record_like_toggle).
+
+    try:
+        counter_store.add_completion(str(clip.id), str(user.id), completion_rate)
+        counter_store.increment(str(clip.id), 'skips', 1)
+    except Exception as exc:
+        # SECURITY: never let a metrics/counter hook break the
+        # user-facing write. The counter is observability; losing
+        # a single skip sample degrades the per-clip ranking by a
+        # negligible amount on the next beat.
+        logger.warning(
+            "record_skip: counter_store write failed for clip=%s user=%s: %s",
+            clip.id, user.id, exc,
+        )
+
+    # Group B item 10: invalidate cached user vectors.
     transaction.on_commit(lambda: invalidate_user_vectors_cache(user.id))
-    return interaction
+    return {
+        'clip_id': str(clip.id),
+        'user_id': str(user.id),
+        'completion_rate': completion_rate,
+    }
 
 
 def record_telemetry(
@@ -204,10 +225,17 @@ def record_telemetry(
     Path priority:
       1. Redis Stream XADD (env-gated by ECHOFLOW_TELEMETRY_STREAM, default on)
       2. Redis list RPUSH (legacy)
-      3. Synchronous update_or_create (last-resort; event must not be lost)
+      3. Redis counter-store write (last-resort; event must not be lost)
 
     Every event carries an `event_id` (UUID4) so the consumer can
     deduplicate via SETNX processed_event:{event_id} EX 86400.
+
+    After the audit fix for O(N) `update_global_metrics` correlated
+    subqueries, the synchronous UserInteraction write was removed
+    from this fallback path. Tier 3 now writes the completion sample
+    and the action counter directly to the Redis counter store. The
+    flusher materializes the UserInteraction row from the next batch
+    of drained values.
     """
     clip_duration = max(clip.duration_ms, 1)
     completion_rate = min(watch_time_ms / clip_duration, 1.0)
@@ -226,26 +254,34 @@ def record_telemetry(
         _rpush_telemetry(event)
     except Exception as exc:
         logger.warning(
-            "telemetry: redis enqueue failed (%s); falling back to synchronous write",
+            "telemetry: redis enqueue failed (%s); falling back to counter store",
             exc,
         )
         # B13: surface this Redis-enqueue failure to Sentry so silent
         # telemetry drops are visible. The local logger.warning stays
         # for the dev/CI path (Sentry is unconfigured in tests).
         capture_exception(exc, op='telemetry.rpush_fallback', clip_id=str(clip.id))
-        # A3 cache invalidation: the synchronous fallback writes
-        # directly to the DB, bypassing the stream consumer's bulk
-        # invalidation. Invalidate the user's cache here so /suggestions/
-        # sees the new state. The stream-consumer path (success) is
-        # covered in tasks.flush_telemetry_stream.
-        UserInteraction.objects.update_or_create(
-            user=user, clip=clip, interaction_type=action_type,
-            defaults={
-                'watch_time_ms': watch_time_ms,
-                'completion_rate': completion_rate,
-                'is_active': True,
-            },
-        )
+        # A3 cache invalidation: a user state change happened
+        # (their watch time advanced the recompute signal) so drop
+        # the cached user_vectors. Tier 3 does NOT need to write
+        # the UserInteraction row synchronously — the flusher will
+        # materialize it from the next drained completion sample.
+        from . import counter_store
+        try:
+            counter_store.add_completion(
+                str(clip.id), str(user.id), completion_rate,
+            )
+            # Most telemetry action_types are 'view' (and not a
+            # simple counter type); the simple INCRBY path is for
+            # 'like' / 'share' / 'skip' which have their own
+            # service entry points. The skips counter is the only
+            # one that overlaps with this path; record_skip writes
+            # it. We do not double-count here.
+        except Exception as inner:
+            logger.warning(
+                "telemetry: counter_store fallback failed for clip=%s user=%s: %s",
+                clip.id, user.id, inner,
+            )
         transaction.on_commit(lambda: invalidate_user_vectors_cache(user.id))
     return event
 

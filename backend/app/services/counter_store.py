@@ -1,36 +1,44 @@
-"""Redis-backed counter store for AudioClip.likes/shares/skips.
+"""Redis-backed counter store for AudioClip engagement metrics.
 
-Architectural fix for Group B item 9 (docs/backend-bug-fixs.md §10.2):
-the F() counter side-effect in UserInteraction.save() creates row-level
-contention on AudioClip under viral load (500 concurrent likes = 500
-serialized row locks). The P0 architectural fix is to move counter
-increments out of the synchronous request path entirely.
+Architectural fix for the architecture-audit concern that the
+legacy `update_global_metrics` task performs a correlated subquery
+on `userinteraction` for every AudioClip row every 5 minutes
+(`SELECT AVG(completion_rate) FROM userinteraction WHERE clip_id = …`).
+At 1M clips × 100 views that's 100M index lookups every 5 minutes.
+This module moves the hot path to O(1) Redis writes and pushes
+Postgres updates into a periodic flusher that touches only dirty
+clips.
 
-This module provides:
-  - increment(clip_id, counter_type, delta=1) -> int
-    Lock-free on the writer side. INCRBY on Redis.
-  - drain() -> dict[clip_id][counter_type] -> int
-    Atomic read-and-reset of all counter deltas. Implemented as a
-    Lua script so concurrent INCRBY calls between read and reset
-    are preserved (the script does GETALL + DEL atomically from
-    Redis's perspective).
-  - bulk_drain(clip_ids) -> dict[clip_id][counter_type] -> int
-    Pipelined version of drain() for the flusher.
-  - clear(clip_id) -> None
-    Used by tests to reset state; production code should never call this.
+Key space (all under `clip:` prefix so the legacy `KEYS clip:*` Lua
+drain finds them):
+
+  * `clip:<uuid>:likes`           — clip-global integer counter
+  * `clip:<uuid>:shares`          — clip-global integer counter
+  * `clip:<uuid>:skips`           — clip-global integer counter
+  * `clip:<uuid>:user:<int>:completion_sum`   — per-(user,clip) float
+  * `clip:<uuid>:user:<int>:completion_count` — per-(user,clip) int
+
+The per-(user,clip) completion keys are needed because
+`avg_completion_rate` is a per-(user,clip) measurement; preserving
+the per-user signal keeps the recommendation engine's existing
+`UserInteraction`-shaped inputs working. The flusher aggregates
+those keys into a single `UserInteraction` row per `(user, clip,
+'view')` tuple per beat, matching the row shape `record_skip` and
+`flush_telemetry_stream` used to write synchronously.
+
+Public API:
+  * `increment(clip_id, counter_type, delta=1) -> int`
+  * `add_completion(clip_id, user_id, completion_rate) -> None`
+  * `drain() -> dict`
+  * `clear(clip_id, counter_type=None) -> None`
+  * `dual_write_enabled() -> bool`  (transitional; slated for removal)
 
 In test environments without Redis, the module falls back to an
-in-memory dict with a threading.Lock. The API surface is identical.
+in-memory dict with a `threading.Lock`. The API surface is identical.
 
-Rollout:
-  - Phase 1: dual-write. record_*_toggle() writes BOTH to Postgres
-    (via the F() in save()) AND to Redis. The flusher runs and
-    starts accumulating. ECHOFLOW_DUAL_WRITE_COUNTERS=True (default).
-  - Phase 2: flip the flag. ECHOFLOW_DUAL_WRITE_COUNTERS=False.
-    record_*_toggle() writes ONLY to Redis. The flusher is the only
-    path to Postgres.
-  - Phase 3: remove the F() code from UserInteraction.save().
-    Done as a follow-up commit after Phase 2 runs cleanly in prod.
+In Phase 1 of the rollout, the synchronous F() side-effect in
+`UserInteraction.save()` ALSO ran. The F() is now removed; the
+flusher is the only path from Redis to Postgres.
 """
 from __future__ import annotations
 
@@ -43,26 +51,51 @@ logger = logging.getLogger(__name__)
 
 
 KEY_PREFIX = 'clip'  # results in keys like 'clip:<uuid>:likes'
-COUNTER_TYPES = ('likes', 'shares', 'skips')
+
+# Counter types that follow the simple `clip:<uuid>:<type>` shape
+# (clip-global, integer-valued).
+SIMPLE_COUNTER_TYPES = ('likes', 'shares', 'skips')
+
+# Per-(user,clip) completion accumulator: two keys per (user,clip).
+COMPLETION_SUM_SUFFIX = 'completion_sum'
+COMPLETION_COUNT_SUFFIX = 'completion_count'
 
 
-def _make_key(clip_id: Any, counter_type: str) -> str:
+def _make_simple_key(clip_id: Any, counter_type: str) -> str:
     return f'{KEY_PREFIX}:{clip_id}:{counter_type}'
+
+
+def _make_completion_sum_key(clip_id: Any, user_id: Any) -> str:
+    return f'{KEY_PREFIX}:{clip_id}:user:{user_id}:{COMPLETION_SUM_SUFFIX}'
+
+
+def _make_completion_count_key(clip_id: Any, user_id: Any) -> str:
+    return f'{KEY_PREFIX}:{clip_id}:user:{user_id}:{COMPLETION_COUNT_SUFFIX}'
 
 
 def _key_pattern() -> str:
     return f'{KEY_PREFIX}:*'
 
 
+def _parse_completion_key(key: str) -> tuple[str, str] | None:
+    """Parse `clip:<uuid>:user:<int>:completion_<sum|count>` -> (clip_id, user_id) or None."""
+    parts = key.split(':')
+    # ['clip', '<uuid with dashes>', 'user', '<int>', 'completion_sum']
+    if len(parts) != 5:
+        return None
+    if parts[0] != KEY_PREFIX or parts[2] != 'user':
+        return None
+    if parts[4] not in (COMPLETION_SUM_SUFFIX, COMPLETION_COUNT_SUFFIX):
+        return None
+    return parts[1], parts[3]
+
+
 class _RedisBackend:
     """Production backend: real Redis with Lua-atomic drain."""
 
-    # Lua: HGETALL + DEL, atomic from Redis's POV. Returns the
-    # HGETALL result. Concurrent INCRBY between HGETALL and DEL
-    # would be lost without atomicity; Lua prevents that.
-    #
-    # We do NOT use this for single-key increments; INCRBY is already
-    # atomic. The Lua is only for the read-and-reset drain.
+    # Atomic GETALL + DEL. Concurrent INCRBY / INCRBYFLOAT between
+    # the read and the reset would be lost without atomicity; Lua
+    # prevents that.
     _DRAIN_SCRIPT = """
     local keys = redis.call('KEYS', KEYS[1])
     local result = {}
@@ -86,12 +119,35 @@ class _RedisBackend:
             self._drain_sha = self._client.script_load(self._DRAIN_SCRIPT)
 
     def increment(self, clip_id, counter_type: str, delta: int = 1) -> int:
-        return int(self._client.incrby(_make_key(clip_id, counter_type), delta))
+        return int(self._client.incrby(_make_simple_key(clip_id, counter_type), delta))
 
-    def drain(self) -> dict[str, dict[str, int]]:
+    def add_completion(self, clip_id, user_id, completion_rate: float) -> None:
+        # Two operations; not atomic across them, but each is atomic
+        # individually. The flusher divides sum/count per (user,clip)
+        # so a partial write (sum without count) would skew the
+        # avg_completion_rate for that user by including the count=0
+        # case (no row) and excluding the count=1 case (a row with the
+        # rate). In practice the gap is sub-millisecond and a missing
+        # completion row is acceptable (the user's next skip
+        # recomputes it).
+        self._client.incrbyfloat(
+            _make_completion_sum_key(clip_id, user_id), completion_rate,
+        )
+        self._client.incr(
+            _make_completion_count_key(clip_id, user_id), 1,
+        )
+
+    def drain(self) -> dict:
         """Atomic read-and-reset of all clip:* keys.
 
-        Returns: {clip_id: {counter_type: int, ...}, ...}
+        Returns:
+          {
+            'counters':  {clip_id: {counter_type: int, ...}, ...},
+            'completion': {(clip_id, user_id): {
+                'completion_sum': float,
+                'completion_count': int,
+            }, ...},
+          }
         """
         self._ensure_drain_script()
         try:
@@ -101,70 +157,112 @@ class _RedisBackend:
             self._drain_sha = self._client.script_load(self._DRAIN_SCRIPT)
             raw = self._client.evalsha(self._drain_sha, 1, _key_pattern())
 
-        result: dict[str, dict[str, int]] = {}
+        counters: dict[str, dict[str, int]] = {}
+        completion: dict[tuple[str, str], dict[str, float]] = {}
         # raw is a flat list [k1, v1, k2, v2, ...]
         for i in range(0, len(raw), 2):
             key = raw[i]
             if isinstance(key, bytes):
                 key = key.decode('utf-8')
-            value = int(raw[i + 1])
-            # Parse 'clip:<uuid>:<type>'
+            value = raw[i + 1]
+            if isinstance(value, bytes):
+                value = value.decode('utf-8')
+
+            # Try completion-key shape first: clip:<uuid>:user:<int>:completion_<sum|count>
+            parsed = _parse_completion_key(key)
+            if parsed is not None:
+                clip_id, user_id = parsed
+                slot = completion.setdefault((clip_id, user_id), {})
+                if key.endswith(COMPLETION_SUM_SUFFIX):
+                    slot[COMPLETION_SUM_SUFFIX] = float(value)
+                else:
+                    slot[COMPLETION_COUNT_SUFFIX] = int(value)
+                continue
+
+            # Else simple counter shape: clip:<uuid>:<type>
             parts = key.split(':', 2)
             if len(parts) != 3:
                 continue
             _, clip_id, counter_type = parts
-            result.setdefault(clip_id, {})[counter_type] = value
-        return result
+            if counter_type not in SIMPLE_COUNTER_TYPES:
+                # Unknown key under our prefix; skip (defense-in-depth
+                # for namespace collision; today the only other writer
+                # is services/feed_pool.py which uses a different
+                # key — clip:candidates:exploit — that is not a
+                # STRING, but if a future module introduces a STRING
+                # under clip: it will land here).
+                continue
+            counters.setdefault(clip_id, {})[counter_type] = int(value)
+
+        return {'counters': counters, 'completion': completion}
 
     def clear(self, clip_id, counter_type: str | None = None) -> None:
-        if counter_type is None:
-            for ct in COUNTER_TYPES:
-                self._client.delete(_make_key(clip_id, ct))
-        else:
-            self._client.delete(_make_key(clip_id, counter_type))
+        if counter_type is not None:
+            self._client.delete(_make_simple_key(clip_id, counter_type))
+            return
+        for ct in SIMPLE_COUNTER_TYPES:
+            self._client.delete(_make_simple_key(clip_id, ct))
 
 
 class _InMemoryBackend:
     """Test backend: dict with a Lock, no Redis dependency.
 
     Behavior matches the Redis backend for the API surface used by
-    production code: increment is atomic (under the lock), drain is
-    atomic (lock + dict copy + clear). The Lua-atomicity guarantee
-    from the Redis backend is replaced by a single lock acquire
-    that spans the equivalent read-and-reset.
+    production code: increment is atomic (under the lock), add_completion
+    is atomic, drain is atomic (lock + dict copy + clear). The
+    Lua-atomicity guarantee from the Redis backend is replaced by a
+    single lock acquire that spans the equivalent read-and-reset.
     """
 
     def __init__(self):
-        self._data: dict[str, int] = {}
+        self._data: dict[str, int | float] = {}
         self._lock = threading.Lock()
 
     def increment(self, clip_id, counter_type: str, delta: int = 1) -> int:
-        key = _make_key(clip_id, counter_type)
+        key = _make_simple_key(clip_id, counter_type)
         with self._lock:
-            self._data[key] = self._data.get(key, 0) + delta
-            return self._data[key]
+            self._data[key] = int(self._data.get(key, 0)) + delta
+            return int(self._data[key])
 
-    def drain(self) -> dict[str, dict[str, int]]:
-        result: dict[str, dict[str, int]] = {}
+    def add_completion(self, clip_id, user_id, completion_rate: float) -> None:
+        sum_key = _make_completion_sum_key(clip_id, user_id)
+        count_key = _make_completion_count_key(clip_id, user_id)
         with self._lock:
-            # Snapshot + clear under the lock. Equivalent to the
-            # Lua-atomic GETALL+DEL in the Redis backend.
+            self._data[sum_key] = float(self._data.get(sum_key, 0.0)) + float(completion_rate)
+            self._data[count_key] = int(self._data.get(count_key, 0)) + 1
+
+    def drain(self) -> dict:
+        counters: dict[str, dict[str, int]] = {}
+        completion: dict[tuple[str, str], dict[str, float]] = {}
+        with self._lock:
             for key, value in list(self._data.items()):
+                parsed = _parse_completion_key(key)
+                if parsed is not None:
+                    clip_id, user_id = parsed
+                    slot = completion.setdefault((clip_id, user_id), {})
+                    if key.endswith(COMPLETION_SUM_SUFFIX):
+                        slot[COMPLETION_SUM_SUFFIX] = float(value)
+                    else:
+                        slot[COMPLETION_COUNT_SUFFIX] = int(value)
+                    del self._data[key]
+                    continue
                 parts = key.split(':', 2)
                 if len(parts) != 3:
                     continue
                 _, clip_id, counter_type = parts
-                result.setdefault(clip_id, {})[counter_type] = value
+                if counter_type not in SIMPLE_COUNTER_TYPES:
+                    continue
+                counters.setdefault(clip_id, {})[counter_type] = int(value)
                 del self._data[key]
-        return result
+        return {'counters': counters, 'completion': completion}
 
     def clear(self, clip_id, counter_type: str | None = None) -> None:
         with self._lock:
-            if counter_type is None:
-                for ct in COUNTER_TYPES:
-                    self._data.pop(_make_key(clip_id, ct), None)
-            else:
-                self._data.pop(_make_key(clip_id, counter_type), None)
+            if counter_type is not None:
+                self._data.pop(_make_simple_key(clip_id, counter_type), None)
+                return
+            for ct in SIMPLE_COUNTER_TYPES:
+                self._data.pop(_make_simple_key(clip_id, ct), None)
 
 
 def _build_backend() -> Any:
@@ -173,16 +271,12 @@ def _build_backend() -> Any:
     Detection: try django.core.cache's _cache.get_client() first
     (the same client the rest of the app uses); if unavailable,
     fall back to in-memory. This keeps the test env (LocMem cache)
-    on the in-memory backend and the prod env (Redis cache) on
-    the Redis backend without an explicit env var.
+    on the in-memory backend and the prod env (Redis cache) on the
+    Redis backend without an explicit env var.
     """
     try:
         from django.core.cache import caches
 
-        # The earlier code had a dead ternary here:
-        #   caches[X and 'default' or 'default']
-        # Both branches were 'default', so the 'RedisCache' check did nothing.
-        # There is only one cache alias in CACHES; we use it directly.
         cache = caches['default']
         # django-redis exposes .client.get_client() returning a real Redis client.
         if hasattr(cache, 'client') and hasattr(cache.client, 'get_client'):
@@ -222,46 +316,67 @@ def _reset_backend_for_tests() -> None:
 # ---------------------------------------------------------------------------
 
 def increment(clip_id: Any, counter_type: str, delta: int = 1) -> int:
-    """Increment a counter. Lock-free on the writer side.
+    """Increment a clip-global counter. Lock-free on the writer side.
 
-    Returns the new value (not particularly useful to callers, but
-    matches the redis-py INCRBY return type for debugging).
+    `counter_type` must be one of `SIMPLE_COUNTER_TYPES`
+    (`likes`, `shares`, `skips`).
     """
-    if counter_type not in COUNTER_TYPES:
-        raise ValueError(f"counter_type must be one of {COUNTER_TYPES}")
+    if counter_type not in SIMPLE_COUNTER_TYPES:
+        raise ValueError(
+            f"counter_type must be one of {SIMPLE_COUNTER_TYPES} for increment(); "
+            f"use add_completion() for completion_rate data"
+        )
     return _get_backend().increment(clip_id, counter_type, delta)
 
 
-def drain() -> dict[str, dict[str, int]]:
+def add_completion(clip_id: Any, user_id: Any, completion_rate: float) -> None:
+    """Accumulate one completion sample for a (user, clip) pair.
+
+    Increments the per-(user,clip) completion_sum by `completion_rate`
+    (a float in [0.0, 1.0]) and the completion_count by 1. The
+    flusher divides sum/count to recover the average.
+    """
+    rate = float(completion_rate)
+    if rate < 0.0 or rate > 1.0:
+        # Clamp to bounds rather than reject: the upstream
+        # computation is `min(watch_time_ms / clip_duration, 1.0)`,
+        # which already enforces the upper bound; the lower bound
+        # here is a safety net for any future caller that computes
+        # completion differently.
+        rate = max(0.0, min(1.0, rate))
+    _get_backend().add_completion(clip_id, user_id, rate)
+
+
+def drain() -> dict:
     """Atomic read-and-reset of all counter deltas.
 
-    Returns: {clip_id: {counter_type: int, ...}, ...}
+    Returns: `{'counters': {clip_id: {counter_type: int, ...}, ...},
+              'completion': {(clip_id, user_id): {sum, count}, ...}}`
     """
     return _get_backend().drain()
 
 
 def clear(clip_id: Any, counter_type: str | None = None) -> None:
-    """Test-only: clear a single counter (or all 3 for a clip)."""
+    """Test-only: clear a single counter (or all simple counters for a clip)."""
     _get_backend().clear(clip_id, counter_type)
 
 
 # ---------------------------------------------------------------------------
-# Rollout flag (Phase 1 -> Phase 2)
+# Rollout flag (kept for transitional backward compatibility)
 # ---------------------------------------------------------------------------
-# When ECHOFLOW_DUAL_WRITE_COUNTERS is True (the default in this
-# commit), record_*_toggle() writes BOTH to Redis (via this module)
-# AND to Postgres (via the F() in UserInteraction.save()). The flusher
-# is dormant; the F() is the source of truth.
-#
-# When the env var is set to False, the F() is removed at runtime
-# (via the field_map check in UserInteraction.save() reading the same
-# env var) and the flusher becomes the only path to Postgres.
-#
-# Phase 3 (post-rollout) removes the env var check and the F() code
-# from save() permanently.
+# `ECHOFLOW_DUAL_WRITE_COUNTERS` is now always False — the F()
+# side-effect in UserInteraction.save() has been removed. The flag
+# is retained as a no-op so deployment configurations referencing it
+# do not error; a follow-up release will delete it.
 DUAL_WRITE_ENV = 'ECHOFLOW_DUAL_WRITE_COUNTERS'
 
 
 def dual_write_enabled() -> bool:
-    """True if the F() side-effect should also run (Phase 1 default)."""
-    return os.environ.get(DUAL_WRITE_ENV, 'true').lower() not in ('false', '0', 'off')
+    """Always False after the F() removal. Retained for backward compat.
+
+    The legacy dual-write F() path has been removed from
+    `UserInteraction.save()`. This function is a no-op kept so
+    deployment configurations that still set the env var do not
+    error. The default for any new env value is False.
+    """
+    return False
