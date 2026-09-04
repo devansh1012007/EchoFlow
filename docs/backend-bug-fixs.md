@@ -593,10 +593,10 @@ Deployment-side. The bucket-side wiring is done (MinIO CORS, public-read for HLS
 Touches all migrations, all model references, AUTH_USER_MODEL. The user's WIP continues to use `backend.app`. Out of scope per the user's "I just want to know if you are working on these issues or not" — the answer is "not in this pass".
 
 ### 10.7 db_routers.py stub
-Dead code. Inert (not referenced in settings). Out of scope.
+**Status as of 2026-09-04 (Group A item 5, commit `a85e298`):** No longer a stub. `backend/app/db_routers.py` is now a 71-line `ReadRouter` that routes read-only queries on the `app` app to a PostgreSQL read replica. It is wired into `DATABASE_ROUTERS` at `settings.py:187` when `READ_DATABASE_URL` is set; 14 tests in `test_db_router.py` cover it. Removing the file would break `ImproperlyConfigured: Cannot import router backend.app.db_routers.ReadRouter` at startup whenever a read replica is configured. The doc's claim of "dead code" was true at the time of writing but is contradicted by the current source.
 
 ### 10.8 HF_TOKEN rotation
-Ops task (rotate the actual value in the HuggingFace dashboard). Code-side checks in place. Out of scope.
+Ops task (rotate the actual value in the HuggingFace dashboard). **Code-side checks** in this context means: the token is consumed exclusively at image-build time via a BuildKit secret (`Dockerfile:117-124`), and runtime uses baked models with `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` (`docker-compose.yml:451-452`). Zero runtime impact; no code-side health check exists (and is not needed because runtime is offline by design). A new built image picks up the rotated token on next `docker compose build --target media`.
 
 ### 10.9 Audio duration validation
 N8 in the source audit (file size/extension/magic-byte is now done; duration check is a separate item). Out of scope per user.
@@ -1171,7 +1171,8 @@ a9ff27a  fix(backend): drop Comment.likes dead code (Group C item 18)
 
 2. **Group B item 10: N11 cache invalidation wiring.** The
    `invalidate_user_vectors_cache` helper exists in
-   `services/interactions.py` but is never called. Wire it into
+   `backend/app/views/feed.py:50-55` (NOT `services/interactions.py` —
+   the original audit cite was wrong) but is never called. Wire it into
    `record_like_toggle` and `record_skip`.
 
 3. **`task_prerun` correlation_id propagation to Celery
