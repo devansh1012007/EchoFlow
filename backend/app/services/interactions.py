@@ -43,6 +43,7 @@ from django.core.cache import cache
 from django.db import transaction
 
 from ..models import AudioClip, UserInteraction
+from .sentry import capture_exception
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,7 @@ def _xadd_telemetry(event: dict) -> bool:
         return True
     except Exception as exc:
         logger.warning("telemetry: xadd failed (%s); will fall back to list", exc)
+        capture_exception(exc, op='telemetry.xadd', clip_id=str(event.get('clip_id', '')))
         return False
 
 
@@ -227,6 +229,10 @@ def record_telemetry(
             "telemetry: redis enqueue failed (%s); falling back to synchronous write",
             exc,
         )
+        # B13: surface this Redis-enqueue failure to Sentry so silent
+        # telemetry drops are visible. The local logger.warning stays
+        # for the dev/CI path (Sentry is unconfigured in tests).
+        capture_exception(exc, op='telemetry.rpush_fallback', clip_id=str(clip.id))
         # A3 cache invalidation: the synchronous fallback writes
         # directly to the DB, bypassing the stream consumer's bulk
         # invalidation. Invalidate the user's cache here so /suggestions/

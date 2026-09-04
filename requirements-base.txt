@@ -52,6 +52,9 @@ dj-rest-auth==7.2.0               # pure
 # --- Metrics ---
 django-prometheus==2.5.0          # pure
 
+# --- Error tracking (Sentry) ---
+sentry-sdk[django,celery]==2.18.0  # pure; gated on DJANGO_DEBUG=False + SENTRY_DSN
+
 # --- Crypto / HTTP clients ---
 cryptography==50.0.0              # cp311-abi3 — installs OFFLINE from wheelhouse
 requests==2.34.2                  # pure
