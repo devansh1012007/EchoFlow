@@ -537,6 +537,67 @@ class TestProxyHeaderBehavior:
                 f'Loop risk. Response: {response}'
             )
 
+    def test_in_container_healthcheck_must_send_forwarded_proto(self):
+        """REGRESSION: the web container's HEALTHCHECK pings
+        http://localhost:8000/health/. With SECURE_SSL_REDIRECT=True,
+        that request 301-redirects to https://... — and urllib follows
+        redirects, so the healthcheck reports healthy even when the
+        app is broken.
+
+        The Dockerfile and docker-compose.yml both updated the
+        healthcheck to include `X-Forwarded-Proto: https`, mimicking
+        what nginx would do. This test enforces that contract by
+        scanning both files for the header inside any active
+        HEALTHCHECK directive.
+        """
+        import re
+        dockerfile = (REPO_ROOT / 'Dockerfile').read_text()
+        compose = (REPO_ROOT / 'docker-compose.yml').read_text()
+
+        # Dockerfile: the HEALTHCHECK instruction starts with `HEALTHCHECK`
+        # (not `#`, not `   #`). Take the next line as the CMD.
+        df_checks = []
+        lines = dockerfile.splitlines()
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+            if stripped.startswith('HEALTHCHECK '):
+                # The CMD is typically the very next non-comment line,
+                # but for our Dockerfile the CMD is on the same logical
+                # line continued with `\`. Collect the next 3 lines.
+                snippet = '\n'.join(lines[i:i+3])
+                df_checks.append(snippet)
+
+        # docker-compose.yml: every healthcheck `test:` directive whose
+        # container is the `web` service. We approximate by taking every
+        # `test:` line and looking at the next 5 lines for the URL.
+        comp_checks = []
+        comp_lines = compose.splitlines()
+        for i, line in enumerate(comp_lines):
+            stripped = line.lstrip()
+            if stripped.startswith('test:') and 'urllib' in line:
+                snippet = '\n'.join(comp_lines[i:i+3])
+                comp_checks.append(snippet)
+
+        # At minimum, the web container's healthcheck must be in here.
+        # (Dockerfile has it for the api stage; compose has it for the
+        # `web` service. We require both.)
+        assert df_checks, 'Dockerfile: no HEALTHCHECK instruction found'
+        assert comp_checks, 'docker-compose.yml: no healthcheck test found'
+        # Each healthcheck that hits /health/ over http:// must carry the
+        # X-Forwarded-Proto header. Other healthchecks (celery ping)
+        # are not in the http-to-https path and are skipped.
+        for label, checks in (('Dockerfile', df_checks), ('docker-compose.yml', comp_checks)):
+            for snippet in checks:
+                if '/health/' in snippet and 'urllib' in snippet:
+                    assert "X-Forwarded-Proto" in snippet, (
+                        f'{label}: /health/ healthcheck does not send '
+                        f'X-Forwarded-Proto: https. With '
+                        f'SECURE_SSL_REDIRECT=True this healthcheck will '
+                        f'301-redirect and report healthy even when the '
+                        f'app is broken.\n'
+                        f'Context: {snippet}'
+                    )
+
 
 # ---------------------------------------------------------------------------
 # 5. PUBLIC_MEDIA_ENDPOINT_URL (MinIO / HLS playback origin)

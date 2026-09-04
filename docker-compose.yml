@@ -271,7 +271,12 @@ services:
       minio-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
+      # SECURITY: with SECURE_SSL_REDIRECT=True in production, an
+      # in-container http://.../health/ request would 301 to https://
+      # ... and (because urllib follows redirects) would appear healthy
+      # even if the app was broken. Send X-Forwarded-Proto: https
+      # so the probe exercises the real production request path.
+      test: ["CMD", "python", "-c", "import urllib.request; req = urllib.request.Request('http://localhost:8000/health/', headers={'X-Forwarded-Proto': 'https'}); urllib.request.urlopen(req, timeout=4)"]
       interval: 30s
       timeout: 10s
       start_period: 90s

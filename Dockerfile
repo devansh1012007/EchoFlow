@@ -145,8 +145,15 @@ COPY --chown=appuser:appgroup manage.py wait_for_db.py gunicorn.conf.py ./
 # Self-describing liveness for the HTTP role (web is this image's primary
 # deployment). celery/celery_feed share this image but answer queue traffic,
 # so docker-compose.yml overrides their probe with the Celery-ping variant.
+#
+# SECURITY: We send `X-Forwarded-Proto: https` because, with
+# SECURE_SSL_REDIRECT=True in production, the in-container healthcheck
+# would otherwise receive a 301 to https://... and the healthcheck
+# follows redirects, so the probe would pass even when the app is
+# broken. By pretending the request already came from nginx, we
+# exercise the same code path as a real client.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/', timeout=4)" || exit 1
+    CMD python -c "import urllib.request; req = urllib.request.Request('http://localhost:8000/health/', headers={'X-Forwarded-Proto': 'https'}); urllib.request.urlopen(req, timeout=4)" || exit 1
 
 USER appuser
 
