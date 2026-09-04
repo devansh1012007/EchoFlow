@@ -112,16 +112,11 @@ class Comment(models.Model):
     author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='replies')
     text = models.CharField(max_length=500)
-    likes = models.BigIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         indexes = [models.Index(fields=['clip', '-created_at'])]
         ordering = ['-created_at']
-        # DECISION: Added non-negative constraint for comment likes.
-        constraints = [
-            models.CheckConstraint(check=models.Q(likes__gte=0), name='comment_likes_non_negative'),
-        ]
 
     def save(self, *args, **kwargs):
         # NOTE: use _state.adding, NOT `not self.pk` — UUID pks with a callable

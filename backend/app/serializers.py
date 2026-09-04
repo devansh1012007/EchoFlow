@@ -136,8 +136,8 @@ class CommentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Comment
-        fields = ['id', 'clip', 'author_username', 'parent', 'text', 'likes', 'reply_count', 'created_at']
-        read_only_fields = ['id', 'author_username', 'likes', 'reply_count', 'created_at']
+        fields = ['id', 'clip', 'author_username', 'parent', 'text', 'reply_count', 'created_at']
+        read_only_fields = ['id', 'author_username', 'reply_count', 'created_at']
 
     def get_reply_count(self, obj):
         if not obj.parent_id:
