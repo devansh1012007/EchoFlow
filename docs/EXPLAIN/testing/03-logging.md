@@ -2,9 +2,14 @@
 
 ## Overview
 
-**File:** `backend/EchoFlow/settings.py:341-378`
+**File:** `backend/EchoFlow/settings.py:480-528`
 
-Structured JSON logging with per-logger level control.
+Structured JSON logging with per-logger level control and per-request
+correlation IDs.
+
+Last verified against `settings.py` on 2026-09-04. If this doc drifts,
+update it from the source of truth — do not let the file-line anchor
+go stale again.
 
 ---
 
@@ -14,16 +19,26 @@ Structured JSON logging with per-logger level control.
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'filters': {
+        # Inject the per-request correlation_id (set by CorrelationIdMiddleware
+        # via contextvars) into every log record. Empty string outside a
+        # request scope (e.g., Celery workers) — see celery.py to set it
+        # from task headers.
+        'correlation': {
+            '()': 'backend.EchoFlow.logging_filters.CorrelationIdFilter',
+        },
+    },
     'formatters': {
         'json': {
             '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
-            'fmt': '%(asctime)s %(name)s %(levelname)s %(message)s',
+            'fmt': '%(asctime)s %(name)s %(levelname)s %(correlation_id)s %(message)s',
         },
     },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'json',
+            'filters': ['correlation'],
         },
     },
     'root': {
@@ -56,8 +71,8 @@ LOGGING = {
 
 ### JSON Lines (stdout)
 ```json
-{"asctime": "2024-01-15T10:30:00.123456", "name": "backend.app.tasks", "levelname": "INFO", "message": "Extracted acoustic vector and duration for clip abc-123"}
-{"asctime": "2024-01-15T10:30:01.234567", "name": "backend.app.views", "levelname": "ERROR", "message": "Failed to process clip", "exc_info": "Traceback (most recent call last): ..."}
+{"asctime": "2024-01-15T10:30:00.123456", "name": "backend.app.tasks", "levelname": "INFO", "correlation_id": "a1b2c3d4-...", "message": "Extracted acoustic vector and duration for clip abc-123"}
+{"asctime": "2024-01-15T10:30:01.234567", "name": "backend.app.views", "levelname": "ERROR", "correlation_id": "a1b2c3d4-...", "message": "Failed to process clip", "exc_info": "Traceback (most recent call last): ..."}
 ```
 
 ### Fields
@@ -66,6 +81,7 @@ LOGGING = {
 | `asctime` | ISO timestamp with microseconds |
 | `name` | Logger name (e.g., `backend.app.tasks`) |
 | `levelname` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `correlation_id` | Per-request ID (UUID4) from `X-Request-ID` header, or `-` outside request scope |
 | `message` | Log message |
 | `exc_info` | Exception traceback (if error) |
 
@@ -110,20 +126,20 @@ DJANGO_LOG_LEVEL=WARNING APP_LOG_LEVEL=DEBUG docker compose up
 
 ### Task Processing
 ```json
-{"asctime": "2024-01-15T10:30:00.123456", "name": "backend.app.tasks", "levelname": "INFO", "message": "process_audio_to_hls Task is starting..."}
-{"asctime": "2024-01-15T10:30:05.234567", "name": "backend.app.tasks", "levelname": "INFO", "message": "Extracted acoustic vector and duration for clip abc-123"}
-{"asctime": "2024-01-15T10:30:15.345678", "name": "backend.app.tasks", "levelname": "INFO", "message": "Extracted keywords for clip abc-123: [('comedy', 0.9), ('storytelling', 0.8)]"}
-{"asctime": "2024-01-15T10:30:25.456789", "name": "backend.app.tasks", "levelname": "INFO", "message": "Uploaded HLS files for clip abc-123"}
+{"asctime": "2024-01-15T10:30:00.123456", "name": "backend.app.tasks", "levelname": "INFO", "correlation_id": "a1b2c3d4-...", "message": "process_audio_to_hls Task is starting..."}
+{"asctime": "2024-01-15T10:30:05.234567", "name": "backend.app.tasks", "levelname": "INFO", "correlation_id": "a1b2c3d4-...", "message": "Extracted acoustic vector and duration for clip abc-123"}
+{"asctime": "2024-01-15T10:30:15.345678", "name": "backend.app.tasks", "levelname": "INFO", "correlation_id": "a1b2c3d4-...", "message": "Extracted keywords for clip abc-123: [('comedy', 0.9), ('storytelling', 0.8)]"}
+{"asctime": "2024-01-15T10:30:25.456789", "name": "backend.app.tasks", "levelname": "INFO", "correlation_id": "a1b2c3d4-...", "message": "Uploaded HLS files for clip abc-123"}
 ```
 
 ### Error with Traceback
 ```json
-{"asctime": "2024-01-15T10:30:00.123456", "name": "backend.app.tasks", "levelname": "ERROR", "message": "FFmpeg Error: Invalid data found when processing input", "exc_info": "Traceback (most recent call last):\n  File \"/app/backend/app/tasks.py\", line 300, in process_audio_to_hls\n    subprocess.run(command, check=True, ...)\n  File \"/usr/lib/python3.11/subprocess.py\", line 571, in run\n    raise CalledProcessError(...)\nsubprocess.CalledProcessError: Command '...' returned non-zero exit status 1."}
+{"asctime": "2024-01-15T10:30:00.123456", "name": "backend.app.tasks", "levelname": "ERROR", "correlation_id": "a1b2c3d4-...", "message": "FFmpeg Error: Invalid data found when processing input", "exc_info": "Traceback (most recent call last):\n  File \"/app/backend/app/tasks.py\", line 300, in process_audio_to_hls\n    subprocess.run(command, check=True, ...)\n  File \"/usr/lib/python3.11/subprocess.py\", line 571, in run\n    raise CalledProcessError(...)\nsubprocess.CalledProcessError: Command '...' returned non-zero exit status 1."}
 ```
 
 ### Feed Refill
 ```json
-{"asctime": "2024-01-15T10:30:00.123456", "name": "backend.app.tasks", "levelname": "INFO", "message": "Added 40 composite-ranked clips."}
+{"asctime": "2024-01-15T10:30:00.123456", "name": "backend.app.tasks", "levelname": "INFO", "correlation_id": "a1b2c3d4-...", "message": "Added 40 composite-ranked clips."}
 ```
 
 ---
@@ -150,6 +166,7 @@ scrape_configs:
             logger: name
             message: message
             timestamp: asctime
+            correlation_id: correlation_id
 ```
 
 ### Elasticsearch (Filebeat)
@@ -204,60 +221,63 @@ except Exception as e:
 
 ---
 
-## Current Gaps
+## Correlation IDs (Currently Shipped)
+
+Per-request correlation IDs are **already implemented** in the codebase.
+The previous version of this doc listed "No correlation IDs" as a gap
+and recommended adding them; that recommendation has been implemented.
+
+### Implementation Files
+
+- **`backend/EchoFlow/correlation.py`** — ContextVars-based store for
+  the per-request correlation_id. `set_correlation_id()`,
+  `get_correlation_id()`, `clear_correlation_id()`. Uses `contextvars`
+  (not thread-local) so the id is correctly scoped per request even
+  under async or gunicorn sync workers.
+
+- **`backend/EchoFlow/middleware.py`** — `CorrelationIdMiddleware`
+  reads `X-Request-ID` from the request headers (or generates a UUID4
+  if absent), calls `set_correlation_id()`, and echoes
+  `X-Request-ID` in the response. Registered in
+  `settings.py:MIDDLEWARE`.
+
+- **`backend/EchoFlow/logging_filters.py`** — `CorrelationIdFilter`
+  reads the current correlation_id from the contextvars store and
+  attaches it to every log record. Used by the `correlation` filter
+  in the `console` handler's `filters` list.
+
+### How It Works
+
+1. Request arrives at Django. `CorrelationIdMiddleware` extracts or
+   generates the correlation_id and calls `set_correlation_id()`.
+2. All log records emitted during request processing pick up the
+   `correlation_id` via the filter and include it in the JSON output.
+3. The same id is echoed back in the response header so clients can
+   correlate logs with their request.
+4. After the request completes, the contextvar is cleared (or
+   garbage-collected on the next request in the same thread).
+
+### Celery Workers
+
+Celery workers do not have a request scope. The correlation_id field
+will be `-` (placeholder) unless the worker explicitly sets it from
+task headers. This is a known limitation; the recommended pattern is
+to pass `correlation_id` as a task header from the publisher and
+extract it in a `task_prerun` signal handler. Not yet implemented;
+see "Open Gaps" below.
+
+---
+
+## Open Gaps
 
 | Gap | Impact | Fix |
 |-----|--------|-----|
-| No correlation IDs | Can't trace request across services | Add middleware to inject `request_id` |
-| No structured context | Can't filter by user/clip | Add `extra` dict with IDs |
-| No sampling | High-volume logs expensive | Add rate-limited logging for frequent events |
-| No log retention | Docker stdout lost on restart | Ship to Loki/ELK |
-| No audit trail | Security events not tracked | Separate audit logger |
+| Celery workers don't propagate correlation_id | Can't trace async tasks end-to-end | Add `task_prerun` signal that reads `correlation_id` from task headers and calls `set_correlation_id()` |
+| No structured context | Can't filter by user/clip from logs | Add `extra` dict with IDs in hot-path log calls (partially done in `services/interactions.py`) |
+| No sampling | High-volume logs expensive | Add rate-limited logging for frequent events (e.g., feed refill) |
+| No log retention | Docker stdout lost on restart | Ship to Loki/ELK (config examples above) |
+| No audit trail | Security events not tracked | Separate audit logger writing to dedicated sink |
 
 ---
 
-## Recommended Improvements
-
-### 1. Request Correlation Middleware
-```python
-# middleware/correlation.py
-import uuid
-
-class CorrelationMiddleware:
-    def __init__(self, get_response):
-        self.get_response = get_response
-    
-    def __call__(self, request):
-        request.correlation_id = request.headers.get('X-Correlation-ID', str(uuid.uuid4()))
-        # Add to logging context
-        logging.getLogger().addFilter(CorrelationFilter(request.correlation_id))
-        response = self.get_response(request)
-        response['X-Correlation-ID'] = request.correlation_id
-        return response
-
-class CorrelationFilter(logging.Filter):
-    def __init__(self, correlation_id):
-        self.correlation_id = correlation_id
-    
-    def filter(self, record):
-        record.correlation_id = self.correlation_id
-        return True
-```
-
-### 2. Structured Context in Tasks
-```python
-# tasks.py
-def process_audio_to_hls(self, clip_id):
-    logger = logging.getLogger(__name__)
-    context = {'clip_id': clip_id, 'task_id': self.request.id}
-    
-    logger.info("Task started", extra=context)
-    # ... processing ...
-    logger.info("Acoustic vector extracted", extra={**context, 'duration_ms': duration})
-    # ... 
-    logger.info("Task completed", extra=context)
-```
-
----
-
-*Source: `backend/EchoFlow/settings.py:341-378`, `backend/app/tasks.py`*
+*Source: `backend/EchoFlow/settings.py:480-528`, `backend/EchoFlow/correlation.py`, `backend/EchoFlow/middleware.py`, `backend/EchoFlow/logging_filters.py`, `backend/app/tasks.py`*
