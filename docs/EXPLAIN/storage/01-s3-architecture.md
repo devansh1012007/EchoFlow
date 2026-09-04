@@ -57,7 +57,7 @@ STORAGES = {
 | Variable | Container Value | Browser Value |
 |----------|-----------------|---------------|
 | `AWS_S3_ENDPOINT_URL` | `http://minio:9000` | N/A |
-| `PUBLIC_MEDIA_ENDPOINT_URL` | N/A | `http://localhost:9000` |
+| `PUBLIC_MEDIA_ENDPOINT_URL` | N/A | `https://localhost:9443` |
 
 **In Production:**
 | Variable | Value |
@@ -131,7 +131,7 @@ def get_hls_playback_url(object_key):
     endpoint = (settings.PUBLIC_MEDIA_ENDPOINT_URL or "").rstrip("/")
     return f"{endpoint}/{bucket}/{object_key}"
 ```
-**Output:** `http://localhost:9000/echoflow-media/hls/uuid/master.m3u8`
+**Output:** `https://localhost:9443/echoflow-media/hls/uuid/master.m3u8`
 
 ### Original Files (Signed)
 ```python
@@ -144,7 +144,7 @@ def get_signed_media_url(object_key):
         ExpiresIn=3600
     )
 ```
-**Output:** `http://localhost:9000/echoflow-media/uploads/...?signature=xyz`
+**Output:** `https://localhost:9443/echoflow-media/uploads/...?signature=xyz`
 
 ---
 
@@ -227,7 +227,7 @@ CORS_EXPOSE_HEADERS = ['Content-Range', 'Accept-Ranges']
 | `AWS_S3_ENDPOINT_URL` | http://minio:9000 | https://s3.us-east-1.amazonaws.com | ✅ |
 | `AWS_S3_REGION_NAME` | auto | us-east-1 | ✅ |
 | `AWS_S3_QUERYSTRING_EXPIRE` | 3600 | 3600 | |
-| `PUBLIC_MEDIA_ENDPOINT_URL` | http://localhost:9000 | https://cdn.example.com | ✅ |
+| `PUBLIC_MEDIA_ENDPOINT_URL` | https://localhost:9443 | https://cdn.example.com | ✅ |
 
 ---
 

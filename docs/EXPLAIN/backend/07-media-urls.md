@@ -18,8 +18,8 @@ Solves two fundamental problems:
 
 | Variable | Container Value | Browser Value | Purpose |
 |----------|----------------|---------------|---------|
-| `AWS_S3_ENDPOINT_URL` | `http://minio:9000` | N/A | Container-to-MinIO (Docker DNS) |
-| `PUBLIC_MEDIA_ENDPOINT_URL` | N/A | `http://localhost:9000` | Browser-to-MinIO (published port) |
+| `AWS_S3_ENDPOINT_URL` | `http://minio:9000` | N/A | Internal (Docker network) |
+| `PUBLIC_MEDIA_ENDPOINT_URL` | N/A | `https://localhost:9443` (in .env) | Browser-to-MinIO (nginx :9443) |
 
 **In production:**
 - `AWS_S3_ENDPOINT_URL` = VPC endpoint (e.g., `https://s3.us-east-1.amazonaws.com`)
@@ -29,8 +29,8 @@ Solves two fundamental problems:
 
 ```python
 # Container resolves minio:9000 via Docker DNS
-# Browser on host needs localhost:9000 (published port)
-# These are DIFFERENT hostnames for the SAME MinIO instance
+# Browser reaches localhost:9443 via nginx TLS terminator
+# These are DIFFERENT origins (same MinIO instance, HTTPS public)
 ```
 
 `get_hls_playback_url()` uses `PUBLIC_MEDIA_ENDPOINT_URL` so browsers never see internal `minio:9000`.
@@ -192,10 +192,10 @@ FeedClipSerializer.get_hls_playlist_url(obj)
 media_urls.get_hls_playback_url("hls/abc-123/master.m3u8")
         │
         ├── bucket = "echoflow-media"
-        ├── endpoint = "http://localhost:9000" (PUBLIC_MEDIA_ENDPOINT_URL)
+        ├── endpoint = "https://localhost:9443" (PUBLIC_MEDIA_ENDPOINT_URL — HTTPS terminator on nginx :9443)
         │
         ▼
-Returns: "http://localhost:9000/echoflow-media/hls/abc-123/master.m3u8"
+Returns: "https://localhost:9443/echoflow-media/hls/abc-123/master.m3u8"
         │
         ▼
 Browser loads master.m3u8 → resolves relative variant/segment URLs
@@ -216,7 +216,7 @@ media_urls.get_signed_media_url("uploads/2024/01/15/abc.mp3")
 boto3 generate_presigned_url() → signed URL valid 1hr
         │
         ▼
-Returns: "http://localhost:9000/echoflow-media/uploads/...?signature=xyz"
+Returns: "https://localhost:9443/echoflow-media/uploads/...?signature=xyz"
 ```
 
 ---
