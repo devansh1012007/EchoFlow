@@ -97,21 +97,20 @@ class TestN2CounterRace:
         assert ready_clip.likes == 1
         assert interaction.is_active is True
 
+    @pytest.mark.integration
     @pytest.mark.django_db(transaction=True)
     def test_concurrent_toggles_do_not_double_count(self, user, ready_clip):
         """5 threads each call record_like_toggle 10 times. The counter must
         remain in {0, 1} (one like row) regardless of interleaving. With
         the previous code, the F() update was outside the atomic block and
-        could double-count under load."""
-        from django.db import connection as db_connection
-        from backend.app.services.interactions import record_like_toggle
+        could double-count under load.
 
-        # SQLite has database-level locking that prevents true concurrency;
-        # the test exercises the in-process atomic-block guarantee. With
-        # real Postgres (production), multiple threads can interleave
-        # at the DB level and the lock prevents double-counts.
-        if db_connection.vendor == 'sqlite':
-            pytest.skip("SQLite locks the whole DB; concurrent test requires Postgres")
+        Marked `integration` because SQLite's database-level locking
+        prevents true concurrency; the test only exercises real Postgres
+        row-level locks. The conftest autouse fixture skips this on
+        SQLite automatically; no inline skip needed.
+        """
+        from backend.app.services.interactions import record_like_toggle
 
         results = []
         errors = []
@@ -563,24 +562,18 @@ class TestLoadConcurrentFeedAccess:
     users against an empty Redis. No 500s, no race conditions, no
     duplicate clip_ids in any user's queue."""
 
+    @pytest.mark.integration
     @pytest.mark.django_db(transaction=True)
     def test_50_concurrent_users_cold_feed(self, django_user_model, ready_clip):
         """Adversarial load: 50 concurrent feed requests from 50 different
         users against an empty Redis. No 500s, no race conditions.
 
-        Skipped on SQLite (locks the whole DB) and LocMem cache (no
-        .client attribute) — both required for the real flow. End-to-end
-        load test must be run against Postgres + Redis.
+        Marked `integration` because the test needs real Postgres (row
+        locks, not SQLite's database lock) AND a real Redis cache (LocMem
+        has no `.client` attribute for pipeline operations). The conftest
+        autouse fixture skips this on SQLite + LocMem automatically; no
+        inline skip needed.
         """
-        from django.db import connection as db_connection
-        from django.core.cache import cache
-        if db_connection.vendor == 'sqlite':
-            import pytest
-            pytest.skip("SQLite locks the whole DB; load test requires Postgres")
-        if not hasattr(cache, 'client'):
-            import pytest
-            pytest.skip("Cache backend has no .client (LocMem); load test requires Redis")
-
         import threading
         from rest_framework.test import APIClient
 

@@ -433,6 +433,40 @@ The `app` app is the only app whose reads benefit from replica routing. Authenti
 
 Solving read-your-writes on a social app at 10k concurrent costs more than it's worth: a `synchronous_standby_names` setup adds RTT to every write; a per-request override middleware adds complexity to every read; a Redis "recent_likes" cache adds a new system to keep consistent. The user-visible lag for a like-annotation is bounded by sub-second replication lag in practice and is consistent with how most social apps behave. Documented in §5.2; revisit at 50k concurrent if the product team flags it.
 
+### DECISION: Activation is env-var-driven, not code-change-driven
+
+The replica is brought online by setting `READ_DATABASE_URL` in the environment of `web` and `celery_*` services. No code change is required: `backend/EchoFlow/settings.py` constructs `DATABASES['read']` from `READ_DATABASE_URL` at import time and registers `backend.app.db_routers.ReadRouter` in `DATABASE_ROUTERS` only when the alias exists. The contract test `backend/app/tests/test_db_router.py::TestRouterConditionalActivation` enforces this: changing the conditional without updating the test breaks CI.
+
+## Activation Playbook
+
+This section is the operator-facing checklist for turning the router on in a new environment. The activation is fully reversible in under a minute (unset `READ_DATABASE_URL`, restart processes); do the rollback first in a dry-run if you want the safety net.
+
+### Pre-conditions
+
+- A Postgres 16 streaming replica is provisioned and reachable from the `web`/`celery_*` services (see §7.2 for the full setup: `pg_basebackup`, replication slot, replica auth role, second pgbouncer if pooling in front of the replica).
+- Replica `default_transaction_read_only = on` is set (the settings code already does this — see `settings.py` read-alias `OPTIONS`).
+- `pg_stat_replication` on the primary shows `state = 'streaming'` and `replay_lag_seconds < 1` for at least 5 minutes. **If lag is not green, do not proceed.**
+
+### Activation steps
+
+1. **Set `READ_DATABASE_URL`** in `.env` (or the deployment platform's secret store) to `postgres://user:pass@pgbouncer_read:6433/echoflow_db` — same DB name and credentials as `DATABASE_URL`, different host/port.
+2. **Restart** `web` and `celery*` services. The router activates on next process import; in-flight requests on the old workers fall back to `default` until they cycle.
+3. **Verify reads landed on the replica.** Connect to the replica directly (`psql` against the `pgbouncer_read` endpoint) and run the top read query from `pg_stat_statements` on the primary — confirm the row count matches. Alternatively, run `EXPLAIN (FORMAT JSON)` on a routed query and check `Plan` references `semantic_vector_index` or `acoustic_vector_index` (HNSW).
+4. **Monitor** for 1 week:
+   - **Replica lag must stay < 1 s for ranking queries** (`/feed/`, `/suggestions/`). The replica is meant to be co-located; sustained > 1 s means something is wrong on the network or apply path.
+   - **Replica lag may run < 5 s for analytics queries** (`update_global_metrics`, profile aggregations). User-facing pages still need < 1 s lag; analytics is more tolerant.
+   - **Watch for `ReadOnlyError` in logs.** This indicates a write was routed to the replica (the `default_transaction_read_only` defense should prevent this — a hit means the router short-circuit failed). Should be near-zero; any sustained rate is a P1.
+   - **Watch primary read QPS.** It should drop by ~50% (feed + profile + suggestions); write QPS is unchanged. If primary read QPS is unchanged, the router is not routing — check that `READ_DATABASE_URL` is actually set in the container (`docker compose exec web env | grep READ_`).
+5. **Rollback if needed:** unset `READ_DATABASE_URL`, restart `web` and `celery*`. The router returns `None` for every read; reads go to primary. Behavior is identical to pre-activation. Reversible in under 60 seconds.
+
+### Cloud-side actions (out of code scope)
+
+- AWS RDS: create a read replica from the primary instance. Use the replica endpoint as `READ_DATABASE_URL` host.
+- GCP Cloud SQL: enable cross-region read replicas; use the replica's connection name as `READ_DATABASE_URL` host.
+- Self-hosted: provision a separate Postgres container/service per §7.2.
+
+No Terraform / managed-DB code ships in this PR — the activation is documented and contracted via tests; the infra is ops.
+
 ### SECURITY: `READ_DATABASE_URL` does not carry a separate credential check
 
 The router routes by app label, not by user. Replica reads are not "less trusted" than primary reads — they're the same data, served by the same application, just from a different backend. No row-level filtering is added; if the application enforces row-level access (e.g. `request.user` filtering), the replica reads honor it the same way the primary reads do. **No security boundary is added or removed by enabling the replica.**

@@ -36,7 +36,9 @@ from django.conf import settings
 
 
 def _override_settings_for_tests():
-    """Force SQLite + locmem cache for tests, regardless of env."""
+    """Force SQLite + locmem cache for unit tests. NOT called at import
+    time — see the `_force_sqlite_for_unit_tests` autouse fixture below for
+    the conditional invocation."""
     settings.DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
@@ -64,7 +66,6 @@ def _override_settings_for_tests():
 
 
 django.setup()
-_override_settings_for_tests()
 
 
 # In tests, override the app's migrations to skip the pgvector-specific
@@ -140,6 +141,56 @@ def ready_clip(user):
         semantic_vector=[0.1] * 384,
         acoustic_vector=[0.1] * 128,
     )
+
+
+@pytest.fixture(autouse=True)
+def _force_sqlite_for_unit_tests(request):
+    """Apply the unit-suite overrides for tests that are NOT marked `integration`.
+
+    DECISION: the SQLite + locmem override was previously unconditional
+    (called at conftest import time). That broke the integration suite (D25):
+    in CI, `pytest -m integration` would inherit `DATABASE_URL=postgresql://...`
+    from the job env, but the conftest was still forcing settings.DATABASES
+    to SQLite. That both prevented the integration tests from connecting to
+    the real Postgres AND triggered the integration skip fixture (which
+    checks `settings.DATABASES['default']['ENGINE']`).
+
+    Moving the override into an autouse fixture lets us check
+    `request.keywords` for the `integration` marker and skip the override
+    for those tests, leaving `settings.DATABASES` / `settings.CACHES` at
+    whatever settings.py + the env var constructed (Postgres + Redis in CI).
+    """
+    if 'integration' in request.keywords:
+        return
+    _override_settings_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _skip_integration_without_real_services(request):
+    """Skip tests marked `integration` when running without real Postgres + Redis.
+
+    Integration tests exercise pgvector HNSW indexes, Postgres row-level locks,
+    real Redis Streams, and S3 semantics — none of which work on SQLite + LocMem.
+    The unit suite (default) runs against SQLite + LocMem for speed; the
+    integration suite is selected explicitly with `pytest -m integration` and
+    runs in CI against the real Postgres + Redis services.
+
+    Two checks: a non-SQLite DATABASE engine AND a non-locmem cache backend.
+    Either failing -> skip with an actionable message.
+
+    DECISION: this fixture is autouse but conditional — it only fires for
+    tests marked `integration` (via `request.keywords`). The companion
+    fixture `_force_sqlite_for_unit_tests` is also conditional on
+    `integration` being ABSENT, so the two fixtures do not conflict.
+    """
+    if 'integration' not in request.keywords:
+        return
+    db_engine = settings.DATABASES['default']['ENGINE']
+    if db_engine == 'django.db.backends.sqlite3':
+        pytest.skip("integration tests require a non-SQLite DATABASE_URL (Postgres)")
+    cache_backend = settings.CACHES['default']['BACKEND']
+    if 'locmem' in cache_backend.lower() or 'local' in cache_backend.lower():
+        pytest.skip("integration tests require a real Redis cache backend")
 
 
 @pytest.fixture
