@@ -260,6 +260,11 @@ SCRAPER_ALLOW_LICENSES = os.getenv('SCRAPER_ALLOW_LICENSES', 'CC0,CC-BY,CC-BY-SA
 FREESOUND_API_KEY = os.getenv('FREESOUND_API_KEY', '')
 SCRAPER_KAGGLE_LOCAL_PATH = os.getenv('SCRAPER_KAGGLE_LOCAL_PATH', '')
 
+# DECISION: 300s default (5 min). EchoFlow is short-form audio.
+# SCRAPER_DEFAULT_CLIP_SECONDS=300 is the equivalent for scraped imports;
+# user uploads get the same cap for consistency. Group C item 23 fix.
+MAX_DURATION_SECONDS = int(os.getenv('MAX_DURATION_SECONDS', '300'))
+
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 

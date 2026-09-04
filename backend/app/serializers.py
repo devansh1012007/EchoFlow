@@ -77,6 +77,51 @@ class AudioUploadSerializer(serializers.ModelSerializer):
             logging.getLogger(__name__).warning(
                 "python-magic unavailable; magic-byte validation skipped"
             )
+        # SECURITY: Duration probed at upload time, not in the worker. A
+        # 100MB-but-24-hour WAV would otherwise be accepted into S3,
+        # billed, and only then failed — wasting bandwidth, storage,
+        # and worker time. Group C item 23 fix.
+        #
+        # DECISION: pydub over ffprobe because pydub is already in
+        # requirements-media.txt for the worker, the API is cleaner
+        # inside a serializer, and the underlying ffmpeg subprocess
+        # is the same. Cost: ~6MB in the web image (already present
+        # in the media image).
+        #
+        # HACK: Reading the whole upload into memory here to pass to
+        # pydub. Django normally streams; we get a file object via
+        # the serializer's value attr. pydub needs a path or
+        # BytesIO, not a streaming file. TODO: stream via pydub's
+        # from_file with a temp path if memory pressure becomes a
+        # problem.
+        from django.conf import settings as django_settings
+        max_seconds = getattr(django_settings, 'MAX_DURATION_SECONDS', 300)
+        try:
+            import io
+            from pydub import AudioSegment
+            value.seek(0)
+            data = value.read()
+            value.seek(0)
+            audio = AudioSegment.from_file(io.BytesIO(data))
+            duration_seconds = len(audio) / 1000.0
+            if duration_seconds > max_seconds:
+                raise serializers.ValidationError(
+                    f"Audio duration ({duration_seconds:.1f}s) exceeds maximum "
+                    f"allowed ({max_seconds}s)."
+                )
+        except serializers.ValidationError:
+            raise
+        except Exception as e:
+            # pydub raises various exceptions for unsupported/corrupt files.
+            # CouldntDecodeError, FileNotFoundError (ffmpeg missing), etc.
+            # Reject as unsupported so we don't accept garbage.
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Duration probe failed for {value.name}: {type(e).__name__}: {e}"
+            )
+            raise serializers.ValidationError(
+                f"Could not probe audio duration. File may be corrupt or unsupported: {e}"
+            )
         return value
 
     def create(self, validated_data):

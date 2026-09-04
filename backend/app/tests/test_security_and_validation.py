@@ -181,6 +181,39 @@ class TestAudioUpload:
         }, format='multipart')
         assert r.status_code in (401, 403)
 
+    def test_upload_rejects_over_max_duration(self, auth_client, settings):
+        # Group C item 23: max-duration validation at upload time.
+        # Generate a synthetic 6-min silent WAV in-memory and POST it.
+        # HACK: pydub's from_file with no format hint requires the WAV
+        # header to be parseable. The synthetic silent WAV is valid; this
+        # test would fail for an unsupported format (which is the right
+        # behavior — but documented here so a future reader doesn't think
+        # the test is broken.)
+        from django.conf import settings as django_settings
+        original = django_settings.MAX_DURATION_SECONDS
+        django_settings.MAX_DURATION_SECONDS = 300  # 5 min cap
+        try:
+            from pydub import AudioSegment
+            import io
+            # 6 minutes = 360 seconds of silence at 44.1kHz mono.
+            long_audio = AudioSegment.silent(duration=360_000, frame_rate=44100)
+            buf = io.BytesIO()
+            long_audio.export(buf, format='wav')
+            buf.seek(0)
+            from django.core.files.uploadedfile import SimpleUploadedFile
+            wav_file = SimpleUploadedFile(
+                'long.wav', buf.read(), content_type='audio/wav',
+            )
+            r = auth_client.post(self.URL, {
+                'title': 'Long',
+                'category': 'comedy',
+                'original_file': wav_file,
+            }, format='multipart')
+            assert r.status_code == 400, r.data
+            assert 'duration' in str(r.data).lower() or 'exceeds' in str(r.data).lower()
+        finally:
+            django_settings.MAX_DURATION_SECONDS = original
+
 
 # ---------------------------------------------------------------------------
 # 4. Interactions (toggle-like + log-telemetry validation)
