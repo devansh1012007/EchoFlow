@@ -321,14 +321,14 @@ gives ample headroom for any temporary renewal failure.
 
 ## 8. Test Coverage
 
-`backend/app/tests/test_https_termination.py` — 31 tests across 6 classes:
+`backend/app/tests/test_https_termination.py` — 32 tests across 6 classes:
 
 | Class | What it verifies | # tests |
 |-------|------------------|---------|
 | `TestCertFiles` | The cert + key exist, parse, are matched, are not expired, and cover `localhost` + `127.0.0.1` in the SAN list. | 6 |
 | `TestNginxConfig` | `:80` 301-redirects, `:443` + `:9443` use TLS, only TLS 1.2/1.3 enabled, HSTS 1y+includeSubDomains+preload, `X-Forwarded-Proto https` on every upstream block, cert paths match, `client_max_body_size >= 5M`, and (when nginx is on PATH) a real `nginx -t` parse. | 10 |
 | `TestProductionSslSettings` | `settings.py`'s `if not DEBUG:` block contains every required knob with the right value: `SECURE_SSL_REDIRECT=True`, `SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO', 'https')`, `SESSION/CSRF_COOKIE_SECURE=True`, HSTS year-plus, `SameSite=Lax`, at module level. | 7 |
-| `TestProxyHeaderBehavior` | In-process WSGI: `X-Forwarded-Proto: https` makes `request.is_secure() == True`; no redirect is issued when the header is present. | 2 |
+| `TestProxyHeaderBehavior` | In-process WSGI: `X-Forwarded-Proto: https` makes `request.is_secure() == True`; no redirect is issued when the header is present; in-container `HEALTHCHECK` directive sends the same header. | 3 |
 | `TestPublicMediaEndpoint` | `PUBLIC_MEDIA_ENDPOINT_URL` in `.env.example` is `https://...` so browser HLS playback isn't mixed-content. | 1 |
 | `TestLiveNginxTerminator` | Real running stack: `/health/` returns 200 over HTTPS, HSTS header is on the live response, all security headers present, HTTP→HTTPS redirect fires, MinIO on `:9443` is reachable. Skips cleanly when the stack is down. | 5 |
 
@@ -339,7 +339,7 @@ docker compose exec -u root -e PYTHONPATH=/app web \
   pytest backend/app/tests/test_https_termination.py -v
 ```
 
-Last run: **31 passed in 0.28s**.
+Last run: **32 passed in 0.37s**.
 
 ---
 
