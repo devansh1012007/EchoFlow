@@ -98,10 +98,10 @@ This document tracks where documentation (README, AGENTS.md, audit docs) conflic
 
 | # | AI/ML Doc Claim | Actual Implementation | Status |
 |---|-----------------|----------------------|--------|
-| 1 | "Models in ai-ml/models/" (README:234) | `ai-ml/models/`: **Stubs only** — `NotImplementedError` | ⚠️ Stubs only |
-| 2 | "Pipelines in ai-ml/pipelines/" (README:234) | `ai-ml/pipelines/`: **Stubs only** | ⚠️ Stubs only |
-| 3 | "ML logic in backend/app/tasks.py" (ai-ml/README:26) | **Confirmed** — `tasks.py` has all ML logic | ✅ Accurate |
-| 4 | "Future migration planned" (ai-ml/README:26-31) | **Stubs exist** but no active migration | ⚠️ Planned only |
+| 1 | "Models in ai_ml/models/" (README:234) | `ai_ml/models/`: **Stubs only** — `NotImplementedError` | ⚠️ Stubs only |
+| 2 | "Pipelines in ai_ml/pipelines/" (README:234) | `ai_ml/pipelines/`: **Stubs only** | ⚠️ Stubs only |
+| 3 | "ML logic in backend/app/tasks.py" (ai_ml/README:26) | **Confirmed** — `tasks.py` has all ML logic | ✅ Accurate |
+| 4 | "Future migration planned" (ai_ml/README:26-31) | **Stubs exist** but no active migration | ⚠️ Planned only |
 
 ---
 

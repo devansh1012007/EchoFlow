@@ -135,7 +135,7 @@ This produces a constant 60 tasks/min average, with no thundering-herd spike. Th
 
 ### 3.1 The global pool's score
 
-The global pool uses the same composite formula as today (`backend/app/tasks.py:381-386`, documented at `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-37`):
+The global pool uses the same composite formula as today (`backend/app/tasks.py:381-386`, documented at `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-37`):
 
 ```text
 composite_score = 0.45 * vector_similarity
@@ -156,7 +156,7 @@ For the **per-user** pool, `vector_similarity` is computed against `calculate_ti
 
 ### 3.2 The 0.45 / 0.30 / 0.25 weights are fixed
 
-Per `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-37` and the AI product team. **Do not** parameterize them in this work item. If the AI team wants A/B-testable weights later, that's a separate change in `docs/EXPLAIN/ai-ml/07-ann-candidate-generation.md` and Group A item 6 (P1 — ANN two-stage retrieval), which is explicitly out of scope here.
+Per `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-37` and the AI product team. **Do not** parameterize them in this work item. If the AI team wants A/B-testable weights later, that's a separate change in `docs/EXPLAIN/ai_ml/07-ann-candidate-generation.md` and Group A item 6 (P1 — ANN two-stage retrieval), which is explicitly out of scope here.
 
 ### 3.3 Why two pools, not one
 
@@ -689,7 +689,7 @@ In order:
    - `test_zset_size_within_budget` (memory budget check)
    - `test_global_rebuild_chunks_zadd_in_1000s`
 
-8. **Update `docs/EXPLAIN/recommendation/`** with the actual code structure once implemented. The current `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-37` documents the formula — leave that alone. This doc (`docs/EXPLAIN/recommendation/03-feed-pre-computation.md`) is the canonical reference for the pool design.
+8. **Update `docs/EXPLAIN/recommendation/`** with the actual code structure once implemented. The current `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-37` documents the formula — leave that alone. This doc (`docs/EXPLAIN/recommendation/03-feed-pre-computation.md`) is the canonical reference for the pool design.
 
 9. **Update `docs/unfixed-issues-2026-09-03.md` §4.7** from "OPEN" to "FIXED" with the anchor and a one-paragraph summary.
 
@@ -699,7 +699,7 @@ In order:
 
 Per the task brief and the existing audit trail:
 
-- **ANN two-stage retrieval** (`docs/EXPLAIN/ai-ml/07-ann-candidate-generation.md`, Group A item 6 / P1 — AI team's work). This work item pre-computes the *candidate set*; the AI team's work item pre-computes the *candidate generation step* (HNSW two-stage retrieval at query time). They compose: this doc's pool is the input layer that the AI team's two-stage retrieval reads from. Order: ship this first, then the AI team's work reads from the pool's output.
+- **ANN two-stage retrieval** (`docs/EXPLAIN/ai_ml/07-ann-candidate-generation.md`, Group A item 6 / P1 — AI team's work). This work item pre-computes the *candidate set*; the AI team's work item pre-computes the *candidate generation step* (HNSW two-stage retrieval at query time). They compose: this doc's pool is the input layer that the AI team's two-stage retrieval reads from. Order: ship this first, then the AI team's work reads from the pool's output.
 
 - **F() counter architectural fix** (`docs/unfixed-issues-2026-09-03.md` §3.2 / §3.3, P1.1 counter pipeline — Redis INCRBY + flush_counters_to_pg). Deferred to P1.1.
 
@@ -711,7 +711,7 @@ Per the task brief and the existing audit trail:
 
 - **`/suggestions/` rewrite**. Currently at `backend/app/views/feed.py:153-186` and uses `get_user_vectors` cache (15-min TTL). The candidate pool doesn't help `/suggestions/` because the endpoint filters by `category` (`views/feed.py:157`), which is a different slice than the global pool. Out of scope here.
 
-- **A/B testable composite weights**. Hardcoded 0.45 / 0.30 / 0.25 per `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-37`. Future AI team work.
+- **A/B testable composite weights**. Hardcoded 0.45 / 0.30 / 0.25 per `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-37`. Future AI team work.
 
 ---
 
@@ -939,14 +939,14 @@ This design doc was constructed by:
 
 2. **Cross-referencing the audit.** `docs/unfixed-issues-2026-09-03.md` §4.7 (P2.2) is the canonical open issue. The task brief's "Group A item 7" reference is a legacy label; §4.7 is the correct anchor. The math in §1.2 matches `docs/event-driven-architecture-plan.md:568` ("the DB sees 200+ queries/s").
 
-3. **Following the EXPLAIN docs.** The composite formula at `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-37` is the source of truth for the 0.45/0.30/0.25 weights. The Redis eviction policy discussion at `docs/EXPLAIN/failure/03-feed-resilience.md` is the source of truth for the graceful-degradation contract. The AI team's two-stage retrieval at `docs/EXPLAIN/ai-ml/07-ann-candidate-generation.md` is explicitly out of scope here (§10).
+3. **Following the EXPLAIN docs.** The composite formula at `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-37` is the source of truth for the 0.45/0.30/0.25 weights. The Redis eviction policy discussion at `docs/EXPLAIN/failure/03-feed-resilience.md` is the source of truth for the graceful-degradation contract. The AI team's two-stage retrieval at `docs/EXPLAIN/ai_ml/07-ann-candidate-generation.md` is explicitly out of scope here (§10).
 
 4. **Discrepancies found during verification:**
    - The task brief cites `refill_user_feed` at `tasks.py:346-456` — verified, correct.
    - The task brief says "Group A item 7" — verified, this maps to `docs/unfixed-issues-2026-09-03.md` §4.7 (P2.2), not "Group A". Doc should be updated to cite §4.7 going forward.
    - `docs/EXPLAIN/decisions/02-discrepancies.md:55` says "Split Redis implemented" — verified, `redis_cache` exists at `docker-compose.yml:70-76` with 1 GB. The 3 GB bump proposed in §11.1 supersedes the 1 GB allocation.
-   - `docs/backend-audit.md:721` and `docs/scaling-analysis.md:619` claim `calculate_time_decayed_vectors` has a "weights never populated" bug — `docs/backend-bug-fixs.md` Row 9 says this is a false positive (`weights.append(final_weight)` IS called at `tasks.py:484` in the current code). The weights bug is resolved; this design assumes `calculate_time_decayed_vectors` works as documented at `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:43-89`.
+   - `docs/backend-audit.md:721` and `docs/scaling-analysis.md:619` claim `calculate_time_decayed_vectors` has a "weights never populated" bug — `docs/backend-bug-fixs.md` Row 9 says this is a false positive (`weights.append(final_weight)` IS called at `tasks.py:484` in the current code). The weights bug is resolved; this design assumes `calculate_time_decayed_vectors` works as documented at `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:43-89`.
 
 ---
 
-*Source: `backend/app/tasks.py:346-456`, `backend/app/views/feed.py:58-118`, `backend/app/services/interactions.py:1-181`, `backend/app/models.py:170-207`, `backend/EchoFlow/settings.py:190-325`, `docker-compose.yml:70-76`, `docs/unfixed-issues-2026-09-03.md` §4.7, `docs/event-driven-architecture-plan.md:559-574`, `docs/EXPLAIN/ai-ml/04-recommendation-engine.md:13-89`, `docs/EXPLAIN/redis-celery/01-redis-usage.md`, `docs/EXPLAIN/failure/03-feed-resilience.md`. All anchors verified against the working tree at the time of writing.*
+*Source: `backend/app/tasks.py:346-456`, `backend/app/views/feed.py:58-118`, `backend/app/services/interactions.py:1-181`, `backend/app/models.py:170-207`, `backend/EchoFlow/settings.py:190-325`, `docker-compose.yml:70-76`, `docs/unfixed-issues-2026-09-03.md` §4.7, `docs/event-driven-architecture-plan.md:559-574`, `docs/EXPLAIN/ai_ml/04-recommendation-engine.md:13-89`, `docs/EXPLAIN/redis-celery/01-redis-usage.md`, `docs/EXPLAIN/failure/03-feed-resilience.md`. All anchors verified against the working tree at the time of writing.*

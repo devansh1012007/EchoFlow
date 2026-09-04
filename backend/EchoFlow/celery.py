@@ -9,7 +9,15 @@ app = Celery('backend.EchoFlow')
 
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
-app.autodiscover_tasks(['backend.app'])
+# DECISION: discover tasks from BOTH backend.app and ai_ml.pipelines.
+# The feed engine (refill_user_feed + pool rebuilds) now lives in
+# ai_ml.pipelines.feed_tasks with task names pinned to
+# 'backend.app.tasks.*' (see ai_ml/pipelines/feed_tasks.py). Without
+# listing ai_ml.pipelines here, Celery won't import the module on
+# worker boot and those tasks will not be registered for routing —
+# they'd silently land in the default queue instead of fast_feed,
+# defeating the dedicated celery_feed worker.
+app.autodiscover_tasks(['backend.app', 'ai_ml.pipelines'])
 
 
 # ---------------------------------------------------------------------------

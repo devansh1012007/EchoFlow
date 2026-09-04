@@ -211,11 +211,11 @@ Scraper (management command or Celery task)
 
 ---
 
-## Future Migration (ai-ml/ directory)
+## Future Migration (ai_ml/ directory)
 
 **Planned structure** (currently stubs):
 ```
-ai-ml/
+ai_ml/
 ├── models/              # Model wrappers
 │   ├── whisper_wrapper.py
 │   ├── embedding_wrapper.py
@@ -252,4 +252,4 @@ ai-ml/
 
 ---
 
-*Source: `backend/app/tasks.py`, `ai-ml/README.md`, `ai-ml/models/*.py`, `ai-ml/pipelines/*.py`*
+*Source: `backend/app/tasks.py`, `ai_ml/README.md`, `ai_ml/models/*.py`, `ai_ml/pipelines/*.py`*
