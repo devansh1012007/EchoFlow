@@ -57,22 +57,22 @@ class TestRecordLikeToggle:
 
 
 # ---------------------------------------------------------------------------
-# register-skip (writes 'view' not 'skip'; no counter bump)
+# register-skip (writes 'skip'; bumps AudioClip.skips via F() in UserInteraction.save())
 # ---------------------------------------------------------------------------
 class TestRecordSkip:
-    def test_writes_view_row_with_completion_rate(self, user, ready_clip):
+    def test_writes_skip_row_with_completion_rate(self, user, ready_clip):
         from backend.app.models import UserInteraction
         from backend.app.services.interactions import record_skip
 
         record_skip(user, ready_clip, listen_duration_ms=15_000, reel_position_ms=30_000)
 
         rows = UserInteraction.objects.filter(
-            user=user, clip=ready_clip, interaction_type='view',
+            user=user, clip=ready_clip, interaction_type='skip',
         )
         assert rows.count() == 1
         assert rows.first().completion_rate == pytest.approx(0.5)
 
-    def test_does_not_bump_any_denormalized_counter(self, user, ready_clip):
+    def test_bumps_skips_counter(self, user, ready_clip):
         from backend.app.services.interactions import record_skip
 
         before = {
@@ -84,7 +84,10 @@ class TestRecordSkip:
         ready_clip.refresh_from_db()
         assert ready_clip.likes == before['likes']
         assert ready_clip.shares == before['shares']
-        assert ready_clip.skips == before['skips']
+        # DECISION: was no-bump; flipped to bump in step 2 of Group C.
+        # The F() increment happens inside UserInteraction.save() via
+        # the field_map: {'like': 'likes', 'share': 'shares', 'skip': 'skips'}.
+        assert ready_clip.skips == before['skips'] + 1
 
     def test_update_or_create_keeps_last_completion_rate(self, user, ready_clip):
         from backend.app.services.interactions import record_skip
@@ -94,7 +97,7 @@ class TestRecordSkip:
 
         from backend.app.models import UserInteraction
         rows = UserInteraction.objects.filter(
-            user=user, clip=ready_clip, interaction_type='view',
+            user=user, clip=ready_clip, interaction_type='skip',
         )
         assert rows.count() == 1
         assert rows.first().completion_rate == pytest.approx(1.0)

@@ -122,18 +122,20 @@ def record_skip(
     listen_duration_ms: int,
     reel_position_ms: int,
 ) -> UserInteraction:
-    """Register a skip event. Writes an interaction_type='view' row, not 'skip'.
+    """Register a skip event. Writes an interaction_type='skip' row.
 
-    Pre-refactor quirk preserved: the endpoint is named register-skip but
-    the row stores interaction_type='view'. Views never bump a denormalized
-    counter, so this is observability-only.
+    // DECISION: was 'view' (locked in by the no-op test); the audit
+    pass flagged this as silently dropped engagement telemetry. Now
+    matches the route name. Tradeoff: F() row-lock contention on viral
+    clips gets worse; Group B item 9 (Redis INCRBY) is the architectural
+    fix.
     """
     expected_duration = reel_position_ms if reel_position_ms > 0 else 60000
     completion_rate = min(listen_duration_ms / expected_duration, 1.0)
     interaction, _ = UserInteraction.objects.update_or_create(
         user=user,
         clip=clip,
-        interaction_type='view',
+        interaction_type='skip',
         defaults={
             'completion_rate': completion_rate,
             'is_active': True,
