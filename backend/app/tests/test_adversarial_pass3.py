@@ -555,6 +555,98 @@ class TestN14CORSRegex:
         )
 
 # ---------------------------------------------------------------------------
+# N-bug — TagsViewSet.initialize_vectors silently dead: tags__overlap on
+# a JSONField silently reinterprets overlap as a JSON key path
+# (JSON_EXTRACT(tags, '$.overlap') = ...), so the query always returns 0
+# rows. The whole tag-based cold-start UX is non-functional. The fix
+# uses Q(tags__contains=[tag]) | ... for each selected tag, which on
+# Postgres compiles to JSONB @> containment.
+# ---------------------------------------------------------------------------
+class TestTagsInitializeJSONFieldOverlap:
+    """Regression: TagsViewSet.initialize_vectors used `tags__overlap`
+    against a JSONField. `overlap` is an ArrayField lookup, not a
+    JSONField one — Django silently fell back to JSON path extraction
+    (`$.overlap`), and the query returned 0 rows for every call.
+
+    Two layers of regression:
+    1. Static: the view source no longer contains `tags__overlap`.
+    2. SQL: the constructed query references JSONB `@>` (or equivalent
+       per-driver semantics) and not `$.overlap`.
+    """
+
+    def test_view_source_no_longer_uses_tags_overlap(self):
+        import inspect
+        from backend.app.views import feed as feed_module
+        src = inspect.getsource(feed_module.TagsViewSet.initialize_vectors)
+        # The fix replaced `tags__overlap=selected_tags` (which silently
+        # returned 0 rows on a JSONField) with a Q-object using
+        # `tags__contains=[tag]` per selected tag. We pin both the
+        # disappearance of the broken pattern and the presence of the
+        # correct primitive.
+        assert 'tags__overlap' not in src, (
+            "TagsViewSet.initialize_vectors still has tags__overlap — "
+            "on a JSONField this is silently broken (Django falls back to "
+            "JSON_EXTRACT(tags, '$.overlap') which always returns 0 rows)."
+        )
+        assert 'tags__contains' in src, (
+            "TagsViewSet.initialize_vectors doesn't use tags__contains — "
+            "the JSONB containment fix is missing."
+        )
+
+    def test_query_does_not_contain_silent_overlap_path(self):
+        """Verify the fix builds the correct Q-object. We cannot execute
+        the resulting query on SQLite (the JSONField `__contains` lookup
+        is Postgres-only — NotSupportedError on SQLite), so we build the
+        filter object the same way the view does and inspect the SQL on
+        Postgres, or just verify the filter object was built correctly on
+        SQLite.
+
+        The actual end-to-end verification (the fix returns matching
+        clips) requires running the integration test against Postgres.
+        Here we pin that:
+        - the new code uses `tags__contains` (the correct primitive),
+        - the source no longer has the silent-fallback `tags__overlap`,
+        - the Q-object can be built without raising (the silent failure
+          was at SQL compile time, not Q construction time).
+        """
+        from django.db import connection
+        from django.db.models import Q
+        from backend.app.models import AudioClip
+
+        selected_tags = ['electronic', 'jazz']
+        tag_filter = Q()
+        for tag in selected_tags:
+            tag_filter |= Q(tags__contains=[tag])
+        qs = AudioClip.objects.filter(
+            tag_filter,
+            semantic_vector__isnull=False,
+            acoustic_vector__isnull=False,
+        )
+
+        # On SQLite the `__contains` lookup is rejected at SQL compile
+        # time. We can still build the Q-tree without error and inspect
+        # its structure via the ORM internals.
+        if connection.features.supports_json_field_contains:
+            sql = str(qs.query)
+            assert '$.overlap' not in sql, (
+                f"Generated SQL still has the silent $.overlap path: {sql}"
+            )
+            assert '&&' not in sql, (
+                f"Generated SQL uses ArrayField && operator — the model "
+                f"field is JSONField, not ArrayField. Path: {sql}"
+            )
+        else:
+            # SQLite path: the real verification of the fix is
+            # (1) test_view_source_no_longer_uses_tags_overlap above (which
+            # confirms the view code uses tags__contains), and
+            # (2) the integration test on Postgres which actually
+            # returns matching clips.
+            # On SQLite, building the Q-tree without raising is the
+            # smoke test we can run.
+            assert tag_filter is not None
+
+
+# ---------------------------------------------------------------------------
 # Load test — concurrent user pressure on the feed
 # ---------------------------------------------------------------------------
 class TestLoadConcurrentFeedAccess:

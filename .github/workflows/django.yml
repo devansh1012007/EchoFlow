@@ -10,16 +10,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # DECISION: env hoisted to job level — per-step env blocks had drifted (the
-    # collectstatic step omitted FIELD_ENCRYPTION_KEY, which models.py requires at
-    # import time) and would drift again. Every step now inherits the same config.
+    # DECISION: env hoisted to job level — per-step env blocks had drifted
+    # (the collectstatic step used to omit env vars that some steps required
+    # at import time) and would drift again. Every step now inherits the
+    # same config.
     env:
       DATABASE_URL: postgresql://echoflow:testpassword@localhost:5432/echoflow_test
       REDIS_URL: redis://localhost:6379/1
       DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
       DJANGO_DEBUG: 'True'
       DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
-      FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     strategy:
       fail-fast: false

@@ -22,7 +22,6 @@ from pathlib import Path
 # Set required env vars BEFORE django.setup() — settings.py reads them.
 os.environ.setdefault('DJANGO_SECRET_KEY', 'test-secret-key-not-for-prod')
 os.environ.setdefault('DJANGO_DEBUG', 'True')
-os.environ.setdefault('FIELD_ENCRYPTION_KEY', 'ZxEYBM0nEy0JVfy5oLpTReZLAr5A9ktVJgDroUVIKJQ=')
 os.environ.setdefault('DATABASE_URL', 'sqlite:///:memory:')
 os.environ.setdefault('AWS_STORAGE_BUCKET_NAME', 'test-bucket')
 os.environ.setdefault('AWS_ACCESS_KEY_ID', 'test')

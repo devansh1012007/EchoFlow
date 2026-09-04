@@ -210,11 +210,30 @@ class TagsViewSet(viewsets.ViewSet):
         user = request.user
         selected_tags = request.data.get('selected_tags', [])
 
-        baseline_clips = AudioClip.objects.filter(
-            tags__overlap=selected_tags,
-            semantic_vector__isnull=False,
-            acoustic_vector__isnull=False
-        ).order_by('-likes')[:100]
+        # N bug fix: tags is a JSONField(default=list) (see models.py:69),
+        # NOT a Postgres ArrayField. The old code used Django's ArrayField
+        # 'overlap' lookup on a JSONField, which Django silently
+        # reinterpreted as a JSON path: `JSON_EXTRACT(tags, '$.overlap')`.
+        # That returned 0 rows for every call (no JSON document has a key
+        # literally named 'overlap'), so the entire tag-based cold-start
+        # UX was silently non-functional.
+        #
+        # Postgres JSONB has no native "any-of" operator. The right
+        # primitive is `@>` (contains): tags @> '["tag"]'::jsonb is true
+        # when the array contains "tag". We OR one Q per selected tag.
+        # Empty selected_tags short-circuits to no match.
+        from django.db.models import Q
+        if not selected_tags:
+            baseline_clips = AudioClip.objects.none()
+        else:
+            tag_filter = Q()
+            for tag in selected_tags:
+                tag_filter |= Q(tags__contains=[tag])
+            baseline_clips = AudioClip.objects.filter(
+                tag_filter,
+                semantic_vector__isnull=False,
+                acoustic_vector__isnull=False,
+            ).order_by('-likes')[:100]
 
         if not baseline_clips:
             return Response({"error": "Not enough data to build baseline."}, status=400)

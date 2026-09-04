@@ -171,8 +171,15 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-echoflow-dev}
-      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-echoflow-dev-secret}
+      # SECURITY: fail-loud if AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+      # are unset. Previously these fell back to dev defaults
+      # (`echoflow-dev` / `echoflow-dev-secret`), so a missing .env
+      # silently left object storage behind a publicly-known password
+      # with no startup failure. Same pattern as GRAFANA_ADMIN_PASSWORD
+      # (line 654 below). Local dev .env files already set both vars;
+      # operators who copy compose for prod must set real values.
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}
       # CORS for browser-based HLS playback (hls.js loads segments from MinIO)
       MINIO_CORS_ALLOW_ORIGIN: "*"
       MINIO_CORS_ALLOW_METHODS: "GET,PUT,POST,DELETE,OPTIONS"
@@ -201,7 +208,7 @@ services:
         condition: service_healthy
     entrypoint: >
       sh -c "
-        mc alias set local http://minio:9000 ${AWS_ACCESS_KEY_ID:-echoflow-dev} ${AWS_SECRET_ACCESS_KEY:-echoflow-dev-secret} &&
+        mc alias set local http://minio:9000 ${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required} ${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required} &&
         mc mb --ignore-existing local/${AWS_STORAGE_BUCKET_NAME:-echoflow-media} &&
         mc anonymous set download local/${AWS_STORAGE_BUCKET_NAME:-echoflow-media}/hls
       "
@@ -242,14 +249,13 @@ services:
       - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-localhost}
       - GUNICORN_WORKERS=${GUNICORN_WORKERS:-4}
       - GUNICORN_THREADS=${GUNICORN_THREADS:-4}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-echoflow-dev}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-echoflow-dev-secret}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}
       - AWS_STORAGE_BUCKET_NAME=${AWS_STORAGE_BUCKET_NAME:-echoflow-media}
       - AWS_S3_ENDPOINT_URL=${AWS_S3_ENDPOINT_URL:-http://minio:9000}
       - AWS_S3_REGION_NAME=${AWS_S3_REGION_NAME:-auto}
       - AWS_S3_QUERYSTRING_EXPIRE=${AWS_S3_QUERYSTRING_EXPIRE:-3600}
       - PUBLIC_MEDIA_ENDPOINT_URL=${PUBLIC_MEDIA_ENDPOINT_URL:-http://localhost:9000}
-      - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}
       - SENTRY_DSN=${SENTRY_DSN:-}
       - SENTRY_ENV=${SENTRY_ENV:-production}
       - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.1}

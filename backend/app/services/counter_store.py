@@ -178,9 +178,12 @@ def _build_backend() -> Any:
     """
     try:
         from django.core.cache import caches
-        from django.conf import settings
 
-        cache = caches[settings.CACHES['default']['BACKEND'].endswith('RedisCache') and 'default' or 'default']
+        # The earlier code had a dead ternary here:
+        #   caches[X and 'default' or 'default']
+        # Both branches were 'default', so the 'RedisCache' check did nothing.
+        # There is only one cache alias in CACHES; we use it directly.
+        cache = caches['default']
         # django-redis exposes .client.get_client() returning a real Redis client.
         if hasattr(cache, 'client') and hasattr(cache.client, 'get_client'):
             client = cache.client.get_client()

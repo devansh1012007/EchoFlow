@@ -206,7 +206,6 @@ Uses Docker Compose V2 (`docker compose`, not `docker-compose`). If you have `do
 | `REDIS_URL` | Non-Docker dev: `redis://localhost:6379/1` (single Redis). Optional in Docker. |
 | `REDIS_BROKER_URL` | Docker: `redis://redis_broker:6379/0`. Falls back to `REDIS_URL`. |
 | `REDIS_CACHE_URL` | Docker: `redis://redis_cache:6379/0`. Falls back to `REDIS_URL`. |
-| `FIELD_ENCRYPTION_KEY` | Fernet key for email encryption |
 | `HF_TOKEN` | HuggingFace token (model baking at build time). See [docs/EXPLAIN/operations/hf-token-rotation.md](docs/EXPLAIN/operations/hf-token-rotation.md) for the rotation runbook. |
 | `OPENAI_API_KEY` | Optional — reserved for OpenAI pipeline branch |
 | `FREESOUND_API_KEY` | Required only for freesound scraper |
@@ -327,7 +326,7 @@ The skips carry inline reasons and a pointer back to this section. If you add a 
 
 - `.env` is **gitignored**. Do not commit it. The boilerplate is `.env.example` and `env.example`; copy one of those to `.env` and edit locally.
 - Tracked env files must have `DJANGO_DEBUG=False`. CI runs `scripts/check_no_tracked_env.sh` on every PR; a tracked env file with `DJANGO_DEBUG=True` will block the merge.
-- `FIELD_ENCRYPTION_KEY`, `HF_TOKEN`, and `DJANGO_SECRET_KEY` in your local `.env` are real secrets. If you accidentally commit them, rotate them immediately.
+- `HF_TOKEN` and `DJANGO_SECRET_KEY` in your local `.env` are real secrets. If you accidentally commit them, rotate them immediately.
 
 ### `AGENTS.md` is tracked
 
