@@ -19,6 +19,7 @@ from datetime import timedelta
 from django.core.cache import cache
 from pgvector.django import CosineDistance
 from .models import AudioClip, UserInteraction, User
+from .services.task_publisher import publish
 from celery.utils.log import get_task_logger
 
 logger = get_task_logger(__name__)
@@ -980,7 +981,7 @@ def cleanup_stuck_processing(threshold_minutes=15, max_per_run=50):
             clip.save(update_fields=['status'])
             give_up += 1
             continue
-        process_audio_to_hls.delay(str(clip.id))
+        publish(process_audio_to_hls, str(clip.id))
         re_enqueued += 1
     if give_up:
         return f"Re-enqueued {re_enqueued}, gave up on {give_up} (>{int(give_up_threshold.total_seconds() // 60)}m) clips."
@@ -1040,7 +1041,7 @@ def scrape_and_import(self, source_name, limit=5, clip_length=300):
                 original_source_id=original_id,
             )
 
-            process_audio_to_hls.delay(str(clip.id))
+            publish(process_audio_to_hls, str(clip.id))
             logger.info("Imported clip %s from %s", clip.id, source_name)
 
         except Exception as e:
@@ -1113,7 +1114,11 @@ def dispatch_user_pool_rebuilds(self):
     for i, uid in enumerate(user_ids):
         # Spread across the hour: each task gets a 0..3600s countdown.
         countdown = int(i * (one_hour / max(len(user_ids), 1)))
-        rebuild_user_explore_pool.apply_async(args=[uid], countdown=countdown)
+        publish(
+            rebuild_user_explore_pool,
+            uid,
+            countdown=countdown,
+        )
         enqueued += 1
     return f"fanned out {enqueued} user pool rebuilds across the next hour"
 

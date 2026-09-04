@@ -16,6 +16,7 @@ from rest_framework.response import Response
 from ..models import AudioClip, UserInteraction
 from ..serializers import FeedClipSerializer
 from ..tasks import refill_user_feed, calculate_time_decayed_vectors
+from ..services.task_publisher import publish
 from ._pagination import FeedCursorPagination
 
 
@@ -73,7 +74,7 @@ class FastFeedViewSet(viewsets.ViewSet):
             clip_ids_bytes = redis_client.lpop(redis_key, 10)
 
             if not clip_ids_bytes:
-                refill_user_feed.delay(user_id, count=40)
+                publish(refill_user_feed, user_id, count=40)
                 # N6 fix: refill_user_feed.delay() is async. The second
                 # lpop immediately after runs in the same request thread,
                 # *before* the worker has executed the refill. On a cold
@@ -224,6 +225,6 @@ class TagsViewSet(viewsets.ViewSet):
         user.long_term_acoustic = (np.mean(ac_vectors, axis=0)).tolist()
         user.save()
 
-        refill_user_feed.delay(user.id, count=30)
+        publish(refill_user_feed, user.id, count=30)
 
         return Response({"status": "Algorithm initialized. Feed is ready."}, status=200)
