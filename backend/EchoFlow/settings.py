@@ -169,26 +169,37 @@ DATABASES = {
 # docs/EXPLAIN/decisions/partial-issues-completion-plan.md §1 for
 # trade-off analysis.
 #
-# psycopg2's `options` connection parameter (a single string) is the
-# documented way to set GUC_REQUIRES_RELOAD server variables. We
-# build the string here. Each `-c name=value` is a libpq option
-# passed to the server at connect time. The same string format is
-# used by `psql -c`. See:
-# https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNECT-OPTIONS
+# DECISION: apply these GUCs via the psycopg2 `options='-c ...'`
+# connection string. Two requirements to make this work behind
+# pgbouncer transaction mode:
+#   1. pgbouncer's `ignore_startup_parameters` (set in
+#      docker-compose.yml as IGNORE_STARTUP_PARAMETERS=...) must
+#      include each of these GUC names. Without that whitelist,
+#      pgbouncer rejects the connection at startup with
+#        FATAL: unsupported startup parameter in options: statement_timeout
+#      and every web/celery container crashes before its first query.
+#      pgbouncer does NOT apply these settings itself — it only
+#      ignores the unknown name so the client request can pass
+#      through to Postgres, which honors the `-c` prefix.
+#   2. `connect_timeout` is a libpq *connection* parameter (passed
+#      to PQconnectdb), NOT a GUC. It MUST be a top-level psycopg2
+#      kwarg. Putting it inside the `-c ...` string raises
+#        `unrecognized configuration parameter "connect_timeout"`
+#      because the server tries to SET it like a GUC and fails.
 #
-# The `options` kwarg is psycopg2-specific; SQLite (used in tests)
-# does not accept it. Skip when the engine is not Postgres.
-# `dj_database_url` may return an empty dict when DATABASE_URL is
-# unset; check the engine key to be safe.
+# The `options`/`connect_timeout` kwargs are psycopg2-specific;
+# SQLite (used in tests) does not accept them. Skip when the engine
+# is not Postgres. `dj_database_url` may return an empty dict when
+# DATABASE_URL is unset; check the engine key to be safe.
 if DATABASES['default'].get('ENGINE', '').endswith('postgresql'):
     if 'OPTIONS' not in DATABASES['default']:
         DATABASES['default']['OPTIONS'] = {}
     DATABASES['default']['OPTIONS']['options'] = (
         '-c statement_timeout=30s '
         '-c idle_in_transaction_session_timeout=60s '
-        '-c lock_timeout=10s '
-        '-c connect_timeout=10s'
+        '-c lock_timeout=10s'
     )
+    DATABASES['default']['OPTIONS']['connect_timeout'] = 10
 
 # DECISION: optional 'read' connection for routing pure reads to a
 # PostgreSQL streaming replica. See backend/app/db_routers.py and

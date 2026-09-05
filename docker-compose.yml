@@ -132,6 +132,21 @@ services:
       - QUERY_WAIT_TIMEOUT=120
       - VERBOSE=0
       - LOG_CONNECTIONS=1
+      # SECURITY: allow clients to pass these GUCs through pgbouncer
+      # without pgbouncer rejecting them as "unsupported startup
+      # parameter in options". The Django app sets them in
+      # `OPTIONS['options']` of the psycopg2 connection so every new
+      # transaction starts with the same timeouts (statement_timeout
+      # = 30s, lock_timeout = 10s, idle_in_transaction_session_
+      # timeout = 60s) regardless of which pooled backend connection
+      # pgbouncer hands out. Without this list, pgbouncer refuses
+      # the connection at startup with
+      #   FATAL: unsupported startup parameter in options: statement_timeout
+      # and every web/celery container crashes before its first query.
+      # pgbouncer does NOT apply these settings itself — it only
+      # ignores the unknown name so the client request can pass
+      # through to Postgres, which honors the `-c` prefix.
+      - IGNORE_STARTUP_PARAMETERS=extra_float_digits,statement_timeout,idle_in_transaction_session_timeout,lock_timeout,connect_timeout,default_transaction_read_only
       - LOG_DISCONNECTIONS=1
       - LOG_POOLER_ERRORS=1
     depends_on:
@@ -502,6 +517,8 @@ services:
     image: devansh1012007/echoflow-api:${TAG:-latest}
     #container_name: echoflow_celery_beat
     restart: unless-stopped
+    working_dir: /app
+    user: "1000:1000"
     command: >
       sh -c "set -e && python wait_for_db.py &&
               celery -A backend.EchoFlow beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
@@ -517,6 +534,8 @@ services:
     # ping`), so liveness is restart: unless-stopped + process supervision.
     healthcheck:
       disable: true
+    volumes:
+      - .:/app
     depends_on:
       db:
         condition: service_healthy
