@@ -753,7 +753,270 @@ If ~$120/mo is still too much for a hobby / staging deployment, the **entire sta
 
 ---
 
-## 11. Migration / Go-Live Checklist
+## 11. Free Tier Mode (12-month AWS Free Tier)
+
+The plan above is **not** free. The two biggest non-free pieces are **ECS Fargate** (no free tier — Fargate and Fargate Spot both bill per vCPU/GB-second) and **AWS WAF** (~$5/mo + per-request). The 12-month AWS Free Tier *does* cover most of the rest, so the realistic free path is:
+
+> **Run the whole stack on a single `t2.micro` / `t3.micro` EC2** (Free Tier: 750 hours/month for 12 months from account creation) and use **RDS Free Tier + ElastiCache Free Tier + S3 Free Tier + ACM free + Secrets Manager 30-day trial**. Skip ECS Fargate and skip WAF. Lose some security, but cost = ~$0–5/mo for the first year.
+
+### 11.1 What is and isn't in the AWS Free Tier (12-month, new accounts)
+
+| Service | Free Tier quota | EchoFlow usage | Fits? |
+|---|---|---|---|
+| EC2 | 750 hours/month of `t2.micro` (or `t3.micro` if you opt in) | 1 × `t3.micro` (2 vCPU / 1 GB) running 24×7 = 720 h/mo | ✅ if 1 instance only |
+| RDS | 750 hours/month of `db.t3.micro` / `db.t4g.micro`, 20 GB storage, 20 GB backup | `db.t4g.micro`, 20 GB gp3 | ✅ |
+| ElastiCache | 750 hours/month of `cache.t2.micro` / `cache.t4g.micro` | 1 × `cache.t4g.micro` (1 GB) | ✅ for **one** cluster; we need 2 → ❌ (use 1 cluster only or accept 1 billable cluster) |
+| S3 | 5 GB Standard storage, 20 000 GET, 2 000 PUT, 15 GB egress | ≤ 5 GB of `hls/` segments at first | ✅ (trim uploads aggressively) |
+| ALB | 750 hours/month + 15 LCU | 1 ALB | ✅ |
+| ECR | 500 MB-month storage | `echoflow/api` (≈400 MB) + `echoflow/media` (≈4 GB) | ❌ (media image > 500 MB total) → ~$0.10/GB-month after |
+| Secrets Manager | First 5 secrets free for 30 days, then $0.40/secret/month | ~5 secrets | ⚠️ free for 30 days, then ~$2/mo |
+| **ECS Fargate** | **Not in free tier** | 5 tasks | ❌ → do **not** use Fargate on free tier |
+| **AWS WAF** | **Not in free tier** | 1 Web ACL + rules | ❌ → do **not** attach WAF on free tier |
+| Data transfer out | 100 GB/month | small | ✅ |
+| CloudWatch | 10 metrics, 10 alarms, 5 GB logs | enough | ✅ |
+| ACM | Public certs free | 1 cert | ✅ |
+| Elastic IPs | Free while attached | 1 (NAT) | ✅ |
+
+### 11.2 What changes for Free Tier
+
+Three things change vs §1–9:
+
+1. **Compute = single `t3.micro` EC2** (not ECS Fargate). Run the full Docker Compose stack on it.
+2. **One Redis cluster** (not two). Compromise: share broker + cache on a single `cache.t4g.micro`; use Redis DB 0 for broker, DB 1 for cache. The `noeviction` vs `allkeys-lru` distinction is lost — at this scale accept some risk and run a small `maxmemory` (e.g. 256 MB) with `allkeys-lru`.
+3. **No AWS WAF**. Rely on:
+   - **Security Groups** to expose only 80/443 on the EC2 public IP.
+   - **DRF throttling** (`backend/EchoFlow/settings.py:359-369`) — already covers the abuse vectors (`telemetry: 60/min`, `upload: 20/hr`, `login: 10/min`, `register: 5/hr`, `comment: 60/hr`, `share_send: 100/hr`, `interaction: 60/min`). See [docs/EXPLAIN/auth/04-rate-limiting.md](EXPLAIN/auth/04-rate-limiting.md).
+   - **nginx rate-limit zones** at the edge (`docker/nginx.conf`) as defense-in-depth — see `docs/EXPLAIN/docker/06-https-tls-termination.md:81` for the `limit_req_zone` pattern.
+   - **`fail2ban`** on the EC2 to ban IPs that hit `limit_req` 429s.
+   - **AWS Shield Standard** (free, auto-attached to the EC2 ENI / public IP — but only protects AWS services, not an EC2 instance directly). For a public EC2 you get whatever DDoS protection your ISP / AWS edge provides.
+   - **HSTS preload** (still free) so browsers refuse to speak HTTP to your domain.
+
+### 11.3 Free Tier architecture (diagram)
+
+```
+                Internet
+                   │
+        ┌──────────▼──────────┐
+        │  Route 53 (≈$0.50)  │   api.echoflow.example
+        └──────────┬──────────┘
+                   │
+        ┌──────────▼──────────┐
+        │  EC2 t3.micro       │   750 h/mo FREE
+        │  (Amazon Linux 2)   │   2 vCPU / 1 GB
+        │                     │
+        │  docker compose up  │
+        │  ┌───────────────┐  │
+        │  │  nginx :443   │  │   TLS terminator (Let's Encrypt via certbot)
+        │  │  fail2ban     │  │   bans IPs that hit rate limits
+        │  └───────┬───────┘  │
+        │          │          │
+        │  ┌───────▼───────┐  │
+        │  │  web (gunicorn)│ │   :8000
+        │  │  celery       │ │
+        │  │  celery_feed  │ │
+        │  │  celery_media │ │   Whisper + ST (1 GB RAM is tight — see below)
+        │  │  celery_beat  │ │
+        │  └───────────────┘  │
+        └────┬────────┬────┬──┘
+             │        │    │
+   ┌─────────▼──┐ ┌───▼────▼────────┐ ┌────────────────────┐
+   │ RDS FREE   │ │ ElastiCache FREE│ │ S3 FREE (5 GB)     │
+   │ db.t4g.micro│ │ cache.t4g.micro│ │ echoflow-media     │
+   │ pgvector   │ │ (single cluster │ │  hls/  public-read │
+   │            │ │  broker+cache) │ │  uploads/  private │
+   └────────────┘ └────────────────┘ └────────────────────┘
+```
+
+### 11.4 Free Tier Terraform (single EC2 + managed data)
+
+```hcl
+provider "aws" { region = "us-east-1" }
+
+# --- Networking (minimal VPC, free) ---
+resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/16"
+  tags = { Name = "echoflow-free" }
+}
+resource "aws_subnet" "public_a" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "us-east-1a"
+  map_public_ip_on_launch = true
+}
+resource "aws_internet_gateway" "igw" { vpc_id = aws_vpc.main.id }
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  route { cidr_block = "0.0.0.0/0"; gateway_id = aws_internet_gateway.igw.id }
+}
+resource "aws_route_table_association" "a" {
+  subnet_id      = aws_subnet.public_a.id
+  route_table_id = aws_route_table.public.id
+}
+
+# --- EC2 t3.micro (FREE for 12 months) ---
+resource "aws_security_group" "ec2" {
+  name   = "echoflow-ec2"
+  vpc_id = aws_vpc.main.id
+  ingress { from_port = 22  ; to_port = 22  ; protocol = "tcp"; cidr_blocks = ["YOUR.IP/32"] }   # SSH
+  ingress { from_port = 80  ; to_port = 80  ; protocol = "tcp"; cidr_blocks = ["0.0.0.0/0"] }
+  ingress { from_port = 443 ; to_port = 443 ; protocol = "tcp"; cidr_blocks = ["0.0.0.0/0"] }
+  egress  { from_port = 0   ; to_port = 0   ; protocol = "-1";  cidr_blocks = ["0.0.0.0/0"] }
+}
+
+resource "aws_instance" "echoflow" {
+  ami                    = "ami-0c7217cdde317cfec"  # Amazon Linux 2, us-east-1, latest
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.public_a.id
+  vpc_security_group_ids = [aws_security_group.ec2.id]
+  associate_public_ip_address = true
+  user_data = file("${path.module}/user_data.sh")
+  tags = { Name = "echoflow-free" }
+}
+
+# --- RDS db.t4g.micro (FREE for 12 months) ---
+resource "aws_db_subnet_group" "echoflow" {
+  name       = "echoflow-free"
+  subnet_ids = [aws_subnet.public_a.id]   # single-AZ on free tier
+}
+resource "aws_security_group" "rds" {
+  name   = "echoflow-rds"
+  vpc_id = aws_vpc.main.id
+  ingress { from_port = 5432; to_port = 5432; protocol = "tcp"; security_groups = [aws_security_group.ec2.id] }
+}
+resource "aws_db_instance" "echoflow" {
+  identifier              = "echoflow-db"
+  engine                  = "postgres"
+  engine_version          = "16"
+  instance_class          = "db.t4g.micro"   # FREE
+  allocated_storage       = 20               # within 20 GB free
+  storage_type            = "gp2"            # gp2 is on the free tier; gp3 charges $/GB
+  db_name                 = "echoflow_db"
+  username                = "echoflow"
+  password                = var.db_password  # from Secrets Manager / TF var
+  vpc_security_group_ids  = [aws_security_group.rds.id]
+  db_subnet_group_name    = aws_db_subnet_group.echoflow.name
+  skip_final_snapshot     = true
+  publicly_accessible     = false
+}
+
+# --- ElastiCache cache.t4g.micro (FREE for 12 months) ---
+# Note: ONE cluster, broker + cache share it (DB 0 / DB 1).
+resource "aws_elasticache_subnet_group" "echoflow" {
+  name       = "echoflow-free"
+  subnet_ids = [aws_subnet.public_a.id]
+}
+resource "aws_security_group" "redis" {
+  name   = "echoflow-redis"
+  vpc_id = aws_vpc.main.id
+  ingress { from_port = 6379; to_port = 6379; protocol = "tcp"; security_groups = [aws_security_group.ec2.id] }
+}
+resource "aws_elasticache_replication_group" "single" {
+  replication_group_id = "echoflow-redis"
+  engine               = "redis"
+  engine_version       = "7.0"
+  node_type            = "cache.t4g.micro"   # FREE
+  num_cache_clusters   = 1
+  parameter_group_name = "default.redis7"
+  subnet_group_name    = aws_elasticache_subnet_group.echoflow.name
+  security_group_ids   = [aws_security_group.redis.id]
+  transit_encryption_enabled = true
+  auth_token           = var.redis_password
+}
+
+# --- S3 (5 GB FREE for 12 months) ---
+resource "aws_s3_bucket" "media" { bucket = "echoflow-media-free" }
+resource "aws_s3_bucket_public_access_block" "media" {
+  bucket = aws_s3_bucket.media.id
+  block_public_acls       = true
+  block_public_policy     = false  # hls/* public-read is intentional
+  ignore_public_acls      = true
+  restrict_public_buckets = false
+}
+resource "aws_s3_bucket_policy" "media" {
+  bucket = aws_s3_bucket.media.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Sid = "PublicReadHLS", Effect = "Allow", Principal = "*", Action = "s3:GetObject",
+        Resource = "arn:aws:s3:::echoflow-media-free/hls/*" }
+    ]
+  })
+}
+
+# --- ACM certificate (FREE) ---
+resource "aws_acm_certificate" "api" {
+  domain_name       = "api.echoflow.example"
+  validation_method = "DNS"
+}
+```
+
+The `user_data.sh` clones the repo, sets the `.env` from Secrets Manager, and runs `docker compose up -d`.
+
+### 11.5 Memory constraint — the 1 GB elephant
+
+`t3.micro` has **1 GB RAM**. The Celery workers (especially `celery_media` loading Whisper + sentence-transformers = ~2 GB resident) **will not fit**. Realistic free-tier workers:
+
+| Service | On `t3.micro`? | What to do |
+|---|---|---|
+| `web` (gunicorn) | ✅ (≤200 MB) | `GUNICORN_WORKERS=1` |
+| `celery` (default) | ✅ (≤150 MB) | 1 worker |
+| `celery_feed` | ✅ (≤150 MB) | 1 worker |
+| `celery_beat` | ✅ (≤100 MB) | 1 worker |
+| `celery_media` | ❌ (needs 2–4 GB) | **Disable in free tier.** Uploads will be stored as original files only; HLS is generated lazily on first play (out of scope — see below). |
+| `nginx` | ✅ (≤50 MB) | yes |
+| Postgres client libs + system | ~300 MB | okay |
+| Headroom for OS + Docker | ~100 MB | okay |
+
+**The honest answer:** to run `celery_media` on free tier, you need a swap file (4 GB) on a 30 GB EBS volume AND a `cache-only` Whisper model (`tiny`, ~75 MB instead of ~1.5 GB), and `sentence-transformers` switched to a smaller model. Even then it's slow and the box will swap heavily.
+
+**Free-tier media processing alternative (out of scope for this guide):** process clips in a Lambda function triggered by S3 upload events (Lambda free tier: 1 million requests/month + 400,000 GB-seconds). Whisper `tiny` fits in Lambda's 3 GB ephemeral `/tmp`. This is a non-trivial refactor — defer until you outgrow free tier.
+
+### 11.6 Free Tier go-live checklist
+
+- [ ] Account is < 12 months old (Free Tier is tied to account age).
+- [ ] EC2 `t3.micro` running in single AZ; Security Group opens only 22 (your IP), 80, 443.
+- [ ] `certbot` on the EC2 issued a Let's Encrypt cert for `api.echoflow.example`; auto-renewal cron installed.
+- [ ] nginx rate-limit zones configured (`limit_req_zone $binary_remote_addr zone=api:10m rate=30r/s;` per `docs/EXPLAIN/docker/06-https-production-readiness.md:81`).
+- [ ] `fail2ban` installed and watching nginx logs.
+- [ ] `celery-media` disabled (commented out in `docker-compose.yml`).
+- [ ] RDS `pgvector` extension created.
+- [ ] S3 bucket created with the policy in §11.4; `mc` equivalent of `mc anonymous set download echoflow-media-free/hls` not needed (bucket policy above is enough).
+- [ ] `.env` on the EC2 has `AWS_S3_ENDPOINT_URL=` (blank) and `AWS_S3_REGION_NAME=us-east-1`.
+- [ ] Daily backup of the EC2 (EBS snapshot) via Data Lifecycle Manager — **free** for the first 12 months.
+- [ ] Billing alarm: `aws cloudwatch put-metric-alarm --metric-name EstimatedCharges --threshold 5` — pings SNS when bill > $5.
+
+### 11.7 When free tier ends (month 13)
+
+The bill arrives. Realistic transition path:
+
+1. **Stop the EC2** (~$8/mo saved) → move compute to ECS Fargate Spot (§8).
+2. **RDS**: stay on `db.t4g.micro` if it fits, or resize to `db.t4g.small` (~$30/mo).
+3. **ElastiCache**: split into 2 clusters again (broker + cache) — restore the original `noeviction` / `allkeys-lru` distinction.
+4. **S3**: switch to S3 Standard-IA / Intelligent-Tiering lifecycle (§7.3).
+5. **Add WAF + Shield**: $7/mo gets you rate limiting + DDoS protection.
+6. **Add ALB**: ~$18/mo + LCU; you can keep nginx in front and put ALB behind it, or move TLS to ALB and drop the EC2 nginx.
+
+### 11.8 Free Tier summary
+
+| Cost | 12-month Free Tier | After 12 months |
+|---|---|---|
+| EC2 `t3.micro` | $0 | ~$8/mo |
+| RDS `db.t4g.micro` | $0 | ~$15/mo |
+| ElastiCache `cache.t4g.micro` | $0 | ~$12/mo (×2 if you split) |
+| S3 (≤5 GB) | $0 | ~$1–3/mo |
+| ALB | $0 (not used in free tier) | ~$18/mo |
+| WAF | not used | ~$7/mo |
+| Secrets Manager | $0 for 30 days | ~$2/mo |
+| ECR (media image) | $0.40/mo (over 500 MB) | $0.40/mo |
+| Data transfer | $0 (≤100 GB out) | $0.09/GB |
+| Domain (Route 53) | ~$0.50/mo | $0.50/mo |
+| **Total** | **~$1–2/mo** | **~$60–100/mo** (with WAF + ALB) |
+
+**Bottom line:** Yes, you can deploy EchoFlow in free tier — on a single `t3.micro` EC2, with managed RDS + ElastiCache + S3, **without** `celery-media` (so no HLS transcoding — original audio plays only). It costs ~$1–2/month for 12 months. After free tier, expect ~$60–100/month to keep the same setup, or follow §1–9 for ~$120–140/month managed ECS Fargate.
+
+---
+
+## 12. Migration / Go-Live Checklist
 
 Run through this list the first time you promote EchoFlow from Compose to ECS.
 
@@ -776,7 +1039,7 @@ Run through this list the first time you promote EchoFlow from Compose to ECS.
 
 ---
 
-## 12. What This Guide Does NOT Cover (follow-ups)
+## 13. What This Guide Does NOT Cover (follow-ups)
 
 - **CloudFront in front of S3 `hls/`** — adds a CDN cache between browser and S3, removes the S3 cost exposure on viral clips. See `docs/EXPLAIN/storage/01-s3-architecture.md:253` and the open item "CDN + OAC in front of MinIO" in [docs/EXPLAIN/decisions/partial-issues-completion-plan.md](EXPLAIN/decisions/partial-issues-completion-plan.md).
 - **Read replica + RDS Proxy** — activates the existing `ReadRouter` (`backend/app/db_routers.py`) by setting `READ_DATABASE_URL`. See [docs/EXPLAIN/database/05-read-replica-design.md](EXPLAIN/database/05-read-replica-design.md).
@@ -787,7 +1050,7 @@ Run through this list the first time you promote EchoFlow from Compose to ECS.
 
 ---
 
-## 13. References
+## 14. References
 
 - [AGENTS.md](../AGENTS.md) — env var contract, runtime contract, gotchas
 - [docs/path_to_k8s_deployment.md](path_to_k8s_deployment.md) — image split (`api` vs `media`), resource budgets
