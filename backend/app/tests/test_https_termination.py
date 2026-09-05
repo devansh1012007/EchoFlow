@@ -68,7 +68,7 @@ import re
 import ssl
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -139,18 +139,35 @@ class TestCertFiles:
     def test_cert_is_not_expired(self):
         """An expired cert makes nginx serve a TLS handshake that
         browsers reject. We allow a 1-day grace for clock skew — the
-        openssl one-liner in AGENTS.md uses 365d validity."""
+        openssl one-liner in AGENTS.md uses 365d validity.
+
+        The `cryptography` library added `not_valid_before_utc` /
+        `not_valid_after_utc` (timezone-aware) in v42 and deprecated
+        the naive `not_valid_before` / `not_valid_after` in v44. This
+        test falls back to the naive attributes on older versions
+        (and treats the naive values as UTC, which is the standard
+        convention for X.509 certificates).
+        """
         import cryptography.x509 as x509
         with CERT_PATH.open('rb') as f:
             cert = x509.load_pem_x509_certificate(f.read())
+        # Prefer the modern timezone-aware attributes (v42+); fall back
+        # to the deprecated naive ones (v41 and earlier) by treating
+        # the naive values as UTC, which is the X.509 standard.
+        not_before = getattr(cert, 'not_valid_before_utc', None)
+        not_after = getattr(cert, 'not_valid_after_utc', None)
+        if not_before is None:
+            not_before = cert.not_valid_before.replace(tzinfo=timezone.utc)
+        if not_after is None:
+            not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
-        assert cert.not_valid_before_utc <= now, (
-            f'Cert not_valid_before is in the future: {cert.not_valid_before_utc}'
+        assert not_before <= now, (
+            f'Cert not_valid_before is in the future: {not_before}'
         )
         # 1-day grace window — clock skew between this host and the
         # cert authority (here: ourselves) is rare, but possible.
-        assert cert.not_valid_after_utc >= now - __import__('datetime').timedelta(days=1), (
-            f'Cert expired at {cert.not_valid_after_utc} (now: {now})'
+        assert not_after >= now - timedelta(days=1), (
+            f'Cert expired at {not_after} (now: {now})'
         )
 
     def test_cert_san_covers_localhost(self):
