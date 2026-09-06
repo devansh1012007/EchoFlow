@@ -3,11 +3,14 @@
 ###############################################################################
 # EchoFlow — multi-stage build
 #
-#   base         : shared OS layer (apt installed ONCE) + non-root runtime user
-#   py-deps-api  : populates /opt/venv from requirements-base + ./wheelhouse
-#   py-deps-media: populates /opt/venv + bakes HuggingFace models (secret-fed)
-#   api          : gunicorn web + default/fast_feed/celery_beat workers (small)
-#   media        : heavy_media worker (FFmpeg libs + baked HF models)
+#   base            : shared OS layer (apt installed ONCE) + non-root runtime user
+#   wheelhouse-base : holds the offline ./wheelhouse/ + reqs in a stable layer
+#                     that both py-deps stages reference via COPY --from.
+#                     Wheelhouse bytes therefore enter the build graph ONCE.
+#   py-deps-api     : populates /opt/venv from requirements-base + wheelhouse
+#   py-deps-media   : populates /opt/venv + bakes HuggingFace models (secret-fed)
+#   api             : gunicorn web + default/fast_feed/celery_beat workers (small)
+#   media           : heavy_media worker (FFmpeg libs + baked HF models)
 #
 # Build:
 #   docker compose build
@@ -27,6 +30,16 @@
 #     (wheelhouse, docs, frontend, CI configs) can never ride along.
 #   * Stage-specific HEALTHCHECKs keep images self-describing for bare
 #     `docker run`: api probes HTTP /health/, media pings its own Celery node.
+#   * BuildKit named caches (see Dockerfile comments below) survive across
+#     builds on the same host:
+#       - echoflow-apt  : downloaded .deb files under /var/cache/apt/archives
+#       - echoflow-pip  : pip's HTTP/wheel metadata index under /root/.cache/pip
+#       - echoflow-hf   : HuggingFace model artifacts under appuser's cache
+#     Cache IDs are namespaced to this project so a `docker builder prune`
+#     never wipes them by accident; inspect with `docker buildx du`.
+#     SECURITY: /var/lib/apt/lists is intentionally NOT cached — caching
+#     trusted package indexes can mask security updates. `apt-get update`
+#     runs every build so list freshness always wins over re-download speed.
 ###############################################################################
 
 FROM python:3.11-slim-bookworm AS base
@@ -39,8 +52,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN groupadd -g 1000 appgroup \
  && useradd -u 1000 -g appgroup -s /bin/bash -m appuser \
  && printf 'Acquire::Retries "10";\nAcquire::http::Timeout "120";\nAcquire::https::Timeout "120";\nAcquire::http::Pipeline-Depth "0";\n' \
-      > /etc/apt/apt.conf.d/99custom-network \
- && apt-get update \
+      > /etc/apt/apt.conf.d/99custom-network
+
+# BuildKit named cache for downloaded .deb files. Survives across builds on
+# this host. uid/gid 0 (root) owns /var/cache/apt in Debian; sharing the cache
+# between the root-owned install step and any later user-owned step is fine
+# because this stage is only used as a parent image.
+#
+# SECURITY: not caching /var/lib/apt/lists deliberately — see header note.
+# A stale package index can silently serve vulnerable .deb files. Re-running
+# `apt-get update` on every build is cheap (one HTTP round-trip per mirror)
+# and is the only guarantee that security updates flow into the image.
+RUN --mount=type=cache,id=echoflow-apt,target=/var/cache/apt/archives,sharing=locked \
+    apt-get update \
  && apt-get install -y --no-install-recommends --fix-missing \
         libpq-dev \
         gcc \
@@ -64,25 +88,36 @@ WORKDIR /app
 # wheelhouse first (see AGENTS.md) or temporarily drop --no-index.
 # -----------------------------------------------------------------------------
 
-FROM base AS py-deps-api
+# Stable, narrow stage that owns the offline wheels. Both py-deps stages
+# reference it via COPY --from=wheelhouse-base, so the wheelhouse bytes
+# enter the layer graph exactly ONCE per build regardless of how many
+# downstream stages need them. Re-evaluated only when wheelhouse/ or the
+# pinned requirements files change.
+FROM base AS wheelhouse-base
+
+COPY requirements-base.txt requirements-media.txt constraints.txt ./
+COPY wheelhouse/ /wheelhouse/
+
+
+FROM wheelhouse-base AS py-deps-api
 
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements-base.txt constraints.txt ./
-COPY wheelhouse/ /wheelhouse/
-
-# NOTE: no `pip install --upgrade pip` — the bundled pip works fine and
-# upgrading would force a PyPI round-trip before the wheelhouse is usable.
-RUN pip install --no-cache-dir \
+# BuildKit named cache for pip's HTTP/wheel metadata index. Even with
+# --no-index, pip still does resolver work (PEP 517 build-deps, constraint
+# checks, METADATA reads); caching /root/.cache/pip makes subsequent
+# installs in the same cache ID near-instant after the first cold run.
+# Cache mount is per-stage, so it does not leak into the final image.
+RUN --mount=type=cache,id=echoflow-pip,target=/root/.cache/pip,sharing=locked \
+    pip install --no-cache-dir \
       --default-timeout=120 --retries 10 \
       --no-index --find-links=/wheelhouse \
       -c constraints.txt \
-      -r requirements-base.txt \
- && rm -rf /wheelhouse
+      -r requirements-base.txt
 
 
-FROM base AS py-deps-media
+FROM wheelhouse-base AS py-deps-media
 
 # Cache locations are set BEFORE baking so models land at a path we can copy
 # out verbatim; the final media stage re-declares the identical values.
@@ -93,28 +128,34 @@ ENV HF_HOME=/home/appuser/.cache/huggingface \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements-base.txt requirements-media.txt constraints.txt ./
-COPY wheelhouse/ /wheelhouse/
-
 # Single resolver pass, fully offline: wheelhouse includes the CPU-only torch
 # build (torch-2.8.0+cpu-cp311); constraints.txt pins torch so nothing can
 # resolve to a CUDA build.
-RUN pip install --no-cache-dir \
+RUN --mount=type=cache,id=echoflow-pip,target=/root/.cache/pip,sharing=locked \
+    pip install --no-cache-dir \
       --default-timeout=1000 --retries 10 \
       --no-index --find-links=/wheelhouse \
       -c constraints.txt \
-      -r requirements-media.txt \
- && rm -rf /wheelhouse
+      -r requirements-media.txt
 
 # Bake HuggingFace models so runtime never needs network access. A failed
 # download FAILS THE BUILD deliberately — a half-baked media image is worse
 # than no image.
+#
+# Cache notes:
+#   * echoflow-hf is namespaced to appuser's cache so it survives across
+#     py-deps-media builds on this host (Whisper base + sentence-transformers
+#     + KeyBERT artifacts are ~250 MB combined; saving them once is a
+#     ~5-minute win per cold media build).
+#   * sharing=locked so two concurrent builds never race on a half-written
+#     model file.
 #
 # Secret handling:
 #   --mount=type=secret  -> file exists only during THIS RUN, never persisted
 #   `set -eu` (NOT -x!)  -> xtrace would echo the exported token into build logs
 #   [ -s ... ] guard     -> absent/empty secret = anonymous public download
 RUN --mount=type=secret,id=hf_token \
+    --mount=type=cache,id=echoflow-hf,target=/home/appuser/.cache/huggingface,sharing=locked,uid=1000,gid=1000 \
     set -eu; \
     if [ -s /run/secrets/hf_token ]; then \
         export HF_TOKEN="$(cat /run/secrets/hf_token)"; \

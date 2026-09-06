@@ -225,6 +225,37 @@ rm -rf wheelhouse && mv wheelhouse-new wheelhouse
 ### Pop!_OS note
 Uses Docker Compose V2 (`docker compose`, not `docker-compose`). If you have `docker-compose` installed from an old PPA, it conflicts with the V2 plugin — remove it with `sudo apt remove docker-compose` and use `docker compose` instead.
 
+### BuildKit cache (named, persistent across builds)
+
+The `Dockerfile` declares three **named** BuildKit cache mounts so cold builds skip the expensive network round-trips on subsequent runs:
+
+| Cache ID | Mounted at | What it holds | Saved per build |
+|---|---|---|---|
+| `echoflow-apt` | `/var/cache/apt/archives` | Downloaded `.deb` files (`libpq-dev`, `gcc`, `ffmpeg`, `libsndfile1`, `libmagic1`, `postgresql-client`) | ~200 MB; ~1-2 min |
+| `echoflow-pip`  | `/root/.cache/pip`     | pip's HTTP/wheel metadata index (resolver cache) | Seconds — only helps repeated installs in the same build |
+| `echoflow-hf`   | `/home/appuser/.cache/huggingface` | Baked HF model artifacts (Whisper `base`, `all-MiniLM-L6-v2`, KeyBERT) | ~250 MB; ~5 min on `media` rebuild |
+
+A dedicated `wheelhouse-base` stage owns the offline `./wheelhouse/` so both `py-deps-api` and `py-deps-media` reference it via `COPY --from=wheelhouse-base` — wheelhouse bytes enter the layer graph exactly once per build.
+
+**Inspect / manage the caches:**
+
+```bash
+docker buildx du                                    # show every named cache and its size
+docker buildx du --filter type=buildkit             # only BuildKit-managed caches
+docker buildx prune --filter type=buildkit          # safe — never touches named caches by default
+docker buildx prune --filter id=echoflow-apt        # nuke one specific cache (e.g. after adding a new apt package)
+docker builder prune                                # CAREFUL — wipes dangling builders; named caches survive by default
+```
+
+**Cache invalidation rules:**
+- Adding/changing a package in `Dockerfile` apt-get list invalidates the `base` stage → next build re-downloads everything → caches are repopulated transparently.
+- The `wheelhouse/` directory changing (new wheels added) invalidates `wheelhouse-base` → both py-deps stages rebuild.
+- HuggingFace model upgrade → invalidate manually with `docker buildx prune --filter id=echoflow-hf`. There is no automatic signal from inside the build that the upstream model changed.
+- CI runners (GitHub Actions) start with empty caches — first CI build is always cold. Subsequent jobs on the same runner can reuse caches if you enable `cache-from` / `cache-to` in a CI step (not currently configured).
+
+**What is intentionally NOT cached:**
+- `/var/lib/apt/lists/` — stale package indexes can silently serve vulnerable `.deb` files. `apt-get update` runs on every build; security wins over re-download speed.
+
 ### Runtime notes
 - Web container runs: `backend/wait_for_db.py → migrate → collectstatic → gunicorn -c backend/gunicorn.conf.py`.
 - `gunicorn.conf.py` uses `preload_app=True` with a `post_fork` hook that resets Django DB connections (critical because `EchoFlow/__init__.py` imports Celery, which creates Redis connections in the master process before fork).

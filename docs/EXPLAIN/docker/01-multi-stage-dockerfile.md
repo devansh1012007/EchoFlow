@@ -2,15 +2,20 @@
 
 ## Overview
 
-**File:** `Dockerfile` — 5 stages, 2 final images (`api`, `media`)
+**File:** `Dockerfile` — 6 stages, 2 final images (`api`, `media`)
 
 ```mermaid
 graph TB
-    base[base: python:3.11-slim + apt deps] --> pyapi[py-deps-api: requirements-base + wheelhouse]
-    base --> pymedia[py-deps-media: requirements-base + requirements-media + wheelhouse + HF models]
+    base[base: python:3.11-slim + apt deps + non-root user]
+    wheelbase[wheelhouse-base: requirements-*.txt + offline wheelhouse/]
+    base --> wheelbase
+    wheelbase --> pyapi[py-deps-api: requirements-base → /opt/venv]
+    wheelbase --> pymedia[py-deps-media: requirements-base+media → /opt/venv + bake HF models]
     pyapi --> api[api: gunicorn + celery + beat]
     pymedia --> media[media: celery_media + baked HF models]
 ```
+
+The `wheelhouse-base` stage exists so the ~511 MB `./wheelhouse/` directory enters the layer graph **exactly once** per build. Both `py-deps-api` and `py-deps-media` `FROM wheelhouse-base` instead of `COPY wheelhouse/` themselves; the wheels travel through `COPY --from=wheelhouse-base` when the final images pick up `/opt/venv`. See [## BuildKit Cache Mounts](#buildkit-cache-mounts) below for the named caches that make subsequent builds skip the expensive network round-trips.
 
 ---
 
@@ -28,10 +33,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN groupadd -g 1000 appgroup \
  && useradd -u 1000 -g appgroup -s /bin/bash -m appuser
 
-# Apt deps (ONCE for all stages)
-RUN apt-get update \
+# Tighter network timeouts + retry policy for slow Debian mirrors
+RUN printf 'Acquire::Retries "10";\nAcquire::http::Timeout "120";\nAcquire::https::Timeout "120";\nAcquire::http::Pipeline-Depth "0";\n' \
+      > /etc/apt/apt.conf.d/99custom-network
+
+# Apt deps (ONCE for all stages). The `echoflow-apt` BuildKit cache mount
+# (see ## BuildKit Cache Mounts) persists downloaded .deb files across builds.
+# /var/lib/apt/lists is deliberately NOT cached — stale package indexes can
+# serve vulnerable .deb files; `apt-get update` re-runs every build so
+# security updates always flow in.
+RUN --mount=type=cache,id=echoflow-apt,target=/var/cache/apt/archives,sharing=locked \
+    apt-get update \
  && apt-get install -y --no-install-recommends --fix-missing \
-      libpq-dev gcc postgresql-client ffmpeg libsndfile1 \
+      libpq-dev gcc postgresql-client ffmpeg libsndfile1 libmagic1 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -41,30 +55,49 @@ WORKDIR /app
 | Package | Purpose |
 |---------|---------|
 | `libpq-dev` | PostgreSQL client library (psycopg2) |
-| `gcc` | Compile C extensions |
-| `postgresql-client` | `pg_isready` for healthcheck |
+| `gcc` | Compile C extensions during `pip install` |
+| `postgresql-client` | `pg_isready` for healthcheck / `wait_for_db.py` |
 | `ffmpeg` | Audio processing (HLS, normalize) |
 | `libsndfile1` | Audio file I/O (soundfile) |
+| `libmagic1` | `python-magic` file-type detection at upload (`serializers.py:128-133`) |
 
 ---
 
-## Stage 2: `py-deps-api` (API Dependencies)
+## Stage 2: `wheelhouse-base` (Offline Wheels — shared by both py-deps stages)
 
 ```dockerfile
-FROM base AS py-deps-api
+FROM base AS wheelhouse-base
+
+COPY requirements-base.txt requirements-media.txt constraints.txt ./
+COPY wheelhouse/ /wheelhouse/
+```
+
+### Why a dedicated stage?
+- The offline `./wheelhouse/` directory is ~511 MB (hundreds of `.whl` files including a CPU-only `torch` build). Before this stage existed, both `py-deps-api` and `py-deps-media` did their own `COPY wheelhouse/`, doubling the wheelhouse's bytes in the layer graph.
+- Now both py-deps stages `FROM wheelhouse-base AS …`. Wheels travel through `COPY --from=wheelhouse-base /opt/venv` when the final images assemble, so wheelhouse bytes enter the layer graph exactly **once** per build regardless of how many downstream stages need them.
+- This stage is re-evaluated only when `wheelhouse/`, `requirements-base.txt`, `requirements-media.txt`, or `constraints.txt` change.
+
+---
+
+## Stage 3: `py-deps-api` (API Dependencies)
+
+```dockerfile
+FROM wheelhouse-base AS py-deps-api
 
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements-base.txt constraints.txt ./
-COPY wheelhouse/ /wheelhouse/
-
-RUN pip install --no-cache-dir \
+# The `echoflow-pip` BuildKit cache mount (see ## BuildKit Cache Mounts)
+# persists pip's HTTP/wheel metadata index across builds. Even with
+# --no-index, pip still does resolver work (PEP 517 build-deps, constraint
+# checks, METADATA reads); caching /root/.cache/pip makes subsequent
+# installs in the same cache ID near-instant after the first cold run.
+RUN --mount=type=cache,id=echoflow-pip,target=/root/.cache/pip,sharing=locked \
+    pip install --no-cache-dir \
       --default-timeout=120 --retries 10 \
       --no-index --find-links=/wheelhouse \
       -c constraints.txt \
-      -r requirements-base.txt \
- && rm -rf /wheelhouse
+      -r requirements-base.txt
 ```
 
 ### Key Points
@@ -75,10 +108,10 @@ RUN pip install --no-cache-dir \
 
 ---
 
-## Stage 3: `py-deps-media` (Media Dependencies + HF Models)
+## Stage 4: `py-deps-media` (Media Dependencies + HF Models)
 
 ```dockerfile
-FROM base AS py-deps-media
+FROM wheelhouse-base AS py-deps-media
 
 # Cache locations BEFORE baking (copied to media stage)
 ENV HF_HOME=/home/appuser/.cache/huggingface \
@@ -88,19 +121,27 @@ ENV HF_HOME=/home/appuser/.cache/huggingface \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements-base.txt requirements-media.txt constraints.txt ./
-COPY wheelhouse/ /wheelhouse/
-
 # Single resolver pass (CPU torch via extra-index-url in Dockerfile)
-RUN pip install --no-cache-dir \
+RUN --mount=type=cache,id=echoflow-pip,target=/root/.cache/pip,sharing=locked \
+    pip install --no-cache-dir \
       --default-timeout=1000 --retries 10 \
       --no-index --find-links=/wheelhouse \
       -c constraints.txt \
-      -r requirements-media.txt \
- && rm -rf /wheelhouse
+      -r requirements-media.txt
 
-# BAKE HUGGINGFACE MODELS (BuildKit secret for HF_TOKEN)
+# BAKE HUGGINGFACE MODELS
+#   * --mount=type=secret,id=hf_token — HF_TOKEN reaches this step as a
+#     secret file; it never enters ARG/ENV/layer history.
+#   * --mount=type=cache,id=echoflow-hf,uid=1000,gid=1000 — persists the
+#     baked model artifacts (~250 MB: Whisper base + sentence-transformers
+#     + KeyBERT) across media builds on this host. The uid/gid are required
+#     because the python -c lines run as the user they were loaded under
+#     (root inside the builder), and the cache target is /home/appuser/...
+#     which is owned by UID 1000.
+#   * sharing=locked — two concurrent builds never race on a half-written
+#     model file.
 RUN --mount=type=secret,id=hf_token \
+    --mount=type=cache,id=echoflow-hf,target=/home/appuser/.cache/huggingface,sharing=locked,uid=1000,gid=1000 \
     set -eu; \
     if [ -s /run/secrets/hf_token ]; then \
         export HF_TOKEN="$(cat /run/secrets/hf_token)"; \
@@ -119,7 +160,7 @@ RUN --mount=type=secret,id=hf_token \
 
 ---
 
-## Stage 4: `api` (Final API Image)
+## Stage 5: `api` (Final API Image)
 
 ```dockerfile
 FROM base AS api
@@ -159,7 +200,7 @@ gunicorn.conf.py   # Gunicorn config
 
 ---
 
-## Stage 5: `media` (Final Media Image)
+## Stage 6: `media` (Final Media Image)
 
 ```dockerfile
 FROM base AS media
@@ -271,6 +312,62 @@ rm -rf wheelhouse && mv wheelhouse-new wheelhouse
 | `django` | `==5.2.17` | 6.x needs Python 3.12+ |
 | `librosa` | `==0.11.0` | 1.x needs Python 3.12+ |
 | `torch` | `==2.8.0` | CPU build via extra-index-url |
+
+---
+
+## BuildKit Cache Mounts
+
+Three **named** BuildKit cache mounts persist across builds on the same host. Without them, the `base` stage re-downloads ~200 MB of `.deb` files and the `py-deps-media` stage re-downloads ~250 MB of HuggingFace models on every cold build. With them, only the first build pays that cost; subsequent builds see a BuildKit cache hit and skip the network round-trip entirely.
+
+| Cache ID | Mounted at | Stage that declares it | Holds |
+|---|---|---|---|
+| `echoflow-apt` | `/var/cache/apt/archives` | `base` (apt-get install) | Downloaded `.deb` files for `libpq-dev`, `gcc`, `postgresql-client`, `ffmpeg`, `libsndfile1`, `libmagic1` |
+| `echoflow-pip` | `/root/.cache/pip` | `py-deps-api` and `py-deps-media` | pip's HTTP/wheel metadata index (resolver cache). Helps on repeated installs within the same build; not the actual wheels (those come from the local `wheelhouse/`) |
+| `echoflow-hf` | `/home/appuser/.cache/huggingface` | `py-deps-media` (HF bake) | Baked model artifacts: Whisper `base`, `all-MiniLM-L6-v2`, KeyBERT |
+
+All three mounts use `sharing=locked` so two concurrent builds never race on a half-written file. The `echoflow-hf` mount additionally specifies `uid=1000,gid=1000` because the cache target lives under `appuser`'s home directory.
+
+### Why a `wheelhouse-base` stage (not a cache mount)?
+
+A natural alternative is `--mount=type=cache,target=/wheelhouse` instead of `COPY wheelhouse/ /wheelhouse/` in each py-deps stage. We chose the dedicated stage instead because:
+
+- **Cache mounts are per-stage.** Two stages can't share a single cache mount at the same `target`. Two `COPY wheelhouse/` calls would each need their own mount.
+- **Layer-graph dedup is more important than disk dedup.** A `wheelhouse-base` stage + `COPY --from=wheelhouse-base /opt/venv` makes the wheels travel through the build graph exactly once, regardless of how many downstream stages need them. A cache mount would let `pip` re-read the same bytes multiple times.
+- **Wheelhouse is part of the source tree.** It's reproducible from `requirements-*.txt` + `constraints.txt` via the regen script (see `AGENTS.md` "Offline wheelhouse" section), so we don't need to cache it as a long-lived artifact — the cache mount would persist it on the host indefinitely.
+
+### Inspecting and managing the caches
+
+```bash
+docker buildx du                                    # show every named cache and its size
+docker buildx du --filter id=echoflow-apt           # one specific cache
+docker buildx du --filter type=buildkit             # only BuildKit-managed caches
+
+# Pruning — caches survive `docker builder prune` by default; only `docker
+# buildx prune` with an explicit filter removes them.
+docker buildx prune --filter type=buildkit          # safe; does NOT touch named caches
+docker buildx prune --filter id=echoflow-hf         # nuke the HF cache (after upgrading a model)
+docker builder prune                                # CAREFUL — wipes dangling builders; named caches survive
+```
+
+### What is intentionally NOT cached
+
+- **`/var/lib/apt/lists`** — stale package indexes can silently serve vulnerable `.deb` files. `apt-get update` re-runs on every build; security wins over re-download speed. Only `/var/cache/apt/archives` (the downloaded files) is cached.
+- **The `./wheelhouse/` directory itself** — see "Why a `wheelhouse-base` stage (not a cache mount)?" above.
+
+### Cache invalidation matrix
+
+| Change | Invalidates | Caches re-populated by |
+|---|---|---|
+| Add/remove a package in the `apt-get install` list | `base` | Next build re-downloads; caches refill transparently |
+| Change `requirements-base.txt` or `constraints.txt` | `wheelhouse-base`, `py-deps-api`, `py-deps-media` | First build re-resolves pip; second build reuses cache |
+| Add a wheel to `wheelhouse/` | `wheelhouse-base` | Same as above |
+| Upgrade HuggingFace model | `py-deps-media` bake layer only — but BuildKit can't tell | Manual `docker buildx prune --filter id=echoflow-hf`, then rebuild |
+| Change `Dockerfile` syntax / stage layout | All dependent stages | Transparent re-population |
+| Edit source under `backend/` or `ai_ml/` | `api` and `media` final stages only — `wheelhouse-base`, `py-deps-*`, and `base` are untouched | All caches persist |
+
+### CI runners
+
+GitHub Actions and other CI runners start with **empty BuildKit caches** — the first CI build is always cold. Subsequent jobs on the same runner can reuse caches if you add `cache-from` and `cache-to` attributes to a `docker/build-push-action@v6` step (e.g. `type=registry,ref=ghcr.io/<owner>/echoflow-buildcache`). This is **not currently configured** — see `unfixed-issues-2026-09-03.md` for the open item.
 
 ---
 

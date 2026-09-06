@@ -163,6 +163,29 @@ open http://localhost:3000
 docker compose down
 ```
 
+### Build performance
+
+The `Dockerfile` declares three **named BuildKit caches** (`echoflow-apt`, `echoflow-pip`, `echoflow-hf`) so the second and subsequent builds skip the expensive network round-trips (apt `.deb` files, pip resolver metadata, HuggingFace model artifacts). They survive across builds on the same host and are namespaced to this project so a global `docker builder prune` never wipes them.
+
+```bash
+# Inspect cache sizes after a build
+docker buildx du --filter id=echoflow-apt
+docker buildx du --filter id=echoflow-hf
+
+# Force a fresh build (skip named caches for one target only)
+docker buildx build --target media --no-cache .
+
+# Nuke one specific cache (e.g. after upgrading the HF model version)
+docker buildx prune --filter id=echoflow-hf
+```
+
+**Common gotchas:**
+- **Cold first build is slow by design.** The first `docker compose up --build` pulls ~200 MB of Debian packages and bakes ~250 MB of HuggingFace models. Subsequent builds skip those steps entirely. Expect 10–30 minutes for the first cold media build; subsequent rebuilds finish in seconds when only source code changes.
+- **IPv6 connectivity failures** on the build host (Docker tries `auth.docker.io` over IPv6 first) can hang the build at "resolve image config" with `connect: network is unreachable`. Disable IPv6 in the Docker daemon if your host doesn't have a working IPv6 uplink — see `docs/EXPLAIN/docker/01-multi-stage-dockerfile.md` for details.
+- **CI runners start with empty caches.** The first CI build is always cold; configure `cache-from`/`cache-to` on `docker/build-push-action` if you want CI to reuse registry-backed caches.
+
+Full design and invalidation rules: [docs/EXPLAIN/docker/01-multi-stage-dockerfile.md](docs/EXPLAIN/docker/01-multi-stage-dockerfile.md).
+
 ## Audio Scraping / Ingestion
 
 EchoFlow includes a license-aware scraper for seeding the catalog from public, openly-licensed archives. It respects `robots.txt`, enforces per-host rate limits, validates content type, enforces a max download size, and normalizes/trims audio via pydub.
