@@ -285,6 +285,120 @@ Uses Docker Compose V2 (`docker compose`, not `docker-compose`). If you have `do
 | `REVENUECAT_HD_QUALITY_BLOCKED_FREE` | Block HD quality for free users (default: `True`). |
 
 
+## Indian Regulatory Compliance — Backend Changes
+
+This section documents all backend changes made to comply with:
+- **DPDP Act 2023** (Digital Personal Data Protection Act) — consent, children's data, DPO, breach notification, cross-border
+- **IT Rules 2021** (Intermediary Guidelines) — grievance officer, nodal contact, compliance officer, traceability, content moderation
+- **CERT-In Directions 2022** — 180-day log retention, 6-hour breach notification
+- **Copyright Act 1957** — user upload licensing, attribution
+- **Consumer Protection (E-Commerce) Rules 2020** — grievance redressal, country of origin
+- **RBI Data Localisation** — financial data must reside in India
+
+### Phase A — DPDP Consent & Age Gating (COMPLETED)
+
+**Models (`backend/app/models.py`):**
+- Added `User.is_minor` (BooleanField, default=False) — computed from DOB at registration
+- Added `User.minor_consent_verified` (BooleanField, default=False) — parent consent for minors
+- Added `User.consent_accepted` (BooleanField, default=False) — explicit consent flag
+- Added `User.dob` (DateField, nullable) — date of birth for age gate
+- Added `User.parent_email` (EmailField, nullable) — for minor consent flow
+- Added `ConsentAudit` model (lines 61-77) — immutable audit trail: `user`, `consent_issued_at`, `terms_version_id`, `privacy_version_id`, `ip_address`, `user_agent`, `withdrawn_at`, `identity_retained_until` (CERT-In 180-day retention)
+- Added `CheckConstraint` on `AudioClip.likes`, `shares`, `skips`, `comment_count` >= 0 (DB-level negative counter prevention)
+
+**Serializers (`backend/app/serializers.py`):**
+- `RegisterSerializer` now requires `consent_accepted` (BooleanField, required=True) and `terms_version` (validated against `TERMS_VERSIONS` env var)
+- Added `dob` and `parent_email` fields for age gate
+- Validation logic computes `is_minor` from DOB; if minor, `minor_consent_verified` defaults False (requires parent flow)
+- Creates `ConsentAudit` row on successful registration (audit trail persists even if user creation rolls back)
+- Magic-byte audio validation (lines 16-21, 128-133) — pure-Python allowlist + python-magic layer-2 check before ffmpeg
+- Copyright acknowledgment enforcement (lines 178-191) — user must acknowledge before DB persistence
+- Duration probe at upload (lines 236-251) — prevents 24h WAV abuse via pydub/ffprobe
+- Comment text sanitization (lines 350-365) — null-byte / control-char stripping
+- `watch_time_ms` capped at 10h (lines 373-376) — prevents viewbot inflation
+
+**Views (`backend/app/views/auth.py`):**
+- Registration endpoint accepts consent fields, creates `ConsentAudit` via serializer
+- `/auth/register/` returns access + refresh tokens with consent confirmation
+
+**Tests (`backend/app/tests/test_auth_regulatory.py`, `test_security_and_validation.py`):**
+- `test_register_success` validates consent fields required
+- `test_user_has_dob_and_computed_is_minor` uses `date()` objects for DOB
+- Compliance endpoint requires auth + returns JSON
+
+### Phase B — Grievance & Compliance Officers (COMPLETED)
+
+**Models (`backend/app/models.py`):**
+- Added `Grievance` model (lines 269-295) — DB table per audit: `user`, `category`, `description`, `status`, `assigned_officer`, `resolution`, `created_at`, `resolved_at`, `escalated`, `ip_address`, `user_agent`
+- `Grievance.category` choices: `content`, `privacy`, `account`, `payment`, `other`
+- `Grievance.status` choices: `open`, `in_progress`, `resolved`, `rejected`, `escalated`
+- Added `AuditLog` model (lines 297-320) — CERT-In 180-day log retention: `user`, `action`, `resource_type`, `resource_id`, `metadata`, `ip_address`, `user_agent`, `created_at`
+- `AuditLog` indexes on `(user, -created_at)` and `(resource_type, resource_id)`
+
+**Settings (`backend/EchoFlow/settings.py`):**
+- Env-driven regulatory contacts (lines 643-657): `COMPLIANCE_OFFICER_EMAIL`, `GRIEVANCE_OFFICER_EMAIL`, `NODAL_CONTACT_EMAIL` (with defaults)
+- `TERMS_VERSIONS` env var (comma-separated) for consent versioning
+- `AWS_S3_REGION_NAME` assertion for `ap-south-1` / `ap-south-2` (DPDP + RBI)
+
+**Views (`backend/app/views/data_subject.py`):**
+- `/legal/compliance/` — returns officer contacts (IT Rules 4(1)(a)(b)(c))
+- `/auth/consent/withdraw/` — sets `ConsentAudit.withdrawn_at`, triggers 30-day cooling-off soft-delete (DPDP §14)
+- `/auth/data/export/` — DPDP §14 data portability: exports all user data as JSON
+- `/auth/data/delete/` — DPDP §14 right to erasure with CERT-In retention override
+
+**Tests (`backend/app/tests/test_system_health.py`, `test_auth_regulatory.py`):**
+- Grievance endpoint validation
+- Compliance endpoint requires auth + returns JSON
+
+### Phase C — Content Moderation Pipeline (COMPLETED)
+
+**Services (`backend/app/services/content_moderation.py`):**
+- v1 offline moderation: `sha256` fingerprint of normalized file + blocked-phrase list against lowercase transcript + AI tags
+- `AudioClip.moderation_approved` boolean gate (models.py:113) — HLS generation only runs when True
+- `process_audio_to_hls` task checks `moderation_approved` before processing
+- `FINGERPRINT_BLOCKLIST` module-level set (TODO: move to Redis for production)
+
+**Uploads (`backend/app/services/uploads.py`):**
+- `trigger_hls_processing` enqueues task only after moderation approval
+- `finalize_upload` no longer enqueues HLS task (flow changed)
+
+### CERT-In 180-Day Log Retention (COMPLETED)
+
+**Models (`backend/app/models.py`):**
+- `AuditLog` with `identity_retained_until = created_at + 180 days` (CERT-In §5(1))
+- `ConsentAudit.identity_retained_until = consent_issued_at + 180 days`
+- `Grievance` retains user identity for 180 days post-resolution
+
+**Middleware (`backend/app/middleware.py`):**
+- Request/response audit logging (lines 292-293) — DB write overhead accepted for audit trail
+- Correlation ID propagation for cross-service tracing
+
+### S3 Region Enforcement (COMPLETED)
+
+**Settings (`backend/EchoFlow/settings.py`):**
+- `STORAGES["default"]["OPTIONS"]["region_name"]` asserted to `ap-south-1` / `ap-south-2` / `auto` (lines 492-498)
+- Signed S3 URLs instead of public bucket (lines 467-479)
+
+### Environment Variables Required (see above)
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `TERMS_VERSIONS` | Comma-separated consent versions (e.g. `v1.0,v1.1`) | `v1.0` |
+| `COMPLIANCE_OFFICER_EMAIL` | CCO email (IT Rules 4(1)(b)) | `compliance@echoflow.in` |
+| `GRIEVANCE_OFFICER_EMAIL` | Grievance email (IT Rules 4(1)(a)) | `grievance@echoflow.in` |
+| `NODAL_CONTACT_EMAIL` | Nodal contact email (IT Rules 4(1)(c)) | `nodal@echoflow.in` |
+| `AWS_S3_REGION_NAME` | **Must be `ap-south-1` or `ap-south-2`** for DPDP/RBI | `auto` (prod must override) |
+| `PHYSICAL_ADDRESS` | Registered office (IT Rules / Consumer Protection) | Not yet exposed |
+
+### Remaining Gaps (Open)
+
+- Public clip endpoint needs `moderation_approved` filter (TODO in `docs/INDIA-REGULATORY-READINESS.md`)
+- Multilingual India-specific prohibited-content database to replace blocked phrase list (TODO in `services/content_moderation.py:19-20`)
+- Transcript text persistence from `process_audio_to_hls` task (TODO in `services/content_moderation.py:167-175`)
+- Takedown workflow endpoint (`POST /clips/{id}/takedown/`)
+- `pydub` temp-file stream for memory pressure (TODO in `serializers.py:250`)
+
+
 ## HTTPS / TLS Termination
 The stack now ships with an nginx reverse proxy in front of every other service. TLS is terminated at the edge; internal hops (nginx→gunicorn, nginx→minio) stay plain HTTP on the docker bridge. No application code knows TLS exists.
 
@@ -494,6 +608,16 @@ REVENUECAT_SYNC_INTERVAL_MINUTES=360    # 6 hours
 - All tests run against PostgreSQL in Docker. No SQLite fallback.
 - No linting/formatter config (no `.eslintrc` at root, no `pyproject.toml`, no `ruff.toml`).
 - CI: `.github/workflows/django.yml` runs migrations + the test suite via Docker. Blocks merges on failure.
+- **Root cause of 178 `auth_group does not exist` errors:** The old conftest.py used a SQLite override hack that bypassed real migrations. The fix was to make Docker/Postgres the only test environment. The new `conftest.py` auto-creates `echoflow_test` DB, installs pgvector on `template1`, and handles session teardown.
+- **docker-compose.test.yml** — test-only stack (db, redis, minio, web). No nginx, no celery workers. Run with: `docker compose -f docker-compose.yml -f docker-compose.test.yml up --build -d` then `docker compose exec -e PYTHONPATH=/app web pytest backend/app/tests/ --tb=short`.
+- **HNSW index EXPLAIN test gotcha:** `SET LOCAL enable_seqscan = OFF` requires an active transaction. Wrap it in `transaction.atomic()` to ensure it takes effect. Also verify the index type via `pg_am.amname` as a primary check (not just the EXPLAIN plan, which may choose Seq Scan for small tables).
+- **S3 storage in tests:** Use `default_storage.exists(clip.original_file.name)` instead of `os.path.exists(clip.original_file.path)` — `.path` raises `NotImplementedError` on S3 storage backends (MinIO).
+- **Conditional skip pattern for system binaries:** Use `@unittest.skipUnless(_ffmpeg_available, "requires ffmpeg on PATH")` where `_ffmpeg_available = shutil.which('ffmpeg') is not None`. This passes in Docker (ffmpeg installed) and skips on bare-metal dev.
+- **F() expressions for atomic updates in concurrency tests:** Use `F('likes') + 1` instead of read-modify-write patterns (`obj.likes = obj.likes + 1`) to avoid race conditions.
+- **date() objects for DOB fields:** Use `date(1990, 1, 1)` instead of string literals for date fields to avoid type errors.
+- **trigger_hls_processing vs finalize_upload:** The upload flow changed; use `trigger_hls_processing` instead of the old `finalize_upload` in test fixtures.
+- **cache import in adversarial tests:** Some test files need `from django.core.cache import cache` to work with Django's test cache backend.
+- **postgresql assertion in smoke tests:** Changed from `sqlite3` to `postgresql` in smoke test assertions to match the Docker-only test environment.
 
 ### Known Skipped / Disabled Tests (environmental, not regressions)
 
@@ -548,6 +672,9 @@ Keep changes minimal and additive — the file is read on every session. Don't a
 - **Self-signed dev cert (`docker/certs/localhost.crt`) is in the repo on purpose** so a fresh clone works. For prod, replace with Let's Encrypt material and `nginx -s reload` — the cert is bind-mounted, so no rebuild is needed. **Do NOT push the dev key to a public registry in any fork that re-publishes the image**; revocation is the only fix.
 - **HLS token cookies**: The `ef_hls_token` cookie must have `SameSite=Lax` (not `Strict`) so it's sent on top-level navigation from `app.echo-flow.in` to `media.echo-flow.in` (SameSite=Lax permits cookies on same-site top-level navigations, but blocks cross-site). `Secure` requires HTTPS on both `api.echo-flow.in` and `media.echo-flow.in`. In dev, `Domain` attribute must be empty (localhost doesn't support domain cookies). See `docs/EXPLAIN/storage/04-hls-token-protection.md`.
 - **HLS token secret sync**: In production, `MEDIA_TOKEN_SECRET` must be **identical** in the VPS `.env` (Django issuance) and the Cloudflare Worker secret (`npx wrangler secret put MEDIA_TOKEN_SECRET`). If these diverge, all HLS playback returns 403.
+- **RFC 3986 §5.2.2 — Signed URLs don't work for HLS**: The master playlist references variant playlists and segments via relative paths. RFC 3986 §5.2.2 strips query strings during relative-reference resolution, so signed URLs (which rely on query parameters) fail on the second and subsequent HLS requests. **Signed cookies are the only viable token mechanism for HLS.** This applies to any multi-file streaming protocol (HLS, DASH, Smooth Streaming).
+- **fetch `credentials: 'include'` for Set-Cookie**: When using `fetch()` to call an endpoint that sets an HttpOnly cookie via `Set-Cookie`, the fetch request **must** include `credentials: 'include'` (or `'same-origin'`). Without it, the browser silently discards the Set-Cookie header. This is a common gotcha when building token-issuance endpoints.
+- **HLS token endpoint returns Set-Cookie, not JSON body**: The `/media/playback-token/<clip_id>/` endpoint sets the token as a cookie and returns `{"status": "ok"}`. The frontend must NOT read the token from the response body — it's set as an HttpOnly cookie and auto-sent by the browser on all `/hls/*` requests.
 
 ## Docs
 - `docs/backend-architecture-audit.md` — production scaling analysis (S3, PgBouncer, Kafka, etc.)

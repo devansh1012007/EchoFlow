@@ -95,10 +95,11 @@ A `robots.txt`-respecting, rate-limited scraper ingests openly-licensed audio fr
                         └──────┬────────────────────┬──────────────┘
                                │ HTTP               │ HTTP
                  ┌─────────────▼─────────┐ ┌────────▼─────────────┐
-                 │  gunicorn (Django)   │ │   MinIO (S3)         │
-                 │  + DRF + JWT         │ │  hls/  public-read   │
-                 │  + Prometheus /metrics│ │  uploads/ private    │
-                 └──────┬────────┬──────┘ └──────────────────────┘
+                  │  gunicorn (Django)   │ │   MinIO (S3)         │
+                  │  + DRF + JWT         │ │  hls/  token-gated   │
+                  │  + Prometheus /metrics│ │  uploads/ private    │
+                  │  + playback-token/   │ │                        │
+                  └──────┬────────┬──────┘ └──────────────────────┘
                         │        │
               ┌──────────▼───┐ ┌──▼──────────────────┐
               │ PostgreSQL 16│ │   Redis 7            │
@@ -122,12 +123,14 @@ A `robots.txt`-respecting, rate-limited scraper ingests openly-licensed audio fr
 **Backend:** Django 5 / DRF · **API auth:** JWT (SimpleJWT, access + refresh) · **DB:** PostgreSQL 16 + pgvector (HNSW ANN indexes) · **Cache/Queue:** Redis 7 · **Async:** Celery + Celery Beat · **Media:** FFmpeg HLS transcoding · **ML:** faster-whisper, sentence-transformers, librosa, keybert · **Serving:** gunicorn, WhiteNoise · **TLS:** nginx 1.27 (`:80` redirect, `:443` Django, `:9443` MinIO) · **Observability:** Prometheus + Grafana (primary), Sentry (errors, ready-to-configure)
 
 ### Data Flow
-1. **TLS termination** — every client request enters through `nginx:443`, which terminates TLS, sets `X-Forwarded-Proto: https`, and forwards plain HTTP to gunicorn (`web:8000`). `nginx:9443` serves browser HLS segments over HTTPS (mixed-content safety).
+1. **TLS termination** — every client request enters through `nginx:443`, which terminates TLS, sets `X-Forwarded-Proto: https`, and forwards plain HTTP to gunicorn (`web:8000`). `nginx:9443` serves browser HLS segments over HTTPS (mixed-content safety, token-gated).
 2. **Upload** → `POST /clips/` creates an `AudioClip` in `processing` status and enqueues `process_audio_to_hls` via `transaction.on_commit`.
 3. **Process** → Celery (heavy_media queue) extracts acoustic features, transcribes, embeds, tags, and transcodes to ABR HLS. Status flips to `ready`.
-4. **Serve feed** → `GET /feed/` pops clip IDs from the user's Redis feed queue; the queue is refilled by the `fast_feed` worker using vector/composite scoring.
-5. **Engage** → likes/shares/telemetry are recorded as `UserInteraction` rows, incrementing denormalized counters via `F()` expressions.
-6. **Evolve** → Celery Beat periodically recalculates `engagement_velocity`, `avg_completion_rate`, and users' long-term preference vectors.
+4. **Token issuance** → `GET /media/playback-token/<clip_id>/` (auth required) issues an HMAC-signed `ef_hls_token` cookie (10-min TTL, per-clip scope). The cookie is HttpOnly, Secure, SameSite=Lax, and scoped to `path=/hls/`.
+5. **Serve feed** → `GET /feed/` pops clip IDs from the user's Redis feed queue; the queue is refilled by the `fast_feed` worker using vector/composite scoring.
+6. **Playback** → HLS.js loads `master.m3u8` from the media endpoint; the browser auto-sends the `ef_hls_token` cookie on all `/hls/*` subrequests. The Cloudflare Worker (prod) or nginx njs (dev) validates the HMAC before proxying to R2/MinIO.
+7. **Engage** → likes/shares/telemetry are recorded as `UserInteraction` rows, incrementing denormalized counters via `F()` expressions.
+8. **Evolve** → Celery Beat periodically recalculates `engagement_velocity`, `avg_completion_rate`, and users' long-term preference vectors.
 
 ## Backend Setup
 
@@ -274,7 +277,7 @@ Full design: [docs/EXPLAIN/docker/05-https-tls-termination.md](docs/EXPLAIN/dock
 **Stack at a glance:** `Django 5` · `DRF` · `PostgreSQL + pgvector` · `Redis` · `Celery` · `FFmpeg/HLS` · `faster-whisper` · `sentence-transformers` · `librosa` · `nginx 1.27 (TLS terminator)` · `Docker Compose` (14 services: db, pgbouncer, redis_broker, redis_cache, minio, minio-init, nginx, web, celery, celery_feed, celery_media, celery_beat, prometheus, grafana)
 
 ## Storage (MinIO / S3-compatible)
-Derived HLS streams live in object storage (MinIO locally / S3 in prod) with the `hls/` prefix public-read for multi-file playback; original uploads (`uploads/`) stay private via signed URLs. The public `hls/` endpoint is served over HTTPS via nginx `:9443` (see [docs/EXPLAIN/docker/05-https-tls-termination.md](docs/EXPLAIN/docker/05-https-tls-termination.md)). Full architecture, failure analysis, and verification scripts are documented in `docs/minio-s3-architecture.md`.
+Derived HLS streams live in object storage (MinIO locally / S3 in prod) with the `hls/` prefix **token-gated** for multi-file playback — original uploads (`uploads/`) stay private via signed URLs. The token-gated approach uses HMAC-signed cookies (`ef_hls_token`) issued by the `/media/playback-token/<clip_id>/` endpoint; the Cloudflare Worker (production) or nginx njs (dev) validates the cookie before proxying to R2/MinIO. This prevents unauthorized access and DDOS on the public storage endpoint. The `hls/` prefix is **no longer public-read** — all HLS access requires a valid playback token. See [docs/EXPLAIN/storage/04-hls-token-protection.md](docs/EXPLAIN/storage/04-hls-token-protection.md) for the full design.
 
 ## Observability
 Two stacks are available after `docker compose up`:
@@ -287,7 +290,9 @@ The stdlib-based `scripts/observability_tui.py` is still available for quick spo
 ## Testing
 **Current count: 275 passed, 6 skipped, 0 failed** (6 skipped = 1 ffmpeg-environmental + 5 nginx-environmental).
 
-The test suite lives under `backend/app/tests/` (22 files) and uses `pytest` + `pytest-django`. Run via `docker compose exec web pytest …`. See [AGENTS.md](AGENTS.md) → "Running Tests" for the full command set.
+The test suite lives under `backend/app/tests/` (23 files) and uses `pytest` + `pytest-django`. Run via `docker compose exec web pytest …`. See [AGENTS.md](AGENTS.md) → "Running Tests" for the full command set.
+
+**Docker-only test stack:** All tests run against PostgreSQL in Docker — no SQLite fallback. The `conftest.py` auto-creates the `echoflow_test` database, installs pgvector on `template1`, and handles session teardown. Run the test stack: `docker compose -f docker-compose.yml -f docker-compose.test.yml up --build -d` then `docker compose exec -e PYTHONPATH=/app web pytest backend/app/tests/ --tb=short`.
 
 Integration tests that need real Postgres + Redis + S3 (pgvector HNSW indexes, row-level locks, Redis Streams, concurrent transactions) are marked with `@pytest.mark.integration`. They auto-skip on the local SQLite + LocMem test environment and run in CI where the workflow provisions real services. Run them locally: `pytest backend/app/tests/ -m integration`.
 
