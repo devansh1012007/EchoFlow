@@ -54,6 +54,30 @@ class User(AbstractUser):
     long_term_acoustic = VectorField(dimensions=128, null=True, blank=True)
     profile_picture = models.ImageField(upload_to='avatars/', null=True, blank=True)
 
+    # RevenueCat Pro entitlement state.
+    # DECISION: App User ID is a UUID (defaults to uuid4 on creation) rather
+    # than derived from username/email, so it survives identity changes.
+    revenuecat_app_user_id = models.UUIDField(default=uuid.uuid4, null=True, blank=True)
+    has_pro_entitlement = models.BooleanField(default=False)
+    pro_expires_at = models.DateTimeField(null=True, blank=True)
+    pro_grace_until = models.DateTimeField(null=True, blank=True)
+    pro_last_synced = models.DateTimeField(auto_now=True)
+
+    def is_pro(self) -> bool:
+        """Check current Pro status, respecting the billing grace period.
+
+        Returns True if:
+          - has_pro_entitlement is True AND pro_expires_at is in the future, OR
+          - pro_grace_until is set and in the future (billing grace extension).
+        """
+        from django.utils import timezone
+        now = timezone.now()
+        if self.has_pro_entitlement and self.pro_expires_at and self.pro_expires_at > now:
+            return True
+        if self.pro_grace_until and self.pro_grace_until > now:
+            return True
+        return False
+
 
 
 

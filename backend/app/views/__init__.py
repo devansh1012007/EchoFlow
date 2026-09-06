@@ -10,6 +10,9 @@ ViewSet or a small group of related ViewSets:
   - social.py      : ShareViewSet, FollowViewSet
   - comments.py    : CommentViewSet
   - profile.py     : ProfileViewSet
+  - media.py       : PlaybackTokenView
+  - subscription.py: SubscriptionStatusView, SubscriptionSyncView,
+                     SubscriptionManageView, RevenueCatWebhookView
   - _pagination.py : shared CursorPagination subclasses
 
 The original views.py was 886 lines and 12 classes; after the split
@@ -24,6 +27,12 @@ from .interactions import ClipInteractionViewSet
 from .profile import ProfileViewSet
 from .social import FollowViewSet, ShareViewSet
 from .media import PlaybackTokenView
+from .subscription import (
+    SubscriptionStatusView,
+    SubscriptionSyncView,
+    SubscriptionManageView,
+    RevenueCatWebhookView,
+)
 
 __all__ = [
     'AudioUploadViewSet',
@@ -37,6 +46,10 @@ __all__ = [
     'RegisterView',
     'ProfileViewSet',
     'PlaybackTokenView',
+    'SubscriptionStatusView',
+    'SubscriptionSyncView',
+    'SubscriptionManageView',
+    'RevenueCatWebhookView',
     'ComplianceContactView',
     'GrievanceCreateView',
     'DataSubjectAccessView',

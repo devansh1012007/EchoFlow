@@ -48,6 +48,39 @@ When an audio file is uploaded, a Celery task (`process_audio_to_hls`) runs auto
 - Nested threaded comments with cursor pagination (`/comments/`)
 - Follow / unfollow graph (`/follow/`) and public + private profiles (`/profile/`)
 
+### Pro Subscription (RevenueCat)
+EchoFlow uses **RevenueCat Billing** (Stripe-backed) for Pro subscription management. This is a single-tier "Pro" offering with usage-limit-based gating:
+
+| Feature | Free | Pro |
+|---------|------|-----|
+| Daily uploads | 5 clips | Unlimited |
+| Max clip duration | 60 sec | 300 sec |
+| Upload file size | 10 MB | 100 MB |
+| HD quality (48kHz+) | ❌ Blocked | ✅ Allowed |
+| Audio quality | 128 kbps | 320 kbps |
+
+**Architecture:**
+- **Billing engine**: RevenueCat Billing (Stripe) — Indian users excluded
+- **Sync**: REST API polling every 6h (Celery Beat), no webhooks in Phase 1 (free tier)
+- **App User ID**: Maps to `User.uuid` (UUID4) — immutable, survives identity changes
+- **Pro state cache**: Django User model fields (`has_pro_entitlement`, `pro_expires_at`, `pro_grace_until`)
+- **Grace period**: Retains Pro access during billing grace period via `pro_grace_until`
+- **Webhooks**: Forward-compatible endpoint (`/webhooks/revenuecat/`) with HMAC-SHA256 verification (gated on `REVENUECAT_WEBHOOK_SECRET`)
+
+**Enforcement:**
+- `AudioUploadViewSet.create()` — daily upload count check (before serializer)
+- `AudioUploadSerializer.validate()` — free-tier file size limit (before DB)
+- `process_audio_to_hls` task — clip duration + HD quality limits
+- Feed views — HD quality filtering
+
+**API Endpoints:**
+- `GET /subscription/` — current Pro status + usage limits
+- `POST /subscription/sync/` — trigger immediate sync (rate-limited 10/hour)
+- `GET /subscription/manage/` — RevenueCat Customer Portal URL
+- `POST /webhooks/revenuecat/` — webhook endpoint (Phase 2, HMAC verified)
+
+**Frontend:** `@revenuecat/purchases-js` SDK, `Paywall.tsx` component, `useSubscription` context
+
 ### License-Aware Audio Scraping
 A `robots.txt`-respecting, rate-limited scraper ingests openly-licensed audio from multiple archives, normalizes/trims it, and feeds it through the same AI pipeline (see [Audio Scraping](#audio-scraping--ingestion)).
 

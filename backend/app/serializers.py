@@ -188,7 +188,26 @@ class AudioUploadSerializer(serializers.ModelSerializer):
             import logging
             logger = logging.getLogger(__name__)
             logger.warning("Upload with Unknown license type — audit trail required.")
+
+        # Pro gating: check free-tier limits for non-Pro users.
+        request = self.context.get('request')
+        if request and hasattr(request.user, 'is_pro') and not request.user.is_pro():
+            self._enforce_free_limits(request.user, data.get('original_file'))
         return data
+
+    def _enforce_free_limits(self, user, original_file):
+        """Reject uploads that exceed free-tier limits."""
+        from django.conf import settings as django_settings
+        from django.utils import timezone
+        from datetime import timedelta
+
+        # File size limit
+        max_mb = getattr(django_settings, "REVENUECAT_UPLOAD_MAX_SIZE_MB_FREE", 10)
+        max_size = max_mb * 1024 * 1024
+        if original_file and original_file.size > max_size:
+            raise serializers.ValidationError(
+                {"original_file": f"Free tier upload limit is {max_mb}MB. Upgrade to Pro for unlimited uploads."}
+            )
 
     def validate_original_file(self, value):
         if value.size > self.MAX_SIZE:
@@ -573,3 +592,11 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         if User.objects.exclude(pk=user.pk).filter(username=value).exists():
             raise serializers.ValidationError("Username already taken.")
         return value
+
+
+class SubscriptionStatusSerializer(serializers.Serializer):
+    is_pro = serializers.BooleanField()
+    expires_at = serializers.DateTimeField(allow_null=True)
+    grace_until = serializers.DateTimeField(allow_null=True)
+    last_synced = serializers.DateTimeField()
+    limits = serializers.DictField(child=serializers.CharField())

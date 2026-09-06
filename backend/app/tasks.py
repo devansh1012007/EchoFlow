@@ -400,8 +400,54 @@ def _process_audio_to_hls_impl(self, clip_id, timer):
     # grep and review. Removed.
 
 
-# ---------------------------------------------------------------------------
-# Feed recommendation engine — re-export shim.
+@shared_task
+def sync_revenuecat_entitlements(user_id: str | None = None):
+    """Sync Pro entitlement state from RevenueCat REST API to local User model.
+
+    If user_id is provided, syncs only that user. Otherwise, syncs all
+    users whose pro_expires_at is past (within a buffer) or whose
+    pro_last_synced is stale.
+
+    Polls every REVENUECAT_SYNC_INTERVAL_MINUTES via Celery Beat.
+    Phase 1: REST API polling only (no webhooks).
+    """
+    from django.conf import settings as django_settings
+    if not getattr(django_settings, "REVENUECAT_SECRET_KEY", ""):
+        logger.debug("RevenueCat secret key not configured — skipping sync")
+        return "skipped: not configured"
+
+    from .services.revenuecat import sync_entitlements
+    from django.utils import timezone
+    from datetime import timedelta
+
+    now = timezone.now()
+    stale_threshold = now - timedelta(minutes=django_settings.REVENUECAT_SYNC_INTERVAL_MINUTES + 1)
+
+    if user_id:
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            logger.warning("sync_revenuecat_entitlements: user %s not found", user_id)
+            return f"user {user_id} not found"
+        sync_entitlements(user)
+        return f"synced user {user_id}"
+
+    # Sync users whose subscription may have expired or whose last sync
+    # is stale (covers active subscriptions that may have been canceled).
+    candidates = User.objects.filter(
+        has_pro_entitlement=True,
+    ).filter(
+        pro_expires_at__lte=now + timedelta(days=1),
+    ) | User.objects.filter(
+        pro_last_synced__lt=stale_threshold,
+    )
+
+    synced = 0
+    for user in candidates.iterator():
+        sync_entitlements(user)
+        synced += 1
+
+    return f"synced {synced} users"
 #
 # DECISION: The actual task bodies and the pure-Python ranking logic
 # live in `ai_ml.pipelines.feed_tasks` and `ai_ml.pipelines.recommendation`.

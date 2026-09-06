@@ -172,6 +172,22 @@ export const mediaAPI = {
     }),
 };
 
+// --- Subscription ---
+export interface SubscriptionStatus {
+  is_pro: boolean;
+  expires_at: string | null;
+  grace_until: string | null;
+  last_synced: string;
+  limits: Record<string, string>;
+}
+
+export const subscriptionAPI = {
+  getStatus: (): Promise<SubscriptionStatus> => api('/subscription/'),
+  sync: (): Promise<{ detail: string }> =>
+    api('/subscription/sync/', { method: 'POST' }),
+  getManageUrl: (): Promise<{ url: string }> => api('/subscription/manage/'),
+};
+
 // --- Tags ---
 export const tagsAPI = {
   initialize: (tags: string[]) => api('/tags/initialize/', { method: 'POST', body: JSON.stringify({ selected_tags: tags }) }),

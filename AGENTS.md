@@ -272,6 +272,17 @@ Uses Docker Compose V2 (`docker compose`, not `docker-compose`). If you have `do
 | `NODAL_CONTACT_EMAIL` | Nodal email. Default: `nodal@echoflow.in`. |
 | `AWS_S3_REGION_NAME` | **Must be `ap-south-1`** (or `ap-south-2`) for DPDP cross-border + RBI data-localisation compliance. `STORAGES` uses this (`settings.py:467`). Default in `.env.example`: `auto` — production must override. |
 | `PHYSICAL_ADDRESS` | Registered office / physical address (IT Rules 2021 / Consumer Protection). Not yet exposed in `/legal/compliance/` endpoint (open). |
+| `REVENUECAT_SECRET_KEY` | **Backend-only secret.** RevenueCat secret API key from dashboard → Project Settings → API keys. Never expose to frontend. Required for REST API polling. |
+| `REVENUECAT_PUBLIC_KEY` | **Frontend-safe public key.** Used by `@revenuecat/purchases-js` SDK initialization. Safe to expose via `VITE_REVENUECAT_PUBLIC_KEY`. |
+| `REVENUECAT_PROJECT_TOKEN` | RevenueCat project token (SDK identifier). |
+| `REVENUECAT_ENTITLEMENT_ID` | Entitlement ID string in RevenueCat dashboard (default: `pro`). |
+| `REVENUECAT_SYNC_INTERVAL_MINUTES` | Poll interval for Celery Beat task (default: `360` = 6 hours). |
+| `REVENUECAT_CUSTOMER_PORTAL_URL` | Optional override for Customer Portal base URL. |
+| `REVENUECAT_WEBHOOK_SECRET` | HMAC secret for webhook verification (Phase 2 — configure when enabling webhooks). |
+| `REVENUECAT_DAILY_UPLOAD_LIMIT_FREE` | Free tier daily upload limit (default: `5`). |
+| `REVENUECAT_UPLOAD_MAX_SIZE_MB_FREE` | Free tier max upload size in MB (default: `10`). |
+| `REVENUECAT_CLIP_DURATION_LIMIT_FREE` | Free tier max clip duration in seconds (default: `60`). |
+| `REVENUECAT_HD_QUALITY_BLOCKED_FREE` | Block HD quality for free users (default: `True`). |
 
 
 ## HTTPS / TLS Termination
@@ -310,6 +321,12 @@ POST /tags/initialize/        # Cold-start: bootstrap user vectors from tags
 GET  /suggestions/?category=X # Category-scoped vector ranking
 GET  /profile/me/             # Own profile
 GET  /profile/{id}/           # Public profile
+
+# RevenueCat Pro subscription management (Phase 1: REST polling only)
+GET  /subscription/           # Current Pro status + usage limits
+POST /subscription/sync/      # Trigger immediate sync with RevenueCat (rate-limited)
+GET  /subscription/manage/    # RevenueCat Customer Portal URL for self-service
+POST /webhooks/revenuecat/    # Webhook endpoint (Phase 2 — HMAC verified when REVENUECAT_WEBHOOK_SECRET set)
 ```
 
 ## Architecture Notes
@@ -346,6 +363,130 @@ npm run dev      # Vite dev server on port 5173
 npm run build
 ```
 Uses HLS.js for playback. This is an example client — the production frontend may differ.
+
+## RevenueCat Pro Subscription Integration
+
+EchoFlow uses **RevenueCat Billing** (Stripe-backed) for Pro subscription management. This section covers the architecture, gating strategy, and operational details.
+
+### Architecture Overview
+
+| Component | Technology | Notes |
+|---|---|---|
+| Billing engine | RevenueCat Billing (Stripe) | Indian users excluded per policy |
+| Subscription tier | Single "Pro" entitlement | `REVENUECAT_ENTITLEMENT_ID=pro` |
+| Sync mechanism | REST API polling (Celery Beat) | Every 6h (configurable), no webhooks in Phase 1 |
+| App User ID mapping | `User.uuid` (UUID4) | Immutable, survives username/email changes |
+| Pro state cache | Django User model fields | `has_pro_entitlement`, `pro_expires_at`, `pro_grace_until` |
+| Webhook support | Forward-compatible endpoint | HMAC-SHA256 verification gated on `REVENUECAT_WEBHOOK_SECRET` |
+
+### Data Flow
+
+```
+Frontend (purchases-js SDK)        Backend                        RevenueCat API
+        │                            │                                    │
+        ├─── purchase ──────────────→│                                    │
+        │                             │                                    │
+        ├─── identify(app_user_id) ──→│                                    │
+        │                             │                                    │
+        │                             │─── GET /subscribers/{id} ─────────→│
+        │                             │                                ←───┤
+        │                             │─── update user fields ────────────→│(DB)
+        │                             │                                    │
+        │←─── show Pro features ───────│                                    │
+        │                             │                                    │
+        ├─── GET /subscription ───────→│                                    │
+        │←─── 200 {is_pro: true} ──────│                                    │
+        │                             │                                    │
+        ├─── GET /manage ─────────────→│                                    │
+        │←─── {url: "https://..."} ────│                                    │
+```
+
+### Gating Strategy: Usage Limits (Option A)
+
+Pro gating is enforced via usage limits checked at request time — no feature flags, just hard limits:
+
+| Feature | Free Limit | Pro Limit |
+|---|---|---|
+| Daily uploads | 5 clips | Unlimited |
+| Max clip duration | 60 seconds | 300 seconds (MAX_DURATION_SECONDS) |
+| Upload file size | 10 MB | 100 MB |
+| HD quality (48kHz+) | Blocked | Allowed |
+| Audio quality | 128 kbps | 320 kbps |
+
+**Enforcement points:**
+- `AudioUploadSerializer.validate()` — free-tier file size limit (before DB)
+- `AudioUploadViewSet.create()` — daily upload count limit (before serializer)
+- `process_audio_to_hls` task — clip duration + quality limits
+- Feed views — HD quality filtering
+
+### Grace Period Handling
+
+During RevenueCat's billing grace period (3 days for annual/monthly), `User.is_pro()` returns `True` until the grace period ends AND the subscription is in a non-active state.
+
+```python
+def is_pro(self) -> bool:
+    now = timezone.now()
+    if self.has_pro_entitlement and self.pro_expires_at and self.pro_expires_at > now:
+        return True
+    if self.pro_grace_until and self.pro_grace_until > now:
+        return True
+    return False
+```
+
+The grace period end date is stored in `pro_grace_until` so Pro features continue during grace even if polling is delayed.
+
+### Sync Strategy: REST API Polling
+
+No webhooks in Phase 1 (free RevenueCat plan). A Celery Beat task polls the REST API every `REVENUECAT_SYNC_INTERVAL_MINUTES` (default 360 = 6h):
+
+```
+GET https://api.revenuecat.com/v1/subscribers/{app_user_id}
+```
+
+Response parsed for:
+- Active entitlements (`is_active`, `expires_date_ms`, `grace_period_expire_date_ms`)
+- Updates `has_pro_entitlement`, `pro_expires_at`, `pro_grace_until`, `pro_last_synced`
+
+If polling indicates subscription inactive AND grace period expired, `has_pro_entitlement` is set to `False`.
+
+### Webhook Placeholder (Phase 2)
+
+```
+POST /api/v1/webhooks/revenuecat/
+```
+
+Currently returns 200 and logs payload. Full HMAC-SHA256 verification will be implemented when upgrading to RevenueCat Pro plan. The `X-RevenueCat-Signature` header is verified against `REVENUECAT_WEBHOOK_SECRET`.
+
+### Public vs Secret API Keys
+
+| Key | Location | Safe for Frontend? |
+|---|---|---|
+| `REVENUECAT_PUBLIC_KEY` | Frontend `.env` (`VITE_REVENUECAT_PUBLIC_KEY`), backend `.env` | Yes — SDK initialization only |
+| `REVENUECAT_SECRET_KEY` | Backend `.env` only | **No** — REST API polling, never expose |
+
+### Environment Variables
+
+All RevenueCat env vars are documented in the [Environment Variables](#environment-variables-required) table above. Key production settings:
+
+```bash
+REVENUECAT_SECRET_KEY=sk_live_xxx       # Backend-only, required
+REVENUECAT_PUBLIC_KEY=pk_live_xxx       # Frontend-safe
+REVENUECAT_ENTITLEMENT_ID=pro
+REVENUECAT_SYNC_INTERVAL_MINUTES=360    # 6 hours
+```
+
+### Testing
+
+- Backend: `backend/app/tests/test_revenuecat.py` — 21 tests covering `is_pro()`, `sync_entitlements`, views, webhook, free-tier limits
+- Frontend: `frontend/sample_frontend/src/stores/__tests__/subscription.test.tsx` + `src/components/subscription/__tests__/Paywall.test.tsx` — 6 tests using vitest + @testing-library/react
+
+### Operational Notes
+
+- **Manual sync**: `POST /subscription/sync/` triggers immediate RevenueCat poll (rate-limited: 10/hour)
+- **Customer Portal**: `GET /subscription/manage/` returns RevenueCat-hosted management URL
+- **App User ID**: Maps to `User.uuid` (stringified). Created on user registration via `revenuecat_app_user_id` field
+- **Frontend SDK init**: `Purchases.setup(publicKey, appUserId)` in `main.tsx` after auth context available
+- **Paywall**: `Paywall.tsx` component shows upgrade CTA, calls `subscriptionAPI.sync()` then redirects to Customer Portal
 
 ## Testing & Linting
 - Test framework: **pytest** + `pytest-django`, installed in the `api` image. Run via `docker compose exec web pytest …` — see [Running Tests](#running-tests) for the full command set.
