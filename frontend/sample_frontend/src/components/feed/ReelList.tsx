@@ -13,6 +13,8 @@ interface Props {
   onProfileClick?: (id: number) => void;
 }
 
+const ITEM_HEIGHT = 'calc(100vh - 80px)';
+
 export function ReelList({ clips, loading, err, hasMore, loadMore, onProfileClick }: Props) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -51,7 +53,7 @@ export function ReelList({ clips, loading, err, hasMore, loadMore, onProfileClic
     if (!clips.length) return;
     const obs = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
-          if (entry.isIntersecting) {
+        if (entry.isIntersecting) {
           const idx = Number((entry.target as HTMLElement).dataset.index);
           const clip = clips[idx];
           if (activeIdRef.current !== clip.id) {
@@ -69,7 +71,7 @@ export function ReelList({ clips, loading, err, hasMore, loadMore, onProfileClic
 
   return (
     <div style={{
-      height: '100vh',
+      height: ITEM_HEIGHT,
       overflowY: 'auto', scrollSnapType: 'y mandatory',
       display: 'flex', flexDirection: 'column',
       padding: '0 0 80px', scrollbarWidth: 'none'
@@ -81,18 +83,18 @@ export function ReelList({ clips, loading, err, hasMore, loadMore, onProfileClic
           data-index={i}
           ref={el => { itemRefs.current[i] = el; if (i === clips.length - 2) sentinelRef.current = el; }}
           style={{
-            flex: '0 0 100vh', scrollSnapAlign: 'center',
+            flex: `0 0 ${ITEM_HEIGHT}`, scrollSnapAlign: 'center',
             display: 'flex', flexDirection: 'column', justifyContent: 'center',
-            position: 'relative'
+            position: 'relative', minHeight: ITEM_HEIGHT
           }}
         >
-          <div style={{ maxWidth: 480, width: '100%', margin: '0 auto', height: 'calc(100vh - 80px)', display: 'flex', alignItems: 'center' }}>
+          <div style={{ maxWidth: 480, width: '100%', margin: '0 auto', height: ITEM_HEIGHT, display: 'flex', alignItems: 'center' }}>
             <ReelCard clip={clip} onProfileClick={onProfileClick} />
           </div>
         </div>
       ))}
       {loading && (
-        <div style={{ flex: '0 0 100vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+        <div style={{ flex: `0 0 ${ITEM_HEIGHT}`, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
           <div className="skeleton" style={{ height: 4, width: '60%', borderRadius: 2, margin: '24px auto' }} />
         </div>
       )}

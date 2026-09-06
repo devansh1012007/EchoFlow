@@ -31,7 +31,6 @@ export function dispatchSessionExpired() {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function api(path: string, opts: RequestInit = {}): Promise<any> {
   const accessToken = getAccessToken();
-  const refreshToken = getRefreshToken();
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(opts.headers as Record<string, string> || {}) };
   if (accessToken) {
     headers['Authorization'] = `Bearer ${accessToken}`;

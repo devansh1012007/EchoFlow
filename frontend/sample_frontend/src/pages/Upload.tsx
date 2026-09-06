@@ -1,27 +1,29 @@
 ﻿import { useState, useRef } from 'react';
-import { Music, Upload, Check, Headphones, Radio, Globe } from 'lucide-react';
+import { Music, Upload, Check, Headphones, Radio, Globe, Image } from 'lucide-react';
 import { useToast } from '../stores/toast';
 import { clipsAPI } from '../api/client';
 import { CATEGORIES, getCatColor } from '../data/clips';
 import { Spinner, inputStyle } from '../components/common/atoms';
 import { Btn } from '../components/common/molecules';
-import { isDemoMode } from '../data/feedAdapter';
+import { useNavigation } from '../context/NavigationContext';
+import { useDemoMode } from '../context/DemoModeContext';
 
 type Stage = 'idle' | 'uploading' | 'processing' | 'analyzing' | 'transcoding' | 'done' | 'error';
 
-interface Props { go: (p: string, params?: Record<string, unknown>) => void; }
-
-export function UploadPage({ go }: Props) {
+export function UploadPage() {
+  const { go } = useNavigation();
   const toast = useToast();
-  const demo = isDemoMode();
+  const demo = useDemoMode();
 
   const [file, setFile] = useState<File | null>(null);
+  const [coverFile, setCoverFile] = useState<File | null>(null);
   const [form, setForm] = useState({ title: '', category: '' });
   const [tags, setTags] = useState<string[]>([]);
   const [pct, setPct] = useState(0);
   const [stage, setStage] = useState<Stage>('idle');
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const coverRef = useRef<HTMLInputElement>(null);
 
   const setF = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
 
@@ -39,6 +41,22 @@ export function UploadPage({ go }: Props) {
     }
     setFile(f); setErr(null);
     toast('File ready: ' + f.name.slice(0, 28), 'success');
+  };
+
+  const pickCoverFile = (f?: File) => {
+    if (!f) return;
+    if (!f.type.startsWith('image/')) {
+      setErr('Image files only — JPG, PNG, WebP etc.');
+      toast('Image files only', 'error');
+      return;
+    }
+    if (f.size > 5 * 1024 * 1024) {
+      setErr('Cover image too large (max 5 MB)');
+      toast('Cover image exceeds 5 MB', 'error');
+      return;
+    }
+    setCoverFile(f); setErr(null);
+    toast('Cover image ready: ' + f.name.slice(0, 28), 'success');
   };
 
   const handleDrop = (e: React.DragEvent) => { e.preventDefault(); pickFile(e.dataTransfer.files?.[0]); };
@@ -59,6 +77,7 @@ export function UploadPage({ go }: Props) {
         fd.append('original_file', file);
         fd.append('title', form.title);
         fd.append('category', form.category);
+        if (coverFile) fd.append('cover_image', coverFile);
         await clipsAPI.uploadClip(fd);
       }
       clearInterval(iv); setPct(100);
@@ -69,7 +88,7 @@ export function UploadPage({ go }: Props) {
       clearInterval(iv);
       setStage('error');
       const errObj = e as { errors?: Record<string, string[]>; message?: string };
-      setErr(errObj.errors?.title?.[0] || errObj.errors?.original_file?.[0] || errObj.message || 'Upload failed');
+      setErr(errObj.errors?.title?.[0] || errObj.errors?.original_file?.[0] || errObj.errors?.cover_image?.[0] || errObj.message || 'Upload failed');
       toast(errObj.message || 'Upload failed', 'error');
     }
   };
@@ -107,7 +126,7 @@ export function UploadPage({ go }: Props) {
         {demo && <span style={{ fontSize: 11, color: 'var(--terracotta)', fontWeight: 600 }}>DEMO MODE</span>}
       </div>
 
-      {/* Drop zone */}
+      {/* Audio Drop zone */}
       <div
         onDragOver={handleDragOver} onDrop={handleDrop}
         onClick={() => !stage && fileRef.current?.click()}
@@ -132,6 +151,35 @@ export function UploadPage({ go }: Props) {
           <>
             <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--on-surface)', marginBottom: 4 }}>Drop audio file or tap to browse</p>
             <p style={{ fontSize: 12, color: 'var(--on-surface-variant)' }}>MP3 · WAV · AAC · OGG · FLAC · max 100 MB</p>
+          </>
+        )}
+      </div>
+
+      {/* Cover Image Drop zone */}
+      <div
+        onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); pickCoverFile(e.dataTransfer.files?.[0]); }}
+        onClick={() => !stage && coverRef.current?.click()}
+        style={{
+          border: `2px dashed ${coverFile ? 'var(--terracotta)' : 'var(--border)'}`,
+          borderRadius: 'var(--radius-xl)', padding: 24, marginBottom: 22,
+          textAlign: 'center', background: coverFile ? 'var(--accent-soft)' : 'var(--surface)',
+          cursor: 'pointer', transition: 'all 0.2s'
+        }}
+      >
+        <input ref={coverRef} type="file" accept="image/*" onChange={e => pickCoverFile(e.target.files?.[0])} style={{ display: 'none' }} />
+        <div style={{ width: 48, height: 48, borderRadius: 12, background: 'var(--surface-container)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px' }}>
+          {coverFile ? <Image size={24} color="var(--terracotta)" /> : <Image size={24} color="var(--outline)" />}
+        </div>
+        {coverFile ? (
+          <>
+            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--on-surface)', marginBottom: 4 }}>{coverFile.name}</p>
+            <p style={{ fontSize: 11, color: 'var(--on-surface-variant)' }}>{(coverFile.size / 1024).toFixed(1)} KB · {coverFile.type}</p>
+            {!stage && <button onClick={e => { e.stopPropagation(); setCoverFile(null); }} style={{ marginTop: 8, padding: '4px 12px', borderRadius: 20, background: 'var(--surface-container)', border: '1px solid var(--border)', color: 'var(--on-surface-variant)', fontSize: 11, cursor: 'pointer' }}>Remove</button>}
+          </>
+        ) : (
+          <>
+            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--on-surface)', marginBottom: 4 }}>Drop cover image or tap to browse (optional)</p>
+            <p style={{ fontSize: 11, color: 'var(--on-surface-variant)' }}>JPG · PNG · WebP · max 5 MB</p>
           </>
         )}
       </div>

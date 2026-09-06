@@ -319,20 +319,28 @@ class FeedClipSerializer(serializers.ModelSerializer):
     # AWS_S3_QUERYSTRING_EXPIRE regardless of whether the clip is still
     # valid, so we generate it here instead of trusting the stored field.
     hls_playlist_url = serializers.SerializerMethodField()
+    cover_image = serializers.SerializerMethodField()
 
     class Meta:
         model = AudioClip
         fields = [
             'id', 'title', 'creator_name', 'category',
             'hls_playlist_url', 'likes', 'shares', 'skips', 
-            'comment_count', 'is_liked','creator_id'
+            'comment_count', 'is_liked', 'creator_id', 'cover_image'
         ]
         read_only_fields = [
-            'likes', 'shares', 'skips', 'comment_count', 'hls_playlist_url', 'is_liked'
+            'likes', 'shares', 'skips', 'comment_count', 'hls_playlist_url', 'is_liked', 'cover_image'
         ]
 
     def get_hls_playlist_url(self, obj):
         return get_hls_playback_url(obj.hls_playlist_url)
+
+    def get_cover_image(self, obj):
+        if obj.cover_image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.cover_image.url)
+        return None
 
     def get_is_liked(self, obj):
         if hasattr(obj, 'user_has_liked'):

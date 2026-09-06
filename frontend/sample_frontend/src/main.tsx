@@ -4,7 +4,8 @@ import { ThemeProvider } from './stores/theme';
 import { AuthProvider } from './stores/auth';
 import { PlayerProvider } from './stores/player';
 import { ToastProvider } from './stores/toast';
-import { SubscriptionProvider } from './stores/subscription';
+import { NavigationProvider } from './context/NavigationContext';
+import { DemoModeProvider } from './context/DemoModeContext';
 import { AppRouter } from './app/router';
 import './styles/globals.css';
 
@@ -17,11 +18,13 @@ root.render(
     <ThemeProvider>
       <ToastProvider>
         <AuthProvider>
-          <SubscriptionProvider>
-            <PlayerProvider>
-              <AppRouter />
-            </PlayerProvider>
-          </SubscriptionProvider>
+          <NavigationProvider>
+            <DemoModeProvider>
+              <PlayerProvider>
+                <AppRouter />
+              </PlayerProvider>
+            </DemoModeProvider>
+          </NavigationProvider>
         </AuthProvider>
       </ToastProvider>
     </ThemeProvider>

@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from 'react';
+﻿import { useState, useRef } from 'react';
 import { Heart, MessageCircle, Share2, SkipForward, SkipBack, UserPlus, UserCheck } from 'lucide-react';
 import { AudioClip } from '../../types';
 import { usePlayer } from '../../stores/player';
@@ -32,7 +32,7 @@ export function ReelCard({ clip, onProfileClick }: Props) {
   const c = getCatColor(clip.category);
   const creatorId = clip.creator_id || clip.creator?.id;
 
-  const handleVisualTap = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleVisualTap = (_e: React.MouseEvent<HTMLDivElement>) => {
     if (tapTimeout.current) {
       clearTimeout(tapTimeout.current);
       tapTimeout.current = null;
@@ -100,76 +100,92 @@ export function ReelCard({ clip, onProfileClick }: Props) {
             cursor: 'pointer',
             position: 'relative',
             overflow: 'hidden',
-            background: `linear-gradient(135deg, ${c}10 0%, ${c}22 50%, #121416 100%)`
+            background: clip.cover_image ? 'transparent' : `linear-gradient(135deg, ${c}10 0%, ${c}22 50%, #121416 100%)`
           }}
         >
-          {/* Ambient background circles */}
-          <div style={{
-            position: 'absolute', width: 280, height: 280, borderRadius: 'var(--radius-full)',
-            background: c + '08', top: '10%', right: '-10%', filter: 'blur(60px)'
-          }} />
-          <div style={{
-            position: 'absolute', width: 200, height: 200, borderRadius: 'var(--radius-full)',
-            background: c + '0A', bottom: '20%', left: '-5%', filter: 'blur(40px)'
-          }} />
-          <div style={{
-            position: 'absolute', inset: 0, opacity: 0.08,
-            backgroundImage: `radial-gradient(circle, ${c} 1px, transparent 1px)`,
-            backgroundSize: '24px 24px'
-          }} />
-
-          {/* Play/Pause overlay (100px circular container) */}
-          {showPlayIcon && (
-            <div style={{
-              position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              zIndex: 10
-            }}>
+          {clip.cover_image ? (
+            <img
+              src={clip.cover_image}
+              alt={clip.title}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                objectPosition: 'center',
+              }}
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            />
+          ) : (
+            <>
+              {/* Ambient background circles */}
               <div style={{
-                width: 100, height: 100, borderRadius: 'var(--radius-full)',
-                background: 'rgba(0,0,0,0.4)',
-                backdropFilter: 'blur(10px)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                animation: 'popIn 0.3s ease forwards'
-              }}>
-                {isPlaying ? (
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 24 }}>
-                    {[12, 18, 14, 20, 14, 18, 12].map((h, i) => (
-                      <div key={i} className="wave-bar" style={{
-                        width: 4, height: h, borderRadius: 2, background: '#fff', opacity: 0.9
-                      }} />
-                    ))}
+                position: 'absolute', width: 280, height: 280, borderRadius: 'var(--radius-full)',
+                background: c + '08', top: '10%', right: '-10%', filter: 'blur(60px)'
+              }} />
+              <div style={{
+                position: 'absolute', width: 200, height: 200, borderRadius: 'var(--radius-full)',
+                background: c + '0A', bottom: '20%', left: '-5%', filter: 'blur(40px)'
+              }} />
+              <div style={{
+                position: 'absolute', inset: 0, opacity: 0.08,
+                backgroundImage: `radial-gradient(circle, ${c} 1px, transparent 1px)`,
+                backgroundSize: '24px 24px'
+              }} />
+
+              {/* Play/Pause overlay (100px circular container) */}
+              {showPlayIcon && (
+                <div style={{
+                  position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  zIndex: 10
+                }}>
+                  <div style={{
+                    width: 100, height: 100, borderRadius: 'var(--radius-full)',
+                    background: 'rgba(0,0,0,0.4)',
+                    backdropFilter: 'blur(10px)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    animation: 'popIn 0.3s ease forwards'
+                  }}>
+                    {isPlaying ? (
+                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 24 }}>
+                        {[12, 18, 14, 20, 14, 18, 12].map((h, i) => (
+                          <div key={i} className="wave-bar" style={{
+                            width: 4, height: h, borderRadius: 2, background: '#fff', opacity: 0.9
+                          }} />
+                        ))}
+                      </div>
+                    ) : (
+                      <svg width="28" height="34" viewBox="0 0 24 24" fill="#fff" stroke="#fff" strokeWidth="1">
+                        <polygon points="6,4 22,12 6,20" />
+                      </svg>
+                    )}
                   </div>
-                ) : (
-                  <svg width="28" height="34" viewBox="0 0 24 24" fill="#fff" stroke="#fff" strokeWidth="1">
-                    <polygon points="6,4 22,12 6,20" />
-                  </svg>
-                )}
+                </div>
+              )}
+
+              {/* Category badge */}
+              <div style={{ position: 'absolute', top: 16, right: 72 }}>
+                <CatBadge category={clip.category} color={c} />
               </div>
-            </div>
+
+              {/* Waveform visualization in background */}
+              <div style={{
+                position: 'absolute', bottom: 120, left: 0, right: 0, height: 60,
+                display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 2, opacity: 0.15
+              }}>
+                {Array.from({ length: 40 }).map((_, i) => {
+                  const h = 8 + Math.sin(i * 0.4) * 12 + Math.random() * 10;
+                  return (
+                    <div key={i} style={{
+                      width: 3, height: h, borderRadius: 2,
+                      background: `linear-gradient(to top, ${c}, var(--sage))`,
+                      opacity: isActive ? 0.6 : 0.3,
+                      transition: 'opacity 0.3s'
+                    }} />
+                  );
+                })}
+              </div>
+            </>
           )}
-
-          {/* Category badge */}
-          <div style={{ position: 'absolute', top: 16, right: 72 }}>
-            <CatBadge category={clip.category} color={c} />
-          </div>
-
-          {/* Waveform visualization in background */}
-          <div style={{
-            position: 'absolute', bottom: 120, left: 0, right: 0, height: 60,
-            display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 2, opacity: 0.15
-          }}>
-            {Array.from({ length: 40 }).map((_, i) => {
-              const h = 8 + Math.sin(i * 0.4) * 12 + Math.random() * 10;
-              return (
-                <div key={i} style={{
-                  width: 3, height: h, borderRadius: 2,
-                  background: `linear-gradient(to top, ${c}, var(--sage))`,
-                  opacity: isActive ? 0.6 : 0.3,
-                  transition: 'opacity 0.3s'
-                }} />
-              );
-            })}
-          </div>
 
           {/* Glassmorphism metadata overlay (bottom-left) */}
           <div className="glass" style={{

@@ -7,15 +7,18 @@ import { useToast } from '../stores/toast';
 import { profileAPI, followAPI, clipsAPI } from '../api/client';
 import { Avatar } from '../components/common/atoms';
 import { ReelList } from '../components/feed/ReelList';
-import { isDemoMode, fetchProfile } from '../data/feedAdapter';
+import { fetchProfile } from '../data/feedAdapter';
+import { useDemoMode } from '../context/DemoModeContext';
+import { useNavigation } from '../context/NavigationContext';
 
-interface Props { go: (p: string, params?: Record<string, unknown>) => void; userId?: number; }
+interface Props { userId?: number; }
 
-export function ProfilePage({ go, userId: targetId }: Props) {
+export function ProfilePage({ userId: targetId }: Props) {
+  const { go } = useNavigation();
   const { user: au, patchUser, logout } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
   const isOwn = !targetId || targetId === au?.id;
-  const demo = isDemoMode();
+  const demo = useDemoMode();
 
   const [prof, setProf] = useState<UserProfile | null>(null);
   const [clips, setClips] = useState<AudioClip[]>([]);
@@ -37,18 +40,20 @@ export function ProfilePage({ go, userId: targetId }: Props) {
           const p = await fetchProfile(targetId);
           setProf(p.profile);
           setClips(p.clips);
+          setNewName(p.profile.username || '');
         } else if (isOwn) {
           const p = await profileAPI.getMyProfile();
           setProf(p);
           const cd = await clipsAPI.getUserClips(au?.id || 0);
           setClips(cd.results || []);
+          setNewName(p.username || '');
         } else {
           const p = await profileAPI.getProfile(Number(targetId));
           setProf(p);
           const cd = await clipsAPI.getUserClips(Number(targetId));
           setClips(cd.results || []);
+          setNewName(p.username || '');
         }
-        setNewName(prof?.username || '');
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : 'Error';
         setErr(msg);
@@ -57,7 +62,7 @@ export function ProfilePage({ go, userId: targetId }: Props) {
       }
     };
     load();
-  }, [targetId, demo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [targetId, demo, isOwn, au?.id]);
 
   const saveName = async () => {
     if (!newName.trim() || newName === prof?.username) { setEditing(false); return; }

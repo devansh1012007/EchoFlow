@@ -106,6 +106,7 @@ class AudioClip(models.Model):
     category = models.CharField(max_length=50, blank=True)
     
     original_file = models.FileField(upload_to='uploads/%Y/%m/%d/', null=True)
+    cover_image = models.ImageField(upload_to='covers/%Y/%m/%d/', blank=True, null=True)
     hls_playlist_url = models.CharField(max_length=500, blank=True, null=True)
     # Provenance and licensing metadata for scraper imports
     source_name = models.CharField(max_length=100, blank=True, null=True)

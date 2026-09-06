@@ -1,15 +1,16 @@
-﻿import { useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef, useCallback } from 'react';
 import { AudioClip } from '../types';
 import { usePlayer } from '../stores/player';
 import { useToast } from '../stores/toast';
 import { ReelList } from '../components/feed/ReelList';
 import { FeedSkeleton } from '../components/common/molecules';
 import { fetchFeed } from '../data/feedAdapter';
-import { isDemoMode } from '../data/feedAdapter';
+import { useNavigation } from '../context/NavigationContext';
+import { useDemoMode } from '../context/DemoModeContext';
 
-interface Props { go: (p: string, params?: Record<string, unknown>) => void; }
-
-export function FeedPage({ go }: Props) {
+export function FeedPage() {
+  const { go } = useNavigation();
+  const demo = useDemoMode();
   const toast = useToast();
   const { active } = usePlayer();
   const [clips, setClips] = useState<AudioClip[]>([]);
@@ -18,15 +19,14 @@ export function FeedPage({ go }: Props) {
   const [initial, setInitial] = useState(true);
   const [hasMore, setHasMore] = useState(true);
   const [degraded, setDegraded] = useState(false);
-  const demo = isDemoMode();
 
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = async (isInitial = false) => {
+  const load = useCallback(async (isInitial = false) => {
     if (isInitial) { setInitial(true); }
     setLoading(true); setErr(null);
     try {
-      const { clips: fresh, hasMore: hm, err: e, degraded, retry_after_ms, status, message } = await fetchFeed();
+      const { clips: fresh, hasMore: hm, err: e, degraded, retry_after_ms, status } = await fetchFeed();
       if (e) throw new Error(e);
       // ISSUE-09: Handle 202 Accepted (cold-state retry) without polling storm.
       if (status === 202 || retry_after_ms !== undefined) {
@@ -58,9 +58,9 @@ export function FeedPage({ go }: Props) {
       setLoading(false);
       setInitial(false);
     }
-  };
+  }, [toast]);
 
-  useEffect(() => { load(true);   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(true); }, [load]);
 
   useEffect(() => {
     return () => { if (retryTimerRef.current) clearTimeout(retryTimerRef.current); };

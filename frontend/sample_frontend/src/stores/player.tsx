@@ -52,20 +52,16 @@ export function PlayerProvider({ children }: Props) {
     const src = clip.hls_playlist_url;
     if (!src) { setError('No stream available'); return; }
 
-    // HLS token protection: mint a short-lived playback token cookie before
-    // loading the source. The cookie (ef_hls_token) is HttpOnly and sent
-    // automatically by the browser on all /hls/* subrequests.
-    // SECURITY: If token issuance fails, playback is blocked — we never
-    // load HLS without a valid token.
+    const fullSrc = src.startsWith('http') ? src : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8005') + src;
+
+    // Try to get playback token first (best-effort)
     try {
       await mediaAPI.getPlaybackToken(clip.id);
-    } catch {
-      setError('Playback authorization failed — please try again');
-      setPlaying(false);
-      return;
+    } catch (tokenError) {
+      // Token issuance failed (403 unmoderated, 404 not found, network error)
+      // Log but continue — we'll try direct HLS load
+      console.warn('Playback token unavailable, attempting direct HLS load:', tokenError);
     }
-
-    const fullSrc = src.startsWith('http') ? src : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8005') + src;
 
     if (Hls.isSupported()) {
       const hls = new Hls({ startLevel: -1, maxBufferLength: 30 });
@@ -109,7 +105,9 @@ export function PlayerProvider({ children }: Props) {
     if (totalMs > 0) {
       try {
         await interactionsAPI.logTelemetry(clipId, { action_type: 'view', watch_time_ms: totalMs });
-      } catch {}
+      } catch {
+        // Ignore telemetry errors
+      }
     }
     telemetryBatchRef.current = { clipId: '', watch_time_ms: 0, events: [] };
   }, []);

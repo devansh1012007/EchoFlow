@@ -3,19 +3,19 @@ import { Bookmark, History } from 'lucide-react';
 import { AudioClip } from '../types';
 import { ReelList } from '../components/feed/ReelList';
 import { DEMO_CLIPS } from '../data/demoClips';
-import { isDemoMode } from '../data/feedAdapter';
 import { profileAPI } from '../api/client';
-
-interface Props { go: (p: string, params?: Record<string, unknown>) => void; }
+import { useNavigation } from '../context/NavigationContext';
+import { useDemoMode } from '../context/DemoModeContext';
 
 type Tab = 'liked' | 'saved' | 'recent';
 
-export function LibraryPage({ go }: Props) {
+export function LibraryPage() {
+  const { go } = useNavigation();
   const [tab, setTab] = useState<Tab>('liked');
   const [liked, setLiked] = useState<AudioClip[]>([]);
   const [saved, setSaved] = useState<AudioClip[]>([]);
   const [loading, setLoading] = useState(true);
-  const demo = isDemoMode();
+  const demo = useDemoMode();
 
   useEffect(() => {
     const load = async () => {
@@ -79,10 +79,10 @@ export function LibraryPage({ go }: Props) {
           ? <div style={{ padding: '20px' }}>{Array.from({ length: 3 }).map((_, i) => <div key={i} className="skeleton" style={{ height: 120, borderRadius: 14, marginBottom: 14 }} />)}</div>
           : current.length === 0
             ? <div style={{ textAlign: 'center', padding: '56px 24px', color: 'var(--on-surface-variant)', fontSize: 13 }}>
-              <Bookmark size={28} style={{ margin: '0 auto 16px', opacity: 0.5 }} />
-              <p>No saved {tab === 'liked' ? 'likes' : tab === 'saved' ? 'saves' : 'history'} yet.</p>
-              <p style={{ fontSize: 11, marginTop: 8 }}>Browse the feed or explore to get started.</p>
-            </div>
+                <Bookmark size={28} style={{ margin: '0 auto 16px', opacity: 0.5 }} />
+                <p>No saved {tab === 'liked' ? 'likes' : tab === 'saved' ? 'saves' : 'history'} yet.</p>
+                <p style={{ fontSize: 11, marginTop: 8 }}>Browse the feed or explore to get started.</p>
+              </div>
             : <ReelList clips={current} loading={false} err={null} hasMore={false} onProfileClick={(id: number) => go('profile', { userId: id })} />
         }
       </div>

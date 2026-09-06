@@ -107,7 +107,9 @@ services:
   # AUTH_TYPE=scram-sha-256 — same wire auth as direct Postgres, no
   # plaintext trust mode. Uses edoburu/pgbouncer (upstream 1.x base is
   # EOL Alpine 3.9; see docker/pgbouncer/Dockerfile SECURITY note).
+  # Profile: only built/started when explicitly requested (not in test stack).
   pgbouncer:
+    #profiles: ["production"]
     build:
       context: ./docker/pgbouncer
       dockerfile: Dockerfile

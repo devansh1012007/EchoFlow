@@ -14,44 +14,17 @@ import { DeveloperDemoPage } from '../pages/DeveloperDemo';
 import { AppShell } from './AppShell';
 import { setBackendStatus } from '../data/feedAdapter';
 
-function RequireAuth({ children }: { children: JSX.Element }) {
+function RequireAuth({ children }: { children: React.ReactNode }) {
   const { authed } = useAuth();
   if (!authed) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
 function PublicClipRedirect() {
-  const { id } = useParams();
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { id: _id } = useParams();
   // ISSUE-14: Redirect to feed (public endpoint handled by backend /clips/{id}/public/)
   return <Navigate to="/feed" replace />;
-}
-
-export function AppRouter() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<LoginRouter />} />
-        <Route path="/dev/demo" element={<Protected><AppShell page="devdemo"><DeveloperDemoPage go={(p) => navTo(p)} /></AppShell></Protected>} />
-        <Route path="/" element={<RootRedirect />} />
-        <Route path="/feed" element={<Protected><AppShell page="feed"><FeedPage go={navTo} /></AppShell></Protected>} />
-        <Route path="/explore" element={<Protected><AppShell page="explore"><ExplorePage go={navTo} /></AppShell></Protected>} />
-        <Route path="/profile" element={<Protected><AppShell page="profile"><ProfilePageWrapper /></AppShell></Protected>} />
-        <Route path="/profile/:userId" element={<Protected><AppShell page="profile"><ProfilePageWrapper /></AppShell></Protected>} />
-        <Route path="/inbox" element={<Protected><AppShell page="inbox"><InboxPage go={navTo} /></AppShell></Protected>} />
-        <Route path="/library" element={<Protected><AppShell page="library"><LibraryPage go={navTo} /></AppShell></Protected>} />
-        <Route path="/upload" element={<Protected><AppShell page="upload"><UploadPage go={navTo} /></AppShell></Protected>} />
-        <Route path="/settings" element={<Protected><AppShell page="settings"><SettingsPage go={navTo} /></AppShell></Protected>} />
-        <Route path="/public/clips/:id" element={<PublicClipRedirect />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-      <BackendWatcher />
-    </BrowserRouter>
-  );
-}
-
-function navTo(p: string, params?: Record<string, unknown>) {
-  const q = params && Object.keys(params).length ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-  window.location.href = '/' + p + q;
 }
 
 function RootRedirect() {
@@ -60,17 +33,12 @@ function RootRedirect() {
 }
 
 function LoginRouter() {
-  return <LoginPage onSuccess={(p) => navTo(p === 'explore' ? 'explore' : 'feed')} />;
+  return <LoginPage onSuccess={(p) => { window.location.href = '/' + (p === 'explore' ? 'explore' : 'feed'); }} />;
 }
 
 function ProfilePageWrapper() {
   const { userId } = useParams();
-  const go = (p: string) => { window.location.href = '/' + p; };
-  return <ProfilePage go={go} userId={userId ? Number(userId) : undefined} />;
-}
-
-function Protected({ children }: { children: JSX.Element }) {
-  return <RequireAuth>{children}</RequireAuth>;
+  return <ProfilePage userId={userId ? Number(userId) : undefined} />;
 }
 
 function BackendWatcher() {
@@ -79,4 +47,27 @@ function BackendWatcher() {
     if (status !== null) setBackendStatus(!!status);
   }, [status]);
   return null;
+}
+
+export function AppRouter() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<LoginRouter />} />
+        <Route path="/dev/demo" element={<RequireAuth><AppShell page="devdemo"><DeveloperDemoPage /></AppShell></RequireAuth>} />
+        <Route path="/" element={<RootRedirect />} />
+        <Route path="/feed" element={<RequireAuth><AppShell page="feed"><FeedPage /></AppShell></RequireAuth>} />
+        <Route path="/explore" element={<RequireAuth><AppShell page="explore"><ExplorePage /></AppShell></RequireAuth>} />
+        <Route path="/profile" element={<RequireAuth><AppShell page="profile"><ProfilePageWrapper /></AppShell></RequireAuth>} />
+        <Route path="/profile/:userId" element={<RequireAuth><AppShell page="profile"><ProfilePageWrapper /></AppShell></RequireAuth>} />
+        <Route path="/inbox" element={<RequireAuth><AppShell page="inbox"><InboxPage /></AppShell></RequireAuth>} />
+        <Route path="/library" element={<RequireAuth><AppShell page="library"><LibraryPage /></AppShell></RequireAuth>} />
+        <Route path="/upload" element={<RequireAuth><AppShell page="upload"><UploadPage /></AppShell></RequireAuth>} />
+        <Route path="/settings" element={<RequireAuth><AppShell page="settings"><SettingsPage /></AppShell></RequireAuth>} />
+        <Route path="/public/clips/:id" element={<PublicClipRedirect />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+      <BackendWatcher />
+    </BrowserRouter>
+  );
 }

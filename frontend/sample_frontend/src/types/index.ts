@@ -25,6 +25,7 @@ export interface AudioClip {
   creator_name: string;
   creator_id?: number;
   hls_playlist_url: string | null;
+  cover_image?: string | null;
   duration_ms: number;
   likes: number;
   shares: number;

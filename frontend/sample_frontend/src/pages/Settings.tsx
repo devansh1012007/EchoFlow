@@ -4,16 +4,17 @@ import { UserProfile } from '../types';
 import { useAuth } from '../stores/auth';
 import { useTheme } from '../stores/theme';
 import { DEMO_ME } from '../data/demo';
-import { isDemoMode, fetchMyProfile } from '../data/feedAdapter';
+import { fetchMyProfile } from '../data/feedAdapter';
 import { Avatar } from '../components/common/atoms';
+import { useNavigation } from '../context/NavigationContext';
+import { useDemoMode } from '../context/DemoModeContext';
 
-interface Props { go: (p: string, params?: Record<string, unknown>) => void; }
-
-export function SettingsPage({ go }: Props) {
+export function SettingsPage() {
+  const { go } = useNavigation();
   const { user, logout } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
   const [prof, setProf] = useState<UserProfile | null>(null);
-  const demo = isDemoMode();
+  const demo = useDemoMode();
 
   useEffect(() => {
     if (demo) { setProf(DEMO_ME); return; }

@@ -6,17 +6,18 @@ import { ReelCard } from '../components/audio/ReelCard';
 import { Avatar } from '../components/common/atoms';
 import { Spinner } from '../components/common/atoms';
 import { DEMO_ACTIVITY } from '../data/demo';
-import { fetchInbox, isDemoMode } from '../data/feedAdapter';
+import { fetchInbox } from '../data/feedAdapter';
+import { useNavigation } from '../context/NavigationContext';
+import { useDemoMode } from '../context/DemoModeContext';
 
-interface Props { go: (p: string, params?: Record<string, unknown>) => void; }
-
-export function InboxPage({ go }: Props) {
+export function InboxPage() {
+  const { go } = useNavigation();
   const [items, setItems] = useState<ShareEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [previewClip, setPreviewClip] = useState<ShareEvent['clip'] | null>(null);
   const [tab, setTab] = useState<'messages' | 'activity'>('messages');
-  const demo = isDemoMode();
+  const demo = useDemoMode();
 
   useEffect(() => {
     setLoading(true);

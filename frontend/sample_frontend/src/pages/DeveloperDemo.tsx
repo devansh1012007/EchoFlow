@@ -3,8 +3,10 @@ import { Headphones, Activity, Zap, Wifi, Music } from 'lucide-react';
 import { DEMO_CREATORS, DEMO_CLIPS } from '../data/demo';
 import { ReelList } from '../components/feed/ReelList';
 import { Avatar } from '../components/common/atoms';
+import { useNavigation } from '../context/NavigationContext';
 
-export function DeveloperDemoPage({ go }: { go: (p: string, params?: Record<string, unknown>) => void }) {
+export function DeveloperDemoPage() {
+  const { go } = useNavigation();
   const [backendStatus, setBackendStatus] = useState<'connected' | 'demo' | 'checking'>('checking');
   const [apiEndpoint, setApiEndpoint] = useState('');
 

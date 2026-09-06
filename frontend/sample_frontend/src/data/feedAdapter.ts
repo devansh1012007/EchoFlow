@@ -1,13 +1,11 @@
 import { AudioClip, FeedResponse, UserProfile, ShareEvent } from '../types';
 import { feedAPI, profileAPI, clipsAPI, shareAPI } from '../api/client';
-import { DEMO_CREATORS, DEMO_ME, DEMO_CLIPS, DEMO_CLIPS_PAGE_2, DEMO_MESSAGES, DEMO_MODE } from './demo';
+import { DEMO_CREATORS, DEMO_ME, DEMO_CLIPS, DEMO_CLIPS_PAGE_2, DEMO_MESSAGES } from './demo';
 import { User } from '../types';
 
-let backendAvailable = !DEMO_MODE;
-let demoMode = !backendAvailable;
+let demoMode = false;
 
 export function setBackendStatus(available: boolean) {
-  backendAvailable = available;
   demoMode = !available;
 }
 
@@ -15,8 +13,9 @@ export const isDemoMode = (): boolean => demoMode;
 
 function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
-export async function fetchFeed(): Promise<{ clips: AudioClip[]; hasMore: boolean; err: string | null; degraded?: boolean; retry_after_ms?: number; status?: number; message?: string }> {
-  if (demoMode) {
+export async function fetchFeed(isDemo?: boolean): Promise<{ clips: AudioClip[]; hasMore: boolean; err: string | null; degraded?: boolean; retry_after_ms?: number; status?: number; message?: string }> {
+  const demo = isDemo ?? demoMode;
+  if (demo) {
     await delay(300);
     return { clips: [...DEMO_CLIPS], hasMore: DEMO_CLIPS_PAGE_2.length > 0, err: null };
   }
@@ -49,8 +48,9 @@ export async function fetchFeed(): Promise<{ clips: AudioClip[]; hasMore: boolea
   }
 }
 
-export async function fetchSuggestions(category: string): Promise<AudioClip[]> {
-  if (demoMode) {
+export async function fetchSuggestions(category: string, isDemo?: boolean): Promise<AudioClip[]> {
+  const demo = isDemo ?? demoMode;
+  if (demo) {
     await delay(200);
     return DEMO_CLIPS.filter(c => c.category === category);
   }
@@ -72,8 +72,9 @@ function creatorToProfile(u: User): UserProfile {
   };
 }
 
-export async function fetchProfile(userId?: number): Promise<{ profile: UserProfile; clips: AudioClip[] }> {
-  if (demoMode || !userId) {
+export async function fetchProfile(userId?: number, isDemo?: boolean): Promise<{ profile: UserProfile; clips: AudioClip[] }> {
+  const demo = isDemo ?? demoMode;
+  if (demo || !userId) {
     await delay(200);
     const demoCreator = userId ? DEMO_CREATORS[Number(userId) - 1] : DEMO_ME;
     const creator = demoCreator || DEMO_ME;
@@ -89,8 +90,9 @@ export async function fetchProfile(userId?: number): Promise<{ profile: UserProf
   }
 }
 
-export async function fetchMyProfile(): Promise<UserProfile> {
-  if (demoMode) return DEMO_ME as unknown as UserProfile;
+export async function fetchMyProfile(isDemo?: boolean): Promise<UserProfile> {
+  const demo = isDemo ?? demoMode;
+  if (demo) return DEMO_ME as unknown as UserProfile;
   try {
     return await profileAPI.getMyProfile();
   } catch {
@@ -99,8 +101,9 @@ export async function fetchMyProfile(): Promise<UserProfile> {
   }
 }
 
-export async function fetchInbox(): Promise<ShareEvent[]> {
-  if (demoMode) {
+export async function fetchInbox(isDemo?: boolean): Promise<ShareEvent[]> {
+  const demo = isDemo ?? demoMode;
+  if (demo) {
     await delay(200);
     return DEMO_MESSAGES;
   }

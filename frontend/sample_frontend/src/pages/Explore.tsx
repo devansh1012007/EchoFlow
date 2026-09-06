@@ -5,8 +5,7 @@ import { ReelList } from '../components/feed/ReelList';
 import { FeedSkeleton } from '../components/common/molecules';
 import { fetchSuggestions } from '../data/feedAdapter';
 import { VIBE_TAGS, DISCOVERY_HUBS } from '../data/demo';
-
-interface Props { go: (p: string, params?: Record<string, unknown>) => void; }
+import { useNavigation } from '../context/NavigationContext';
 
 const VIBE_COLORS: Record<string, string> = {
   'Deep Focus': '#00e5a0',
@@ -18,7 +17,8 @@ const VIBE_COLORS: Record<string, string> = {
   Motivation: '#ffd166',
 };
 
-export function ExplorePage({ go }: Props) {
+export function ExplorePage() {
+  const { go } = useNavigation();
   const [query, setQuery] = useState('');
   const [activeVibe, setActiveVibe] = useState<string | null>(null);
   const [activeHub, setActiveHub] = useState<string | null>(null);
@@ -42,8 +42,8 @@ export function ExplorePage({ go }: Props) {
   useEffect(() => {
     if (activeHub) {
       loadCategory(activeHub === 'trending' ? 'music' : activeHub === 'science' ? 'science' : activeHub === 'laugh' ? 'funny' : 'instrumental');
-       }
-    }, [activeHub]);
+    }
+  }, [activeHub]);
 
   return (
     <div style={{ padding: '56px 14px 100px' }}>
@@ -124,8 +124,8 @@ export function ExplorePage({ go }: Props) {
 
       {/* Feed */}
       {loading && !clips.length ? <FeedSkeleton /> :
-       <ReelList clips={clips} loading={false} err={err} hasMore={false}
-         onProfileClick={(id: number) => go('profile', { userId: id })} />
+        <ReelList clips={clips} loading={false} err={err} hasMore={false}
+          onProfileClick={(id: number) => go('profile', { userId: id })} />
       }
       {!loading && !err && clips.length === 0 && activeHub && (
         <p style={{ padding: '40px 0', textAlign: 'center', color: 'var(--on-surface-variant)', fontSize: 13 }}>
