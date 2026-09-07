@@ -19,6 +19,7 @@ backend/media
 /.cache
 /cache
 /cache/pip
+/frontend
 /--default-timeout=120
 *.venv
 /frontend/node_modules
