@@ -6,8 +6,8 @@ from django.core.management.base import BaseCommand
 from django.conf import settings
 from django.contrib.auth import get_user_model
 
-from backend.app.scrapers import downloader, normalizer, uploader
-from backend.app.scrapers.sources import SOURCES
+from ai_ml.scrapers import downloader, normalizer, uploader
+from ai_ml.scrapers.sources import SOURCES
 from backend.app.tasks import process_audio_to_hls
 from backend.app.services.task_publisher import publish
 

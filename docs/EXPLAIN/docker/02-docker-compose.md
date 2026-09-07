@@ -323,4 +323,15 @@ docker compose up -d web
 
 ---
 
+## Recent Changes (2026-09-07)
+
+The current `docker-compose.yml` has been updated beyond what this file describes in the snippets above. The rest of the file is preserved as a historical snapshot of the original 14-service design; the authoritative reference is now the `docker-compose.yml` itself + `AGENTS.md` §Database Init. Specific deltas:
+
+- **`db` service now mounts `./docker/postgres-init/` directory** (not just one init file) at `/docker-entrypoint-initdb.d:ro`. Three init scripts run in alphabetical order on first startup of a fresh data volume: `00-init-pgvector.sql` (vector on default DB), `01-init-pgvector-template1.sql` (vector on template1 so `CREATE DATABASE` inherits it), `02-echoflow-test-db.sql` (idempotent `CREATE DATABASE echoflow_test OWNER echoflow`). Filename order is load-bearing; re-read the dependency comments in each file before renaming.
+- **The `db` service provisions BOTH `echoflow_db` (main) and `echoflow_test` (dev)** on a fresh volume. Developers who set `DATABASE_URL=...echoflow_test` in their `.env` get a clean separation from production data without needing a second compose override. To pick up new init scripts, `docker volume rm echoflow_postgres_data` is required (init scripts only run on a fresh data directory).
+- **Redis is split** into `redis_broker` (`noeviction`, 512MB) and `redis_cache` (`allkeys-lru`, 3GB) per `backend/EchoFlow/settings.py`. The single-instance design in this doc is obsolete.
+- **PgBouncer is in front of `db`** on port 6432 (transaction pool mode, scram-sha-256 auth, 25-conn pool). Web/celery connect via PgBouncer; `wait_for_db.py` still hits `db:5432` directly for container startup probes.
+
+---
+
 *Source: `docker-compose.yml`, `Dockerfile`, `gunicorn.conf.py`, `wait_for_db.py`*

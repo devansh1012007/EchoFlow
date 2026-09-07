@@ -70,7 +70,7 @@ This directory contains comprehensive, code-grounded technical documentation for
 - [04-rate-limiting.md](auth/04-rate-limiting.md) — DRF throttling, current limits, gaps
 
 ### Docker & Deployment
-- [01-multi-stage-dockerfile.md](docker/01-multi-stage-dockerfile.md) — Build stages, wheelhouse, secret handling
+- [01-multi-stage-dockerfile.md](docker/01-multi-stage-dockerfile.md) — Build stages, `wheelhouse-base` layer-graph dedup, offline wheelhouse, secret handling, **named BuildKit caches** (`echoflow-apt` / `echoflow-pip` / `echoflow-hf`) — BuildKit caches section added 2026-09-06
 - [02-docker-compose.md](docker/02-docker-compose.md) — 14 services, health checks, resource limits
 - [03-environment-variables.md](docker/03-environment-variables.md) — Required vars, dev vs prod differences
 - [04-gunicorn-wait-for-db.md](docker/04-gunicorn-wait-for-db.md) — Preload app, post_fork connection reset, DB polling

@@ -25,6 +25,7 @@ Note on test isolation:
   so tests don't bleed state into each other.
 """
 import pytest
+from urllib.parse import urlparse
 
 import sentry_sdk
 from sentry_sdk import capture_message
@@ -84,10 +85,12 @@ class TestSentryInitGating:
         monkeypatch.setenv('SENTRY_PROFILES_SAMPLE_RATE', '0.0')
         echo_sentry.init_sentry()
         # In production with DSN set, the SDK initializes. The client is
-        # non-None and the dsn matches.
+        # non-None and the dsn host matches.
         client = sentry_sdk.get_client()
         assert client is not None
-        assert 'sentry.io' in str(getattr(client, 'dsn', ''))
+        dsn = str(getattr(client, 'dsn', '') or '')
+        host = urlparse(dsn).hostname
+        assert host == 'sentry.io'
 
 
 class TestCaptureExceptionWrapper:

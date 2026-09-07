@@ -10,6 +10,16 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # docker/postgres-init/ runs once on first startup. It:
+      #   1. Installs pgvector on template1 (00-init-pgvector.sql) so every
+      #      future CREATE DATABASE inherits the vector extension.
+      #   2. Provisions an `echoflow_test` database alongside the main
+      #      `echoflow_db` (01-echoflow-test-db.sql) for dev environments
+      #      that set DATABASE_URL=...echoflow_test in their .env.
+      # The separate docker-compose.test.yml still spins up its own
+      # echoflow_test container for the pytest suite (in CI / make-test);
+      # this main-db provisioning is for `docker compose up` dev only.
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     ports:
       - "5432:5432"
     healthcheck:
@@ -157,11 +167,21 @@ services:
     ports:
       - "6432:6432"
     healthcheck:
-      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      # DECISION: psql probe as the real app user (not pg_isready or a bare
+      # TCP probe). `pg_isready` runs as the container's default user
+      # (`postgres`), but pgbouncer's userlist only contains ${DB_USER};
+      # AUTH_TYPE=scram-sha-256 then rejects the probe with
+      # `no such user: postgres`. BusyBox `nc -z` returns exit 1 even
+      # when the port IS open (verified: silent failure on closed
+      # connection). A psql `SELECT 1` against pgbouncer as ${DB_USER}
+      # with ${DB_PASSWORD} exercises the full SCRAM auth path AND the
+      # upstream Postgres round-trip — a stronger guarantee than a TCP
+      # check — at the cost of one tiny query every 10s. Acceptable.
+      test: ["CMD-SHELL", "PGPASSWORD=$DB_PASSWORD psql -h 127.0.0.1 -p 6432 -U $DB_USER -d $DB_NAME -c 'SELECT 1' -t -A -q >/dev/null 2>&1"]
       interval: 10s
-      timeout: 5s
+      timeout: 10s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     deploy:
       resources:
         limits:

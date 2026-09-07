@@ -873,7 +873,7 @@ def scrape_and_import(self, source_name, limit=5, clip_length=300):
     downloader/normalizer/uploader to create `AudioClip` records and
     then triggers `process_audio_to_hls` for each created clip.
     """
-    from backend.app.scrapers.sources import SOURCES
+    from ai_ml.scrapers.sources import SOURCES
     module = SOURCES.get(source_name)
     if not module:
         raise RuntimeError(f"Unknown source: {source_name}")
@@ -886,7 +886,7 @@ def scrape_and_import(self, source_name, limit=5, clip_length=300):
         user.set_unusable_password()
         user.save()
 
-    from backend.app.scrapers import downloader, normalizer, uploader
+    from ai_ml.scrapers import downloader, normalizer, uploader
 
     items = module.fetch_audio(limit=limit)
     for item in items:

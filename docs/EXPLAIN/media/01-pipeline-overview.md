@@ -196,4 +196,4 @@ process_audio_to_hls.delay(clip_id)  ← SAME TASK
 
 ---
 
-*Source: `backend/app/tasks.py:184-335`, `backend/app/views.py:95-112`, `backend/app/scrapers/`*
+*Source: `backend/app/tasks.py:184-335`, `backend/app/views.py:95-112`, `ai_ml/scrapers/`*

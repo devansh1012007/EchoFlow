@@ -1827,7 +1827,7 @@ All requirements above are traceable to the following files:
 - `backend/app/admin.py` — empty (no admin registered).
 - `backend/app/management/commands/scrape_audio.py` — operator CLI
   for ingesting from external archives.
-- `backend/app/scrapers/*` — operator-side scraping (no frontend
+- `ai_ml/scrapers/*` — operator-side scraping (no frontend
   interaction).
 - `backend/EchoFlow/settings.py` — JWT TTLs, throttle rates,
   CORS/cookie policy, S3 storage config, Celery beat schedule,

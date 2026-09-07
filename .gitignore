@@ -22,10 +22,11 @@ backend/media
 /--default-timeout=120
 *.venv
 /frontend/node_modules
-/sample_frontend
+frontend/sample_frontend2
+frontend/sample_frontend
 *.vite
 backend/media/
-/frontend/sample_frontend/node_modules
+/frontend/sample_frontend2/node_modules
 
 # Docker specific
 .dockerenv

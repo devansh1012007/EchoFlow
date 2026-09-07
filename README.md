@@ -163,11 +163,37 @@ open http://localhost:3000
 docker compose down
 ```
 
+### Build performance
+
+The `Dockerfile` declares three **named BuildKit caches** (`echoflow-apt`, `echoflow-pip`, `echoflow-hf`) so the second and subsequent local builds skip the expensive network round-trips (apt `.deb` files, pip resolver metadata, HuggingFace model artifacts). They survive across builds on the same host and are namespaced to this project so a global `docker builder prune` never wipes them.
+
+> **Why the media image has a `cp -a` inside `py-deps-media`:** BuildKit `--mount=type=cache` targets are **ephemeral** — they exist for the duration of the `RUN` command but are not part of the layer's filesystem. The `py-deps-media` stage downloads HuggingFace models into the `echoflow-hf` cache mount, then `cp -a`s them to `/home/appuser/hf_baked` so the subsequent `media` stage's `COPY --from=py-deps-media` can see them. Without this, the build fails with `not found` for `/home/appuser/.cache/huggingface` (the cache mount path) — even though the model downloads "succeeded". See [AGENTS.md](AGENTS.md) → "BuildKit cache" for the full design.
+
+```bash
+# Inspect cache sizes after a build
+docker buildx du --filter id=echoflow-apt
+docker buildx du --filter id=echoflow-hf
+
+# Force a fresh build (skip named caches for one target only)
+docker buildx build --target media --no-cache .
+
+# Nuke one specific cache (e.g. after upgrading the HF model version)
+docker buildx prune --filter id=echoflow-hf
+```
+
+**Common gotchas:**
+- **Cold first build is slow by design.** The first `docker compose up --build` pulls ~200 MB of Debian packages and bakes ~250 MB of HuggingFace models. Subsequent builds skip those steps entirely. Expect 10–30 minutes for the first cold media build; subsequent rebuilds finish in seconds when only source code changes.
+- **IPv6 connectivity failures** on the build host (Docker tries `auth.docker.io` over IPv6 first) can hang the build at "resolve image config" with `connect: network is unreachable`. Disable IPv6 in the Docker daemon if your host doesn't have a working IPv6 uplink — see `docs/EXPLAIN/docker/01-multi-stage-dockerfile.md` for details.
+- **CI runners start with empty named caches.** The GitHub Actions workflow (`docker-image.yml`) persists the **layer** cache across runs via `cache-from: type=gha,scope=${{ matrix.target }}` — so unchanged source rebuilds skip almost everything except the model download. The BuildKit **named mount caches** (`echoflow-apt` / `echoflow-pip` / `echoflow-hf`) are independent of the layer cache and do NOT persist across CI runs; every CI run re-downloads the ~250 MB of HF models. If that becomes a CI cost issue, the upgrade path is documented in `docs/EXPLAIN/docker/01-multi-stage-dockerfile.md` §"BuildKit cache".
+- **Media image PR smoke test.** The CI workflow runs a smoke test on every PR that builds the `media` target: it loads the built image and asserts the baked HF models are present *and* loadable in offline mode. This guards against the cache-mount-vs-COPY bug fixed in 2026-09 — if the `cp -a` step is ever regressed, the smoke test fails before the image is merged.
+
+Full design and invalidation rules: [docs/EXPLAIN/docker/01-multi-stage-dockerfile.md](docs/EXPLAIN/docker/01-multi-stage-dockerfile.md).
+
 ## Audio Scraping / Ingestion
 
 EchoFlow includes a license-aware scraper for seeding the catalog from public, openly-licensed archives. It respects `robots.txt`, enforces per-host rate limits, validates content type, enforces a max download size, and normalizes/trims audio via pydub.
 
-**Supported sources** (from `backend/app/scrapers/sources/`):
+**Supported sources** (from `ai_ml/scrapers/sources/`):
 
 | Source | Requirement | License enforcement |
 |--------|-------------|---------------------|
@@ -258,7 +284,26 @@ Natural next steps that follow directly from the existing architecture:
 - **Sentry production credentials** — DSN is env-gated; ship `SENTRY_DSN` and `SENTRY_ENV` in staging/prod `.env` to start capturing errors with full correlation_id tracing
 - **Prometheus alert rules** — design proposed in [docs/EXPLAIN/observability/03-prometheus-grafana-design.md](docs/EXPLAIN/observability/03-prometheus-grafana-design.md); ship when an escalation path (Slack/on-call) is set
 - **Rate limiting & throttling** — add DRF throttling and distributed rate limits at the API layer
-- **CI/CD pipeline** — automated test + build + deploy stages for the Docker stack
+
+### CI / CD
+
+CI runs in GitHub Actions on every push to `main`/`develop`, every tag (`v*`), and every PR. Two workflows:
+
+- **`.github/workflows/django.yml`** — spins up the test stack (`db`, `redis_broker`, `redis_cache`, `minio`) via `docker compose -f docker-compose.yml -f docker-compose.test.yml`, waits for readiness, runs `migrate` + `manage.py check` + `collectstatic --dry-run` + the full pytest suite. Tears down the stack on exit. **Blocks merges on failure.**
+- **`.github/workflows/docker-image.yml`** — builds the `api` and `media` images for every push/PR. Uses `cache-from: type=gha,scope=${{ matrix.target }}` for per-target layer cache. `HF_TOKEN` is delivered as a BuildKit secret (`--mount=type=secret,id=hf_token`) — never `ARG` or `ENV`. On PRs the built image is `load: true`'d and a **smoke test** verifies the HF models are baked in correctly (catches the 2026-09 `cp -a` regression). On `main`/`develop`/tag the image is pushed to Docker Hub (`devansh10gaur/echoflow`) and GHCR (`ghcr.io/${{ github.repository }}`).
+
+Run locally to mirror CI:
+
+```bash
+# Tests (matches django.yml)
+docker compose -f docker-compose.yml -f docker-compose.test.yml up --build -d
+docker compose exec -e PYTHONPATH=/app web pytest backend/app/tests/ --tb=short
+docker compose -f docker-compose.yml -f docker-compose.test.yml down -v
+
+# Image build (matches docker-image.yml, but without the secret mount)
+docker build --target api   -t echoflow-api:local   .
+docker build --target media -t echoflow-media:local . --secret id=hf_token,env=HF_TOKEN
+```
 
 ---
 
@@ -288,11 +333,15 @@ Two stacks are available after `docker compose up`:
 The stdlib-based `scripts/observability_tui.py` is still available for quick spot-checks when no browser is handy.
 
 ## Testing
-**Current count: 275 passed, 6 skipped, 0 failed** (6 skipped = 1 ffmpeg-environmental + 5 nginx-environmental).
+**Current count: 275 passed, 6 skipped, 0 failed** (6 skipped = 1 ffmpeg-environmental — `test_scraper.py` only runs in Docker where ffmpeg is installed — and 5 live-nginx-environmental — `TestLiveNginxTerminator` requires the full `docker compose up` stack with nginx reachable).
 
-The test suite lives under `backend/app/tests/` (23 files) and uses `pytest` + `pytest-django`. Run via `docker compose exec web pytest …`. See [AGENTS.md](AGENTS.md) → "Running Tests" for the full command set.
+The test suite lives under `backend/app/tests/` (24 files) and uses `pytest` + `pytest-django`. Run via `docker compose exec web pytest …`. See [AGENTS.md](AGENTS.md) → "Running Tests" for the full command set.
 
 **Docker-only test stack:** All tests run against PostgreSQL in Docker — no SQLite fallback. The `conftest.py` auto-creates the `echoflow_test` database, installs pgvector on `template1`, and handles session teardown. Run the test stack: `docker compose -f docker-compose.yml -f docker-compose.test.yml up --build -d` then `docker compose exec -e PYTHONPATH=/app web pytest backend/app/tests/ --tb=short`.
+
+**Two database setups, two stacks:** the `db` service in `docker-compose.yml` provisions both `echoflow_db` (main) and `echoflow_test` (dev) on a fresh data directory, with pgvector installed on `template1` so both inherit the extension. The `docker-compose.test.yml` override adds its own dedicated `echoflow_test_db` container for the pytest suite (clean isolation from dev data). See [AGENTS.md](AGENTS.md) → "Postgres init scripts" for the run-order dependency.
+
+**Pre-existing test isolation caveat:** `TestLiveNginxTerminator` only skips when no `nginx:443` is reachable from the test container. If the main stack's nginx is up while you run the test stack, the fixture detects it, runs the live test, and gets HTTP 502 because the upstream is the main `web` (not the test web). Workaround: `docker compose stop nginx` before running tests; or run tests on a host where the main stack is not running. Tracked as a separate issue.
 
 Integration tests that need real Postgres + Redis + S3 (pgvector HNSW indexes, row-level locks, Redis Streams, concurrent transactions) are marked with `@pytest.mark.integration`. They auto-skip on the local SQLite + LocMem test environment and run in CI where the workflow provisions real services. Run them locally: `pytest backend/app/tests/ -m integration`.
 
