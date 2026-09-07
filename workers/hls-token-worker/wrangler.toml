@@ -1,9 +1,11 @@
-name = "echoflow-hls-token"
+name = "echoflow-hls-worker"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
 # Route: media.echo-flow.in/* → Worker (replaces direct R2 custom domain)
-routes = [{ pattern = "media.echo-flow.in/*", zone_name = "echo-flow.in" }]
+[[routes]]
+pattern = "media.echoflow.in"
+custom_domain = true
 
 # R2 bucket binding — the same bucket EchoFlow uses for HLS output
 # (hls/<clip_id>/ prefix). In production, this bucket is PRIVATE — the
@@ -16,12 +18,14 @@ routes = [{ pattern = "media.echo-flow.in/*", zone_name = "echo-flow.in" }]
 # This is critical for HLS seeking (browsers send Range headers for segments).
 # R2→Worker data transfer is free (no egress charge). Worker→browser egress
 # flows through Cloudflare's network (included in R2 free tier).
+
 [[r2_buckets]]
-binding = "HLS_BUCKET"
+binding = "MEDIA_BUCKET"
 bucket_name = "echoflow-media"
 
 # Secrets (set via: npx wrangler secret put <NAME>):
 #   MEDIA_TOKEN_SECRET — HMAC signing key (must match Django's .env value)
 #   MEDIA_TOKEN_TTL_SECONDS — token TTL in seconds (default 600)
+
 [vars]
 MEDIA_TOKEN_TTL_SECONDS = "600"
