@@ -1244,8 +1244,78 @@ Before making a risky operation, obtain approval.
 Before declaring success, validate it.
 
 When documentation conflicts with implementation, investigate instead of guessing.
+---
+
+## Interactive Design Review Protocol
+
+**This is a standing rule for all future sessions.** It applies whenever a task touches any of the trigger conditions in §5 (Approval Gates) of the Agent Engineering Rules:
+- architecture / public APIs / database schemas / persistent data
+- authentication / authorization / security boundaries / compatibility
+- deployment / production behavior / dependencies / resource requirements
+- irreversible operations
+
+**For small, self-contained tasks that do NOT trigger §5 (e.g., typo fixes, single-test additions, doc updates), this protocol may be skipped.**
 
 ---
+
+### The Protocol (Mandatory Sequence)
+
+1. **READ DEEPLY** — Before any proposal, inspect:
+   - Referenced spec/design doc (if any)
+   - Relevant source files, tests, migrations, configs, deployment files
+   - Callers, consumers, dependencies, data flows, failure paths
+   - Existing tests — what they guarantee and what they don't
+
+2. **QUESTION RELENTLESSLY** — Block progress with explicit questions until:
+   - Every ambiguity is resolved
+   - Every architectural decision is explicitly made
+   - Edge cases, failure modes, rollback paths are discussed
+   - You confirm the approach (or redirect)
+
+3. **PRODUCE DESIGN DOC** — Write a per-task design document at:
+   `docs/EXPLAIN/decisions/YYYY-MM-DD-<feature-slug>.md`
+   
+   The doc **must** contain these sections (matching your spec):
+   - **Changes Needed** — exhaustive list of what changes
+   - **How Changes Will Be Made** — step-by-step implementation approach
+   - **Why This & Not Anything Else** — tradeoffs, alternatives considered, rationale; include `DECISION:`, `SECURITY:`, `HACK:`, `TODO:` tags inline
+   - **Files Affected** — exact paths, symbols, line ranges where known
+   - **Architecture & Data Flow** — before/after diagrams (text), control/data flow traces
+   - **Test Cases** — existing coverage, gaps, new tests required
+   - **Edge Cases & Critical Code Details** — only the important ones
+   - **Atomic Commit Plan** — pre-listed commit units (one logical change per commit)
+
+4. **YOUR APPROVAL** — I do not write code until you explicitly greenlight the design doc.
+
+5. **IMPLEMENT** — Follow the atomic commit plan; update the design doc if reality diverges.
+
+6. **LOG LEARNINGS** — At session end, append to the Session Learnings section (see below).
+
+---
+
+### Anti-Patterns (What This Protocol Prevents)
+
+| Anti-pattern | Protocol enforcement |
+|--------------|----------------------|
+| Code written before design approved | Step 4 is a hard gate |
+| Design doc missing edge cases | Template requires Edge Cases section |
+| Design doc not created | Step 3 is mandatory for §5-triggering tasks |
+| Assumptions silent | Step 2 forces explicit Q&A |
+| Commits not atomic | Atomic Commit Plan in design doc |
+| Learnings lost | Session Learnings section updated every session |
+
+---
+
+### Linkage to Existing Rules
+
+- **§3 Understand Before Changing** — this protocol operationalizes it
+- **§5 Approval Gates** — the trigger conditions are identical
+- **§13 Testing** — design doc must specify validation strategy
+- **§15 Documentation** — design doc *is* the decision record; AGENTS.md stays lean
+- **Multi-Agent Protocol §4** — planning-before-implementation aligns with Step 3 here
+
+---
+
 # Multi-Agent Engineering Protocol
 
 ## Core Principle
@@ -1543,3 +1613,66 @@ The lead agent should continuously track:
 * which risks remain
 
 The objective is not to make the most changes or finish fastest. The objective is to produce a system that remains correct under **real users, concurrency, failures, abuse, deployment, and future growth**.
+
+---
+## Session Learnings & Known Things
+
+**This section accumulates durable knowledge across sessions.** Every session that touches non-trivial code **must** append an entry here before ending.
+
+### Entry Format
+
+```markdown
+### YYYY-MM-DD — <short feature/fix slug>
+
+**Context:** 1–2 sentences — what was the task, what triggered it.
+
+**What Was Learned (Durable):**
+- Concrete facts about the codebase, architecture, data flows, failure modes, configs, dependencies, test gaps, deployment gotchas, performance characteristics, security boundaries — things the next agent should *not* have to rediscover.
+- Use `DECISION:`, `SECURITY:`, `HACK:`, `TODO:` tags where appropriate.
+
+**What Changed:**
+- Files modified (paths), migrations added, configs changed, tests added/removed.
+
+**Open Questions / Unresolved Risks:**
+- Things not fully verified, deferred decisions, known limitations.
+
+**Design Doc Reference:** `docs/EXPLAIN/decisions/YYYY-MM-DD-<feature-slug>.md` (if applicable)
+```
+
+### Rules
+
+- **One entry per session** — append, never overwrite.
+- **Be specific** — "the feed refill uses Redis lists" is useless; "feed refill pops 10 from `user_feed:{id}` list, triggers refill when `< 15`, refill task is `refill_user_feed` on `fast_feed` queue" is durable.
+- **No transient state** — don't log "I fixed a bug today"; log "the bug was X in Y, root cause Z, fix commits A-B-C".
+- **Reference the design doc** — if a design doc was produced for this session, link it.
+- **This section is read-only for future agents** — they read it to avoid re-learning; they do not edit past entries.
+
+---
+
+### Example Entry (template)
+
+```markdown
+### 2026-09-06 — hls-token-protection
+
+**Context:** Implemented short-lived signed-cookie HLS playback tokens per audit finding B19. Django issues `ef_hls_token` cookie; Cloudflare Worker validates at edge.
+
+**What Was Learned (Durable):**
+- RFC 3986 §5.2.2 strips query strings on relative HLS references → signed URLs *cannot* work for HLS; signed cookies are the only viable mechanism. **DECISION:** cookie-based tokens only.
+- `MEDIA_TOKEN_SECRET` must be identical in Django (issuance) and Cloudflare Worker (validation). Divergence = 403 on all playback. **SECURITY:** secret sync is a deployment invariant.
+- Cookie must be `SameSite=Lax` (not `Strict`) for cross-subdomain top-level nav (`app.echo-flow.in` → `media.echo-flow.in`). `Domain` attribute empty for `localhost` dev.
+- `fetch()` calls to token endpoint **must** use `credentials: 'include'` or browser discards `Set-Cookie`. **HACK:** documented in AGENTS.md Gotchas.
+- Token endpoint returns `{"status": "ok"}` — token is HttpOnly cookie, NOT in JSON body.
+
+**What Changed:**
+- `backend/app/views/media_playback.py` (new)
+- `backend/EchoFlow/settings.py` (MEDIA_TOKEN_* settings)
+- `docker/nginx.conf` (proxy pass for /hls/* to MinIO)
+- `docker-compose.yml` (nginx service)
+- `docs/EXPLAIN/storage/04-hls-token-protection.md`
+
+**Open Questions / Unresolved Risks:**
+- Token TTL (currently 600s) — may need tuning for slow starts on mobile.
+- No revocation mechanism yet — token valid until TTL expires.
+
+**Design Doc Reference:** `docs/EXPLAIN/decisions/2026-09-06-hls-token-protection.md`
+```
