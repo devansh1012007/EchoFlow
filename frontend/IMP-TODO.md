@@ -1,0 +1,1 @@
+- The hls.js config in your frontend must have xhr.withCredentials = true or the cookie will never be sent on segment requests. Check your frontend code for this before doing any end-to-end test.

@@ -127,10 +127,33 @@ RUN --mount=type=cache,id=echoflow-pip,target=/root/.cache/pip,sharing=locked \
       --default-timeout=1000 --retries 10 \
       --no-index --find-links=/wheelhouse \
       -c constraints.txt \
-      -r requirements-media.txt \
- && rm -rf /wheelhouse
+      -r requirements-media.txt
 
-# BAKE HUGGINGFACE MODELS (BuildKit secret for HF_TOKEN)
+# BAKE HUGGINGFACE MODELS
+#   * --mount=type=secret,id=hf_token — HF_TOKEN reaches this step as a
+#     secret file; it never enters ARG/ENV/layer history.
+#   * --mount=type=cache,id=echoflow-hf,uid=1000,gid=1000 — persists the
+#     baked model artifacts (~250 MB: Whisper base + sentence-transformers
+#     + KeyBERT) across media builds on this host. The uid/gid are required
+#     because the python -c lines run as the user they were loaded under
+#     (root inside the builder), and the cache target is /home/appuser/...
+#     which is owned by UID 1000.
+#   * sharing=locked — two concurrent builds never race on a half-written
+#     model file.
+#
+#   CRITICAL — the trailing `cp -a ... /home/appuser/hf_baked`:
+#   BuildKit --mount=type=cache is ephemeral. Files written to the cache
+#   target exist ONLY during this RUN command. They are saved to the
+#   BuildKit cache store (id=echoflow-hf) for future-build speedup, but
+#   they are NOT part of this layer's filesystem. Without the cp below,
+#   the `media` stage's subsequent `COPY --from=py-deps-media
+#   /home/appuser/.cache/huggingface ...` would fail with
+#   `"/home/appuser/.cache/huggingface": not found` — the path exists
+#   during the RUN but is invisible to the layer graph. The cp
+#   materializes the cache contents into a regular filesystem path
+#   that DOES persist into the layer, which the media stage then
+#   picks up. The named cache still gives cross-build speed; this cp
+#   only runs on the build host, not in the shipped image.
 RUN --mount=type=secret,id=hf_token \
     --mount=type=cache,id=echoflow-hf,target=/home/appuser/.cache/huggingface,sharing=locked,uid=1000,gid=1000 \
     set -eu; \
