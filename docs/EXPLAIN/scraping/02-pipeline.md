@@ -260,7 +260,7 @@ docker compose logs -f celery | grep -i scrap
 ## Extending
 
 ### New Source
-1. `backend/app/scrapers/sources/newsource.py` with `fetch_audio(limit)`
+1. `ai_ml/scrapers/sources/newsource.py` with `fetch_audio(limit)`
 2. Register in `scrapers/sources/__init__.py`
 3. Add API key to settings if needed
 4. Test: `python manage.py scrape_audio --source=newsource --limit=1`
@@ -275,4 +275,4 @@ def normalize_and_trim(in_path, out_path, max_seconds=300):
 
 ---
 
-*Source: `backend/app/management/commands/scrape_audio.py`, `backend/app/tasks.py:710-796`, `backend/app/scrapers/`*
+*Source: `backend/app/management/commands/scrape_audio.py`, `backend/app/tasks.py:710-796`, `ai_ml/scrapers/`*

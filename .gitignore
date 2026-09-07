@@ -25,7 +25,7 @@ backend/media
 /sample_frontend
 *.vite
 backend/media/
-/frontend/sample_frontend/node_modules
+/frontend/sample_frontend2/node_modules
 
 # Docker specific
 .dockerenv

@@ -189,4 +189,4 @@ ffprobe -i normalized.wav -show_entries format=duration
 
 ---
 
-*Source: `backend/app/tasks.py:142-169, 210-224`, `backend/app/scrapers/normalizer.py`*
+*Source: `backend/app/tasks.py:142-169, 210-224`, `ai_ml/scrapers/normalizer.py`*

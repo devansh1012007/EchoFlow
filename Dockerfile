@@ -162,7 +162,17 @@ RUN --mount=type=secret,id=hf_token \
     fi; \
     python -c "from faster_whisper import WhisperModel; m = WhisperModel('base', device='cpu', compute_type='int8'); del m"; \
     python -c "from sentence_transformers import SentenceTransformer; m = SentenceTransformer('all-MiniLM-L6-v2'); del m"; \
-    python -c "from keybert import KeyBERT; m = KeyBERT(); del m"
+    python -c "from keybert import KeyBERT; m = KeyBERT(); del m"; \
+    # DECISION: BuildKit --mount=type=cache is ephemeral — files written to
+    # the cache target are saved to the BuildKit cache store for future
+    # builds but are NOT part of this layer's filesystem. A subsequent
+    # COPY --from=py-deps-media targeting the cache-mount path fails with
+    # "not found". We copy the downloaded models to a regular filesystem
+    # path so they persist into the layer and are visible to the media
+    # stage's COPY. The cache mount (echoflow-hf) still provides cross-build
+    # download speedup on subsequent builds; this cp only copies into the
+    # layer, adding ~250 MB to this stage's size but nothing extra at runtime.
+    cp -a /home/appuser/.cache/huggingface /home/appuser/hf_baked
 
 # -----------------------------------------------------------------------------
 # Final images
@@ -220,8 +230,12 @@ LABEL org.opencontainers.image.title="echoflow-media" \
       org.opencontainers.image.source="https://github.com/devansh1012007/EchoFlow"
 
 # Baked-in models from the builder stage, re-owned for the runtime user.
+# Source is /home/appuser/hf_baked (a regular filesystem path) — the cache
+# mount target /home/appuser/.cache/huggingface is ephemeral and not part
+# of the layer. See py-deps-media RUN for the cp that materializes the
+# cache contents into a layer-visible path.
 COPY --from=py-deps-media --chown=appuser:appgroup \
-     /home/appuser/.cache/huggingface /home/appuser/.cache/huggingface
+     /home/appuser/hf_baked /home/appuser/.cache/huggingface
 
 # Same explicit allowlist as the api stage.
 COPY --chown=appuser:appgroup backend/ ./backend/

@@ -4,7 +4,7 @@
 
 EchoFlow includes a license-aware scraper for seeding the catalog from public audio archives. Modular source connectors.
 
-**Location:** `backend/app/scrapers/sources/`
+**Location:** `ai_ml/scrapers/sources/`
 
 ---
 
@@ -196,7 +196,7 @@ SOURCES = {
 
 **Usage:**
 ```python
-from backend.app.scrapers.sources import SOURCES
+from ai_ml.scrapers.sources import SOURCES
 module = SOURCES.get(source_name)
 items = module.fetch_audio(limit=10)
 ```
@@ -335,7 +335,7 @@ scrape_and_import.delay('wikimedia', limit=10)
 
 ## Adding New Sources
 
-1. Create `backend/app/scrapers/sources/newsource.py`
+1. Create `ai_ml/scrapers/sources/newsource.py`
 ```python
 def fetch_audio(limit=10):
     # Return list of dicts with: url, title, page_url, license, id
@@ -355,4 +355,4 @@ SOURCES = {
 
 ---
 
-*Source: `backend/app/scrapers/sources/*.py`, `backend/app/scrapers/base.py`, `backend/app/scrapers/downloader.py`, `backend/app/management/commands/scrape_audio.py`*
+*Source: `ai_ml/scrapers/sources/*.py`, `ai_ml/scrapers/base.py`, `ai_ml/scrapers/downloader.py`, `backend/app/management/commands/scrape_audio.py`*

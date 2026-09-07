@@ -256,4 +256,4 @@ def cleanup_orphaned_media():
 
 ---
 
-*Source: `backend/app/tasks.py`, `backend/app/views.py:95-112`, `backend/app/scrapers/uploader.py`, `backend/EchoFlow/settings.py:270-293`, `docker-compose.yml:108`*
+*Source: `backend/app/tasks.py`, `backend/app/views.py:95-112`, `ai_ml/scrapers/uploader.py`, `backend/EchoFlow/settings.py:270-293`, `docker-compose.yml:108`*

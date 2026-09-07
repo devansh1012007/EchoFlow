@@ -127,19 +127,10 @@ RUN --mount=type=cache,id=echoflow-pip,target=/root/.cache/pip,sharing=locked \
       --default-timeout=1000 --retries 10 \
       --no-index --find-links=/wheelhouse \
       -c constraints.txt \
-      -r requirements-media.txt
+      -r requirements-media.txt \
+ && rm -rf /wheelhouse
 
-# BAKE HUGGINGFACE MODELS
-#   * --mount=type=secret,id=hf_token — HF_TOKEN reaches this step as a
-#     secret file; it never enters ARG/ENV/layer history.
-#   * --mount=type=cache,id=echoflow-hf,uid=1000,gid=1000 — persists the
-#     baked model artifacts (~250 MB: Whisper base + sentence-transformers
-#     + KeyBERT) across media builds on this host. The uid/gid are required
-#     because the python -c lines run as the user they were loaded under
-#     (root inside the builder), and the cache target is /home/appuser/...
-#     which is owned by UID 1000.
-#   * sharing=locked — two concurrent builds never race on a half-written
-#     model file.
+# BAKE HUGGINGFACE MODELS (BuildKit secret for HF_TOKEN)
 RUN --mount=type=secret,id=hf_token \
     --mount=type=cache,id=echoflow-hf,target=/home/appuser/.cache/huggingface,sharing=locked,uid=1000,gid=1000 \
     set -eu; \
@@ -148,7 +139,8 @@ RUN --mount=type=secret,id=hf_token \
     fi; \
     python -c "from faster_whisper import WhisperModel; m = WhisperModel('base', device='cpu', compute_type='int8'); del m"; \
     python -c "from sentence_transformers import SentenceTransformer; m = SentenceTransformer('all-MiniLM-L6-v2'); del m"; \
-    python -c "from keybert import KeyBERT; m = KeyBERT(); del m"
+    python -c "from keybert import KeyBERT; m = KeyBERT(); del m"; \
+    cp -a /home/appuser/.cache/huggingface /home/appuser/hf_baked
 ```
 
 ### Key Points
@@ -157,6 +149,7 @@ RUN --mount=type=secret,id=hf_token \
 - **Model baking** — downloads + caches at build time
 - **Cache env vars** set before baking (copied to final)
 - **`set -eu` not `-x`** — prevents token leak in logs
+- **`cp -a` after the model downloads** — materializes the ephemeral cache contents into a layer-visible path so the `media` stage's `COPY --from=py-deps-media` can find them. Without this, the build fails with `not found` even though the model downloads "succeeded".
 
 ---
 
@@ -214,9 +207,16 @@ ENV PATH="/opt/venv/bin:$PATH" \
 LABEL org.opencontainers.image.title="echoflow-media" \
       org.opencontainers.image.description="EchoFlow heavy_media Celery worker (FFmpeg + baked HuggingFace models)"
 
-# Baked models from builder
+# Baked models from builder. Source is `/home/appuser/hf_baked` (a
+# regular filesystem path), NOT the cache-mount path
+# `/home/appuser/.cache/huggingface` — the latter is ephemeral and
+# not part of the layer. The `cp -a` in `py-deps-media` (above)
+# materializes the cache contents into a layer-visible path so this
+# COPY can find them. Destination stays at the runtime `HF_HOME`
+# path so the celery_media container's offline mode works
+# unchanged.
 COPY --from=py-deps-media --chown=appuser:appgroup \
-     /home/appuser/.cache/huggingface /home/appuser/.cache/huggingface
+     /home/appuser/hf_baked /home/appuser/.cache/huggingface
 
 # Same explicit allowlist
 COPY --chown=appuser:appgroup backend/ ./backend/

@@ -165,9 +165,9 @@ Single multi-stage `Dockerfile` with five stages (two are build-only):
 |---|---|---|
 | `base` | parent of all | apt union (libpq-dev, gcc, postgresql-client, ffmpeg, libsndfile1), appuser (UID 1000) |
 | `py-deps-api` | no | installs requirements-base.txt offline from wheelhouse into site-packages |
-| `py-deps-media` | no | requirements-media.txt + bakes HuggingFace models to `/home/appuser/.cache/huggingface` |
+| `py-deps-media` | no | requirements-media.txt + bakes HuggingFace models into the `echoflow-hf` cache mount, then `cp -a` to `/home/appuser/hf_baked` so the models persist into the layer (see "HuggingFace bake copy-to-layer" below) |
 | `api` | yes | web, celery, celery_feed, celery_beat — small image, no wheels/models |
-| `media` | yes | celery_media — adds baked HF models; runtime `HF_HOME=/home/appuser/.cache/huggingface` |
+| `media` | yes | celery_media — `COPY --from=py-deps-media /home/appuser/hf_baked /home/appuser/.cache/huggingface`; runtime `HF_HOME=/home/appuser/.cache/huggingface` |
 
 Final images receive dependencies via `COPY --from=py-deps-* /opt/venv /opt/venv`
 and source via an explicit allowlist (`backend/` — incl. `wait_for_db.py`
@@ -177,6 +177,35 @@ for the worker services sharing that image); `media` pings its own Celery node.
 HF_TOKEN is delivered ONLY via BuildKit secret mount
 (`--mount=type=secret,id=hf_token`) — never `--build-arg`, which would persist
 the token in builder layer history readable by `docker history`.
+
+**HuggingFace bake copy-to-layer** (added 2026-09-07, fixed the `celery_media` build):
+
+BuildKit `--mount=type=cache` is **ephemeral** — the cache target is a temporary
+overlay that exists only during the `RUN` command. Files written into the
+cache mount are saved to the BuildKit cache store (for future build speedup)
+but are **not** part of the committed layer's filesystem. A subsequent
+`COPY --from=py-deps-media <cache-mount-path>` therefore fails with
+`not found` — the path exists during the `RUN` but is invisible to the
+layer graph.
+
+The fix: after the model download commands, the `py-deps-media` RUN ends
+with `cp -a /home/appuser/.cache/huggingface /home/appuser/hf_baked`. This
+materializes the cache contents into a regular filesystem path that **does**
+persist into the layer. The `media` stage then `COPY --from=py-deps-media
+/home/appuser/hf_baked /home/appuser/.cache/huggingface` lands the baked
+models at the runtime `HF_HOME` path unchanged. Runtime env vars
+(`HF_HOME`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` in
+`docker-compose.yml`) are NOT modified.
+
+Tradeoff: ~250 MB is now in both the BuildKit `echoflow-hf` cache AND the
+layer. The BuildKit cache is for cross-build speed (it only costs disk
+locally and is not in the image); the layer copy is what's shipped. Final
+image size is unchanged at the user-visible layer.
+
+CI guards against regression: `.github/workflows/docker-image.yml` runs a
+smoke test on every PR that builds the `media` target, loading the
+freshly-built image and asserting the baked HF models load in
+`HF_HUB_OFFLINE=1` mode.
 
 ```bash
 # Build all targets
@@ -252,6 +281,37 @@ docker builder prune                                # CAREFUL — wipes dangling
 - The `wheelhouse/` directory changing (new wheels added) invalidates `wheelhouse-base` → both py-deps stages rebuild.
 - HuggingFace model upgrade → invalidate manually with `docker buildx prune --filter id=echoflow-hf`. There is no automatic signal from inside the build that the upstream model changed.
 - CI runners (GitHub Actions) start with empty caches — first CI build is always cold. Subsequent jobs on the same runner can reuse caches if you enable `cache-from` / `cache-to` in a CI step (not currently configured).
+
+**What is intentionally NOT cached:**
+- `/var/lib/apt/lists/` — stale package indexes can silently serve vulnerable `.deb` files. `apt-get update` runs on every build; security wins over re-download speed.
+
+### BuildKit cache (named, persistent across builds)
+
+The `Dockerfile` declares three **named** BuildKit cache mounts so cold builds skip the expensive network round-trips on subsequent runs:
+
+| Cache ID | Mounted at | What it holds | Saved per build |
+|---|---|---|---|
+| `echoflow-apt` | `/var/cache/apt/archives` | Downloaded `.deb` files (`libpq-dev`, `gcc`, `ffmpeg`, `libsndfile1`, `libmagic1`, `postgresql-client`) | ~200 MB; ~1-2 min |
+| `echoflow-pip`  | `/root/.cache/pip`     | pip's HTTP/wheel metadata index (resolver cache) | Seconds — only helps repeated installs in the same build |
+| `echoflow-hf`   | `/home/appuser/.cache/huggingface` | Baked HF model artifacts (Whisper `base`, `all-MiniLM-L6-v2`, KeyBERT) | ~250 MB; ~5 min on `media` rebuild |
+
+A dedicated `wheelhouse-base` stage owns the offline `./wheelhouse/` so both `py-deps-api` and `py-deps-media` reference it via `COPY --from=wheelhouse-base` — wheelhouse bytes enter the layer graph exactly once per build.
+
+**Inspect / manage the caches:**
+
+```bash
+docker buildx du                                    # show every named cache and its size
+docker buildx du --filter type=buildkit             # only BuildKit-managed caches
+docker buildx prune --filter type=buildkit          # safe — never touches named caches by default
+docker buildx prune --filter id=echoflow-apt        # nuke one specific cache (e.g. after adding a new apt package)
+docker builder prune                                # CAREFUL — wipes dangling builders; named caches survive by default
+```
+
+**Cache invalidation rules:**
+- Adding/changing a package in `Dockerfile` apt-get list invalidates the `base` stage → next build re-downloads everything → caches are repopulated transparently.
+- The `wheelhouse/` directory changing (new wheels added) invalidates `wheelhouse-base` → both py-deps stages rebuild.
+- HuggingFace model upgrade → invalidate manually with `docker buildx prune --filter id=echoflow-hf`. There is no automatic signal from inside the build that the upstream model changed.
+- CI runners (GitHub Actions) start with empty BuildKit **named** caches (echoflow-apt / echoflow-pip / echoflow-hf) — they only speed up repeated local builds on the same machine. The **layer** cache IS persisted across CI runs via `cache-from: type=gha,scope=${{ matrix.target }}` in `.github/workflows/docker-image.yml`. The scope is per-matrix-target so a source-only change doesn't bust the heavy media layer cache and vice-versa. The named mount caches (especially `echoflow-hf` at ~250 MB) re-download on every CI run; if that becomes a CI cost issue, see `docs/EXPLAIN/docker/01-multi-stage-dockerfile.md` §"BuildKit cache" for the registry-backed upgrade.
 
 **What is intentionally NOT cached:**
 - `/var/lib/apt/lists/` — stale package indexes can silently serve vulnerable `.deb` files. `apt-get update` runs on every build; security wins over re-download speed.
@@ -498,7 +558,7 @@ python manage.py scrape_audio --source=wikimedia --limit=3 --clip-length=30
 # Celery task
 python -c "from backend.app.tasks import scrape_and_import; scrape_and_import.delay('internet_archive', limit=5)"
 ```
-Sources: wikimedia, internet_archive, freesound (needs `FREESOUND_API_KEY`), kaggle (needs `SCRAPER_KAGGLE_LOCAL_PATH`). Respects `robots.txt`. Allowed licenses configurable via `SCRAPER_ALLOW_LICENSES`.
+Sources: wikimedia, internet_archive, freesound (needs `FREESOUND_API_KEY`), kaggle (needs `SCRAPER_KAGGLE_LOCAL_PATH`). Respects `robots.txt`. Allowed licenses configurable via `SCRAPER_ALLOW_LICENSES`. Source connectors live in `ai_ml/scrapers/sources/`; the `scrape_audio` management command + `scrape_and_import` Celery task remain in `backend/app/`.
 
 ## Frontend (sample only)
 ```bash
@@ -635,12 +695,19 @@ REVENUECAT_SYNC_INTERVAL_MINUTES=360    # 6 hours
 
 ## Testing & Linting
 - Test framework: **pytest** + `pytest-django`, installed in the `api` image. Run via `docker compose exec web pytest …` — see [Running Tests](#running-tests) for the full command set.
-- Test files live under `backend/app/tests/` (23 files: `test_adversarial_pass3.py`, `test_counter_store.py`, `test_db_router.py`, `test_feed_pool.py`, `test_https_termination.py`, `test_integration_concurrency.py`, `test_integration_pgvector.py`, `test_metrics_endpoint.py`, `test_metrics.py`, `test_observability_tui.py`, `test_orphan_cleanup.py`, `test_scraper.py`, `test_security_and_validation.py`, `test_sentry.py`, `test_services_comments.py`, `test_services_follows.py`, `test_services_interactions.py`, `test_services_shares.py`, `test_services_uploads.py`, `test_settings.py`, `test_smoke.py`, `test_system_health.py`, `test_task_publisher.py`).
+- Test files live under `backend/app/tests/` (24 files: `test_adversarial_pass3.py`, `test_auth_regulatory.py`, `test_counter_store.py`, `test_db_router.py`, `test_feed_pool.py`, `test_hls_token.py`, `test_https_termination.py`, `test_integration_concurrency.py`, `test_integration_pgvector.py`, `test_metrics_endpoint.py`, `test_metrics.py`, `test_observability_tui.py`, `test_orphan_cleanup.py`, `test_scraper.py`, `test_security_and_validation.py`, `test_sentry.py`, `test_services_comments.py`, `test_services_follows.py`, `test_services_interactions.py`, `test_services_shares.py`, `test_services_uploads.py`, `test_settings.py`, `test_smoke.py`, `test_system_health.py`, `test_task_publisher.py`).
 - All tests run against PostgreSQL in Docker. No SQLite fallback.
 - No linting/formatter config (no `.eslintrc` at root, no `pyproject.toml`, no `ruff.toml`).
 - CI: `.github/workflows/django.yml` runs migrations + the test suite via Docker. Blocks merges on failure.
+- **Current count: 275 passed, 6 skipped, 0 failed.** Skipped = 1 ffmpeg-environmental (`test_scraper.py::test_normalizer_trims_to_max_seconds` is conditionally skipped when ffmpeg is missing on the host) + 5 live-nginx-environmental (`TestLiveNginxTerminator` requires the full `docker compose up` stack). The 6th previously-running test, `test_scraper.py::test_uploader_creates_audioclip`, was the only one in that group that ever ran in a previous configuration; it now passes after the import fix (see "Recent fixes" below).
 - **Root cause of 178 `auth_group does not exist` errors:** The old conftest.py used a SQLite override hack that bypassed real migrations. The fix was to make Docker/Postgres the only test environment. The new `conftest.py` auto-creates `echoflow_test` DB, installs pgvector on `template1`, and handles session teardown.
 - **docker-compose.test.yml** — test-only stack (db, redis, minio, web). No nginx, no celery workers. Run with: `docker compose -f docker-compose.yml -f docker-compose.test.yml up --build -d` then `docker compose exec -e PYTHONPATH=/app web pytest backend/app/tests/ --tb=short`.
+- **Recent fixes (2026-09-07):**
+  - **`backend/app/migrations/0002_audioclip_cover_image.py`** (added) — the `AudioClip.cover_image` field was added to the model (line 85) but the migration was never generated, so every `INSERT INTO app_audioclip` failed with `column "cover_image" of relation "app_audioclip" does not exist`. The migration was generated by `manage.py makemigrations` and added to fix 73 cascading fixture-setup errors across `test_adversarial_pass3.py`, `test_counter_store.py`, `test_orphan_cleanup.py`, `test_security_and_validation.py`, `test_services_{comments,interactions,shares,uploads}.py`, `test_task_publisher.py`, and `test_integration_{concurrency,pgvector}.py`.
+  - **`ai_ml/scrapers/uploader.py:17`** (fixed) — was `from ..models import AudioClip` (a relative import left over from when the scraper lived at `backend/app/scrapers/uploader.py`); changed to the absolute `from backend.app.models import AudioClip` to match the pattern used by every other `ai_ml/` file. Was causing `ImportError: cannot import name 'AudioClip' from 'ai_ml.models'` in `test_scraper.py::test_uploader_creates_audioclip`.
+  - **`docker/postgres-init/`** (new directory) — three init SQL scripts that run on the main `db` service's first startup: `00-init-pgvector.sql` installs the extension in `POSTGRES_DB` (echoflow_db) so Django migrations can find it; `01-init-pgvector-template1.sql` runs `\c template1` then installs the extension on the template (CRITICAL — must run after `00-` so `template1` has vector before `02-` runs); `02-echoflow-test-db.sql` runs `CREATE DATABASE echoflow_test OWNER echoflow` (idempotent via `\gexec` + `WHERE NOT EXISTS` guard). Filename ordering is load-bearing — see "Postgres init scripts" below.
+  - **`docker-compose.yml:11-22`** (modified) — the `db` service now mounts `./docker/postgres-init` (instead of just the old `docker/test/postgres-init/init-pgvector.sql` single file) at `/docker-entrypoint-initdb.d:ro`. The single-file mount only installed vector in `echoflow_db`; the directory mount provisions both `echoflow_db` (main) and `echoflow_test` (dev) with pgvector on a fresh data volume. The separate `docker-compose.test.yml` still uses `./docker/test/postgres-init` for its own dedicated test-db container (clean isolation from dev data).
+- **Postgres init scripts:** the main `db` service runs `docker/postgres-init/*.sql` in alphabetical order on first startup of a fresh data volume. The load-bearing order is `00-` (default DB) → `01-` (template1) → `02-` (create test db). If you change a filename, re-read the dependency comments in each file or you will silently break `CREATE DATABASE` for `echoflow_test` (vector extension is required on the source template). Wipe the volume (`docker volume rm echoflow_postgres_data`) if you change an init script — init scripts only run on a fresh data directory.
 - **HNSW index EXPLAIN test gotcha:** `SET LOCAL enable_seqscan = OFF` requires an active transaction. Wrap it in `transaction.atomic()` to ensure it takes effect. Also verify the index type via `pg_am.amname` as a primary check (not just the EXPLAIN plan, which may choose Seq Scan for small tables).
 - **S3 storage in tests:** Use `default_storage.exists(clip.original_file.name)` instead of `os.path.exists(clip.original_file.path)` — `.path` raises `NotImplementedError` on S3 storage backends (MinIO).
 - **Conditional skip pattern for system binaries:** Use `@unittest.skipUnless(_ffmpeg_available, "requires ffmpeg on PATH")` where `_ffmpeg_available = shutil.which('ffmpeg') is not None`. This passes in Docker (ffmpeg installed) and skips on bare-metal dev.
@@ -652,12 +719,13 @@ REVENUECAT_SYNC_INTERVAL_MINUTES=360    # 6 hours
 
 ### Known Skipped / Disabled Tests (environmental, not regressions)
 
-The following tests are **conditionally skipped** with `@unittest.skipUnless(_ffmpeg_available, ...)` because they require `ffmpeg` on `PATH`. The `api` Docker image already installs ffmpeg (in the `base` stage of the Dockerfile), so these tests **pass in Docker**. If running on a bare-metal dev machine without ffmpeg, they will be skipped:
+The following test is **conditionally skipped** with `@unittest.skipUnless(_ffmpeg_available, ...)` because it requires `ffmpeg` on `PATH`. The `api` Docker image already installs ffmpeg (in the `base` stage of the Dockerfile), so this test **passes in Docker**. If running on a bare-metal dev machine without ffmpeg, it will be skipped:
 
 | Test | Reason | How to enable locally |
 |------|--------|------------------------|
 | `backend/app/tests/test_scraper.py::ScraperUnitTests::test_normalizer_trims_to_max_seconds` | Requires `ffmpeg` on `PATH` (used by `pydub` for MP3 export) | `sudo apt install ffmpeg` (Debian/Ubuntu/Pop!_OS) or `brew install ffmpeg` (macOS) |
-| `backend/app/tests/test_scraper.py::ScraperUnitTests::test_uploader_creates_audioclip` | Same — `ffmpeg` required for `normalizer.normalize_and_trim` | Same as above |
+
+> The second scraper test, `test_uploader_creates_audioclip`, was previously ffmpeg-conditional too but now runs (it was failing with `ImportError` due to a broken relative import; the import was fixed in 2026-09 — see "Recent fixes" below).
 
 The following nginx HTTPS termination tests require the `nginx` container (not part of the test stack):
 
@@ -1613,66 +1681,3 @@ The lead agent should continuously track:
 * which risks remain
 
 The objective is not to make the most changes or finish fastest. The objective is to produce a system that remains correct under **real users, concurrency, failures, abuse, deployment, and future growth**.
-
----
-## Session Learnings & Known Things
-
-**This section accumulates durable knowledge across sessions.** Every session that touches non-trivial code **must** append an entry here before ending.
-
-### Entry Format
-
-```markdown
-### YYYY-MM-DD — <short feature/fix slug>
-
-**Context:** 1–2 sentences — what was the task, what triggered it.
-
-**What Was Learned (Durable):**
-- Concrete facts about the codebase, architecture, data flows, failure modes, configs, dependencies, test gaps, deployment gotchas, performance characteristics, security boundaries — things the next agent should *not* have to rediscover.
-- Use `DECISION:`, `SECURITY:`, `HACK:`, `TODO:` tags where appropriate.
-
-**What Changed:**
-- Files modified (paths), migrations added, configs changed, tests added/removed.
-
-**Open Questions / Unresolved Risks:**
-- Things not fully verified, deferred decisions, known limitations.
-
-**Design Doc Reference:** `docs/EXPLAIN/decisions/YYYY-MM-DD-<feature-slug>.md` (if applicable)
-```
-
-### Rules
-
-- **One entry per session** — append, never overwrite.
-- **Be specific** — "the feed refill uses Redis lists" is useless; "feed refill pops 10 from `user_feed:{id}` list, triggers refill when `< 15`, refill task is `refill_user_feed` on `fast_feed` queue" is durable.
-- **No transient state** — don't log "I fixed a bug today"; log "the bug was X in Y, root cause Z, fix commits A-B-C".
-- **Reference the design doc** — if a design doc was produced for this session, link it.
-- **This section is read-only for future agents** — they read it to avoid re-learning; they do not edit past entries.
-
----
-
-### Example Entry (template)
-
-```markdown
-### 2026-09-06 — hls-token-protection
-
-**Context:** Implemented short-lived signed-cookie HLS playback tokens per audit finding B19. Django issues `ef_hls_token` cookie; Cloudflare Worker validates at edge.
-
-**What Was Learned (Durable):**
-- RFC 3986 §5.2.2 strips query strings on relative HLS references → signed URLs *cannot* work for HLS; signed cookies are the only viable mechanism. **DECISION:** cookie-based tokens only.
-- `MEDIA_TOKEN_SECRET` must be identical in Django (issuance) and Cloudflare Worker (validation). Divergence = 403 on all playback. **SECURITY:** secret sync is a deployment invariant.
-- Cookie must be `SameSite=Lax` (not `Strict`) for cross-subdomain top-level nav (`app.echo-flow.in` → `media.echo-flow.in`). `Domain` attribute empty for `localhost` dev.
-- `fetch()` calls to token endpoint **must** use `credentials: 'include'` or browser discards `Set-Cookie`. **HACK:** documented in AGENTS.md Gotchas.
-- Token endpoint returns `{"status": "ok"}` — token is HttpOnly cookie, NOT in JSON body.
-
-**What Changed:**
-- `backend/app/views/media_playback.py` (new)
-- `backend/EchoFlow/settings.py` (MEDIA_TOKEN_* settings)
-- `docker/nginx.conf` (proxy pass for /hls/* to MinIO)
-- `docker-compose.yml` (nginx service)
-- `docs/EXPLAIN/storage/04-hls-token-protection.md`
-
-**Open Questions / Unresolved Risks:**
-- Token TTL (currently 600s) — may need tuning for slow starts on mobile.
-- No revocation mechanism yet — token valid until TTL expires.
-
-**Design Doc Reference:** `docs/EXPLAIN/decisions/2026-09-06-hls-token-protection.md`
-```

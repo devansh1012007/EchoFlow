@@ -130,7 +130,7 @@ Celery tasks organized by queue:
 | `evolve_long_term_user_baselines` | `celery` (beat) | Batch update user vectors |
 | `scrape_and_import` | `celery` | Scraper wrapper → creates clips |
 
-### Scrapers (`backend/app/scrapers/`)
+### Scrapers (`ai_ml/scrapers/`)
 Modular ingestion pipeline:
 ```
 downloader.py    → Download with robots.txt + rate limit + size/type checks

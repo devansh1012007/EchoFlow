@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.conf import settings
 from django.contrib.auth import get_user_model
 
-from backend.app.scrapers import normalizer, uploader
+from ai_ml.scrapers import normalizer, uploader
 
 from pydub.generators import Sine
 from pydub import AudioSegment
