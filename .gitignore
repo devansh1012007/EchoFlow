@@ -21,7 +21,7 @@ backend/media
 /cache/pip
 /--default-timeout=120
 *.venv
-/frontend/node_modules
+/frontend
 /sample_frontend
 *.vite
 backend/media/
