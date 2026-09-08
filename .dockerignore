@@ -54,6 +54,7 @@ hidden folder
 .cache/pip/
 AGENTS.md
 ai_ml/scrapers
+mobile
 
 # Test artifacts
 *.log
