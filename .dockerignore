@@ -52,6 +52,8 @@ Startup_related_docs
 backend/scripts
 hidden folder
 .cache/pip/
+AGENTS.md
+ai_ml/scrapers
 
 # Test artifacts
 *.log
