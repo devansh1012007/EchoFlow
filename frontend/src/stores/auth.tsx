@@ -41,8 +41,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (tokens?.access) {
       refreshProfile().finally(() => setIsLoading(false));
     } else {
-      // Auto-authenticate with seed user if none exists so users can immediately test hands-free reels
-      autoLoginSeedUser().finally(() => setIsLoading(false));
+      setIsLoading(false);
     }
 
     const handleSessionExpired = () => {
@@ -55,15 +54,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     window.addEventListener("ef_session_expired", handleSessionExpired);
     return () => window.removeEventListener("ef_session_expired", handleSessionExpired);
   }, []);
-
-  const autoLoginSeedUser = async () => {
-    try {
-      await authAPI.login("alex_waves", "password123");
-      await refreshProfile();
-    } catch {
-      // Ignore if dev server starting up
-    }
-  };
 
   const login = async (username: string, password: string) => {
     await authAPI.login(username, password);

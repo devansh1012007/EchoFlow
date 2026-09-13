@@ -164,8 +164,8 @@ Single multi-stage `Dockerfile` with five stages (two are build-only):
 | Stage | Shipped? | Purpose |
 |---|---|---|
 | `base` | parent of all | apt union (libpq-dev, gcc, postgresql-client, ffmpeg, libsndfile1), appuser (UID 1000) |
-| `py-deps-api` | no | installs requirements-base.txt offline from wheelhouse into site-packages |
-| `py-deps-media` | no | requirements-media.txt + bakes HuggingFace models into the `echoflow-hf` cache mount, then `cp -a` to `/home/appuser/hf_baked` so the models persist into the layer (see "HuggingFace bake copy-to-layer" below) |
+| `py-deps-api` | yes, this is preferred | installs requirements-base.txt offline from wheelhouse into site-packages |
+| `py-deps-media` | yes, this is preferred | requirements-media.txt + bakes HuggingFace models into the `echoflow-hf` cache mount, then `cp -a` to `/home/appuser/hf_baked` so the models persist into the layer (see "HuggingFace bake copy-to-layer" below) |
 | `api` | yes | web, celery, celery_feed, celery_beat — small image, no wheels/models |
 | `media` | yes | celery_media — `COPY --from=py-deps-media /home/appuser/hf_baked /home/appuser/.cache/huggingface`; runtime `HF_HOME=/home/appuser/.cache/huggingface` |
 
@@ -353,7 +353,6 @@ docker builder prune                                # CAREFUL — wipes dangling
 | `SENTRY_TRACES_SAMPLE_RATE` | Fraction of requests traced (0.0-1.0). Default: `0.1`. Lower for high-traffic. |
 | `SENTRY_PROFILES_SAMPLE_RATE` | Fraction of profiled requests. Default: `0.05`. |
 | `GRAFANA_ADMIN_PASSWORD` | Initial admin password for Grafana (first-boot only). Required — Grafana v11 refuses to start without one. |
-| `GRAFANA_ADMIN_PASSWORD` | Initial admin password for Grafana (first-boot only). Required — Grafana v11 refuses to start without one. |
 | `TERMS_VERSIONS` | Comma-separated consent versions (e.g. `v1.0,v1.1`). Used by `RegisterSerializer` and `ConsentAudit` (`terms_version_id`). Default: `v1.0`. See `settings.py:622`. |
 | `COMPLIANCE_OFFICER_NAME` | Chief Compliance Officer name (IT Rules 2021 Rule 4(1)(b)). Served by `/legal/compliance/`. Default: `EchoFlow Compliance Officer`. |
 | `COMPLIANCE_OFFICER_EMAIL` | CCO email. Default: `compliance@echoflow.in`. |
@@ -375,120 +374,17 @@ docker builder prune                                # CAREFUL — wipes dangling
 | `REVENUECAT_CLIP_DURATION_LIMIT_FREE` | Free tier max clip duration in seconds (default: `60`). |
 | `REVENUECAT_HD_QUALITY_BLOCKED_FREE` | Block HD quality for free users (default: `True`). |
 
+## Indian Regulatory Compliance
 
-## Indian Regulatory Compliance — Backend Changes
+Full compliance details (DPDP Act 2023, IT Rules 2021, CERT-In Directions 2022, Copyright Act 1957, Consumer Protection E-Commerce Rules 2020, RBI Data Localisation) are documented in [docs/INDIA-REGULATORY-READINESS.md](docs/INDIA-REGULATORY-READINESS.md). **Read that doc before touching any of these areas:**
 
-This section documents all backend changes made to comply with:
-- **DPDP Act 2023** (Digital Personal Data Protection Act) — consent, children's data, DPO, breach notification, cross-border
-- **IT Rules 2021** (Intermediary Guidelines) — grievance officer, nodal contact, compliance officer, traceability, content moderation
-- **CERT-In Directions 2022** — 180-day log retention, 6-hour breach notification
-- **Copyright Act 1957** — user upload licensing, attribution
-- **Consumer Protection (E-Commerce) Rules 2020** — grievance redressal, country of origin
-- **RBI Data Localisation** — financial data must reside in India
-
-### Phase A — DPDP Consent & Age Gating (COMPLETED)
-
-**Models (`backend/app/models.py`):**
-- Added `User.is_minor` (BooleanField, default=False) — computed from DOB at registration
-- Added `User.minor_consent_verified` (BooleanField, default=False) — parent consent for minors
-- Added `User.consent_accepted` (BooleanField, default=False) — explicit consent flag
-- Added `User.dob` (DateField, nullable) — date of birth for age gate
-- Added `User.parent_email` (EmailField, nullable) — for minor consent flow
-- Added `ConsentAudit` model (lines 61-77) — immutable audit trail: `user`, `consent_issued_at`, `terms_version_id`, `privacy_version_id`, `ip_address`, `user_agent`, `withdrawn_at`, `identity_retained_until` (CERT-In 180-day retention)
-- Added `CheckConstraint` on `AudioClip.likes`, `shares`, `skips`, `comment_count` >= 0 (DB-level negative counter prevention)
-
-**Serializers (`backend/app/serializers.py`):**
-- `RegisterSerializer` now requires `consent_accepted` (BooleanField, required=True) and `terms_version` (validated against `TERMS_VERSIONS` env var)
-- Added `dob` and `parent_email` fields for age gate
-- Validation logic computes `is_minor` from DOB; if minor, `minor_consent_verified` defaults False (requires parent flow)
-- Creates `ConsentAudit` row on successful registration (audit trail persists even if user creation rolls back)
-- Magic-byte audio validation (lines 16-21, 128-133) — pure-Python allowlist + python-magic layer-2 check before ffmpeg
-- Copyright acknowledgment enforcement (lines 178-191) — user must acknowledge before DB persistence
-- Duration probe at upload (lines 236-251) — prevents 24h WAV abuse via pydub/ffprobe
-- Comment text sanitization (lines 350-365) — null-byte / control-char stripping
-- `watch_time_ms` capped at 10h (lines 373-376) — prevents viewbot inflation
-
-**Views (`backend/app/views/auth.py`):**
-- Registration endpoint accepts consent fields, creates `ConsentAudit` via serializer
-- `/auth/register/` returns access + refresh tokens with consent confirmation
-
-**Tests (`backend/app/tests/test_auth_regulatory.py`, `test_security_and_validation.py`):**
-- `test_register_success` validates consent fields required
-- `test_user_has_dob_and_computed_is_minor` uses `date()` objects for DOB
-- Compliance endpoint requires auth + returns JSON
-
-### Phase B — Grievance & Compliance Officers (COMPLETED)
-
-**Models (`backend/app/models.py`):**
-- Added `Grievance` model (lines 269-295) — DB table per audit: `user`, `category`, `description`, `status`, `assigned_officer`, `resolution`, `created_at`, `resolved_at`, `escalated`, `ip_address`, `user_agent`
-- `Grievance.category` choices: `content`, `privacy`, `account`, `payment`, `other`
-- `Grievance.status` choices: `open`, `in_progress`, `resolved`, `rejected`, `escalated`
-- Added `AuditLog` model (lines 297-320) — CERT-In 180-day log retention: `user`, `action`, `resource_type`, `resource_id`, `metadata`, `ip_address`, `user_agent`, `created_at`
-- `AuditLog` indexes on `(user, -created_at)` and `(resource_type, resource_id)`
-
-**Settings (`backend/EchoFlow/settings.py`):**
-- Env-driven regulatory contacts (lines 643-657): `COMPLIANCE_OFFICER_EMAIL`, `GRIEVANCE_OFFICER_EMAIL`, `NODAL_CONTACT_EMAIL` (with defaults)
-- `TERMS_VERSIONS` env var (comma-separated) for consent versioning
-- `AWS_S3_REGION_NAME` assertion for `ap-south-1` / `ap-south-2` (DPDP + RBI)
-
-**Views (`backend/app/views/data_subject.py`):**
-- `/legal/compliance/` — returns officer contacts (IT Rules 4(1)(a)(b)(c))
-- `/auth/consent/withdraw/` — sets `ConsentAudit.withdrawn_at`, triggers 30-day cooling-off soft-delete (DPDP §14)
-- `/auth/data/export/` — DPDP §14 data portability: exports all user data as JSON
-- `/auth/data/delete/` — DPDP §14 right to erasure with CERT-In retention override
-
-**Tests (`backend/app/tests/test_system_health.py`, `test_auth_regulatory.py`):**
-- Grievance endpoint validation
-- Compliance endpoint requires auth + returns JSON
-
-### Phase C — Content Moderation Pipeline (COMPLETED)
-
-**Services (`backend/app/services/content_moderation.py`):**
-- v1 offline moderation: `sha256` fingerprint of normalized file + blocked-phrase list against lowercase transcript + AI tags
-- `AudioClip.moderation_approved` boolean gate (models.py:113) — HLS generation only runs when True
-- `process_audio_to_hls` task checks `moderation_approved` before processing
-- `FINGERPRINT_BLOCKLIST` module-level set (TODO: move to Redis for production)
-
-**Uploads (`backend/app/services/uploads.py`):**
-- `trigger_hls_processing` enqueues task only after moderation approval
-- `finalize_upload` no longer enqueues HLS task (flow changed)
-
-### CERT-In 180-Day Log Retention (COMPLETED)
-
-**Models (`backend/app/models.py`):**
-- `AuditLog` with `identity_retained_until = created_at + 180 days` (CERT-In §5(1))
-- `ConsentAudit.identity_retained_until = consent_issued_at + 180 days`
-- `Grievance` retains user identity for 180 days post-resolution
-
-**Middleware (`backend/app/middleware.py`):**
-- Request/response audit logging (lines 292-293) — DB write overhead accepted for audit trail
-- Correlation ID propagation for cross-service tracing
-
-### S3 Region Enforcement (COMPLETED)
-
-**Settings (`backend/EchoFlow/settings.py`):**
-- `STORAGES["default"]["OPTIONS"]["region_name"]` asserted to `ap-south-1` / `ap-south-2` / `auto` (lines 492-498)
-- Signed S3 URLs instead of public bucket (lines 467-479)
-
-### Environment Variables Required (see above)
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `TERMS_VERSIONS` | Comma-separated consent versions (e.g. `v1.0,v1.1`) | `v1.0` |
-| `COMPLIANCE_OFFICER_EMAIL` | CCO email (IT Rules 4(1)(b)) | `compliance@echoflow.in` |
-| `GRIEVANCE_OFFICER_EMAIL` | Grievance email (IT Rules 4(1)(a)) | `grievance@echoflow.in` |
-| `NODAL_CONTACT_EMAIL` | Nodal contact email (IT Rules 4(1)(c)) | `nodal@echoflow.in` |
-| `AWS_S3_REGION_NAME` | **Must be `ap-south-1` or `ap-south-2`** for DPDP/RBI | `auto` (prod must override) |
-| `PHYSICAL_ADDRESS` | Registered office (IT Rules / Consumer Protection) | Not yet exposed |
-
-### Remaining Gaps (Open)
-
-- Public clip endpoint needs `moderation_approved` filter (TODO in `docs/INDIA-REGULATORY-READINESS.md`)
-- Multilingual India-specific prohibited-content database to replace blocked phrase list (TODO in `services/content_moderation.py:19-20`)
-- Transcript text persistence from `process_audio_to_hls` task (TODO in `services/content_moderation.py:167-175`)
-- Takedown workflow endpoint (`POST /clips/{id}/takedown/`)
-- `pydub` temp-file stream for memory pressure (TODO in `serializers.py:250`)
-
+| Scenario / Application | Repo region to check first |
+|---|---|
+| User registration, consent, age gating | `backend/app/models.py` (User, ConsentAudit), `backend/app/serializers.py` (RegisterSerializer), `backend/app/views/auth.py` |
+| Grievance / compliance officer endpoints | `backend/app/models.py` (Grievance, AuditLog), `backend/app/views/data_subject.py` |
+| Content moderation pipeline | `backend/app/services/content_moderation.py`, `backend/app/services/uploads.py`, `backend/app/models.py` (AudioClip.moderation_approved) |
+| Settings (regulatory contacts, S3 region) | `backend/EchoFlow/settings.py` (lines 622, 643-657, 467-498) |
+| Audit logging / CERT-In 180-day retention | `backend/app/models.py` (AuditLog, ConsentAudit), `backend/app/middleware.py` |
 
 ## HTTPS / TLS Termination
 The stack now ships with an nginx reverse proxy in front of every other service. TLS is terminated at the edge; internal hops (nginx→gunicorn, nginx→minio) stay plain HTTP on the docker bridge. No application code knows TLS exists.
@@ -746,15 +642,21 @@ If you add a test that needs a system binary not present in the Docker image, fo
 - Tracked env files must have `DJANGO_DEBUG=False`. CI runs `scripts/check_no_tracked_env.sh` on every PR; a tracked env file with `DJANGO_DEBUG=True` will block the merge.
 - `HF_TOKEN` and `DJANGO_SECRET_KEY` in your local `.env` are real secrets. If you accidentally commit them, rotate them immediately.
 
-### `AGENTS.md` is tracked
+### Where decisions and lessons live
 
-`AGENTS.md` (this file) is checked into the repository and is the canonical quick-start for new coding agents. Update it whenever you:
+**Design decisions** (architecture, schema, API, security, deployment) go in `docs/EXPLAIN/decisions/YYYY-MM-DD-<slug>.md` — NOT in AGENTS.md. Append new decisions there and link from AGENTS.md only if the decision changes how the stack is operated.
+
+**Session lessons learnt** (gotchas, failure modes, test gaps) stay in AGENTS.md under [Session Learnings](#session-learnings--known-things) below — keep each entry to a tight bullet, max 3 lines.
+
+**DOs and DON'Ts** (from user corrections) accumulate in AGENTS.md under [DOs and DON'Ts](#dos-and-donts). When the user corrects a behavior, append the lesson here on your own — do not ask, just update.
+
+AGENTS.md is checked into the repo and is the canonical quick-start for coding agents. Update it when you:
 - add or change a required env var,
 - change the test command (e.g., new PYTHONPATH requirement),
 - move a major subsystem (e.g., a Celery task, a service, a queue),
-- discover a gotcha that the next agent will hit.
+- learn a lesson worth keeping.
 
-Keep changes minimal and additive — the file is read on every session. Don't add code snippets longer than ~10 lines; link to docs instead.
+Keep entries concise. Link to docs instead of inlining long explanations.
 
 ## Gotchas
 - `DEBUG = True` is hardcoded in `backend/EchoFlow/settings.py:15` — env-driven override exists (`DJANGO_DEBUG=False`). **MUST be `False` once the nginx terminator is live**, otherwise `SECURE_SSL_REDIRECT` 301-loops on the in-container `/health/` probe (the in-container healthcheck now sends `X-Forwarded-Proto: https` to compensate; the regression test `test_in_container_healthcheck_must_send_forwarded_proto` enforces this).
@@ -788,896 +690,74 @@ Keep changes minimal and additive — the file is read on every session. Don't a
 - `docs/EXPLAIN/DEPLOYMENT/` — Hybrid deployment documentation (VPS + laptop + Cloudflare R2 + Tailscale)
 - `docs/EXPLAIN/storage/04-hls-token-protection.md` — Short-lived HLS play token design (signed cookies + Cloudflare Worker / nginx njs)
 
-## Responsible Coding & Anti-Slop Protoco
-As an autonomous coding agent, your primary directive is **sustainable, high-signal execution**. You must prioritize long-term maintainability, security, and clarity over rapid, superficial code generation. 
-
-### 1. Anti-Slop Measures (Signal > Noise)
-- **No Obvious Comments**: Never write comments that explain *what* the code does (e.g., `# increment counter`). The code must be self-documenting through clear variable names and structure.
-- **Minimal Viable Changes**: Do not rewrite entire files when a 5-line fix suffices. Do not introduce new abstractions, design patterns, or dependencies unless explicitly requested or strictly necessary for the fix.
-- **No Hallucinated Dependencies**: Never import or suggest packages that do not exist or are not already in `requirements.txt`/`package.json` without explicitly asking for permission to add them.
-- **Zero Dead Code**: Do not leave commented-out code blocks, unused imports, or placeholder variables (`pass`, `TODO: implement later` without a concrete plan).
-
-### 2. Decision Logging (The "Why", Not the "What")
-You must record architectural and logical decisions directly in the codebase using strict, standardized tags. This is for future developers (and future you) to understand the *rationale*, not the syntax.
-- **`// DECISION:`** Use when choosing one valid approach over another. Include the tradeoff. 
-  *Example: `// DECISION: Using raw SQL here instead of Django ORM to bypass N+1 query bottleneck. Tradeoff: Less portable, but 10x faster for this specific vector join.`*
-- **`// TODO:`** Must be actionable, assigned (if applicable), and time/context-bound. 
-  *Example: `// TODO: Replace hardcoded 30s timeout with environment variable before production deploy.`*
-- **`// HACK:`** Use only when a suboptimal solution is temporarily required. Must include a `TODO` explaining how to fix it properly.
-- **`// SECURITY:`** Explicitly note why a specific pattern was chosen to mitigate a risk (e.g., `// SECURITY: Using BuildKit secrets here to prevent HF_TOKEN leakage in Docker layer history`).
-
-### 3. User Communication Protocol
-Before outputting any code, you must provide a **Change Summary**. Do not just dump code. The summary must include:
-1. **The Root Cause**: A one-sentence diagnosis of the actual problem.
-2. **The Decisions Made**: A bulleted list of key architectural or logical choices you made and *why*.
-3. **The Tradeoffs**: What was sacrificed (e.g., speed, readability, strictness) and why it was acceptable.
-4. **Action Required**: Explicit, step-by-step instructions for the user to verify, test, or clean up after the change (e.g., "Run `docker compose down -v` to clear stale migration state").
-
-### 4. Technical Guardrails
-- **Security First**: Never hardcode secrets, tokens, or passwords. Always default to environment variables or secret managers. Assume all input is malicious; validate and sanitize at the boundary.
-- **Fail Fast, Fail Loud**: Do not silently catch and ignore exceptions. Let errors surface with clear context, or handle them with explicit fallback logic.
-- **Testability**: Write code that can be easily unit-tested. Avoid tight coupling to global state, singletons, or external I/O without dependency injection.
-- **Idempotency**: Ensure scripts, migrations, and setup commands can be run multiple times without causing errors or corrupting state.
-
-### 5. The "Stop and Ask" Rule
-If a request is ambiguous, requires a significant architectural shift, or involves a tradeoff that impacts security, performance, or data integrity, **stop**. Do not guess. Present the options, their second-order effects, and ask the user for a decision before generating code.
-
 ---
-# EchoFlow — Agent Engineering Rules
 
-## 1. Mission
+## Engineering Principles
 
-Make the repository more correct, maintainable, secure, testable, observable, and reliable.
+The following principles govern all code changes. These are standard SWE best practices distilled from the full protocol:
 
-Prefer root-cause fixes over symptom fixes, minimal changes over unnecessary rewrites, and evidence over assumptions.
+**Truth Protocol:** Source code > migrations > tests > config > docs > comments. Never invent behavior to reconcile conflicts; investigate instead.
 
-Do not optimize for the number of files or lines changed. Optimize for correctness and long-term maintainability.
+**Golden Rules:**
+- Understand before changing; root-cause fixes over symptoms
+- Minimal viable changes; no "while I'm here" cleanup
+- Never add a dependency without checking it exists in the repo first
+- Tests are part of the implementation; don't delete/weaken/skip without justification
+- Get approval before architecture/API/schema/security/deployment changes
+- Design for failure: retries, idempotency, race conditions, partial completion
+
+**Git Safety:** Use a dedicated branch. Never `git reset --hard`, `git clean`, or `git push --force` without explicit authorization.
+
+**Documentation:** Put repo-specific notes in `docs/EXPLAIN/`. Use `DECISION:` / `SECURITY:` / `HACK:` / `TODO:` tags in code.
+
+**For complex tasks touching approval gates (architecture, APIs, schemas, auth, security, deployment):**
+Produce a design doc at `docs/EXPLAIN/decisions/YYYY-MM-DD-<slug>.md` with Changes Needed, How Changes Will Be Made, Why This & Not Anything Else, Files Affected, Architecture & Data Flow, Test Cases, Edge Cases, Atomic Commit Plan. Get explicit approval before implementing.
+
+## Distributed-System & Security Reminders
+
+When changing distributed workflows (Django, PostgreSQL/pgvector, Redis, Celery, MinIO/S3, FFmpeg/HLS, ML workers), consider: duplicate execution, retries, idempotency, race conditions, ordering, stale data, worker failure, process restart, partial completion, timeouts, resource exhaustion, network failure.
+
+Never assume a task runs exactly once unless the system guarantees it. For every retryable operation, ask whether repeating it is safe.
+
+**Media and Storage Invariants:** original uploads live in object storage; HLS output is generated in local worker scratch space then uploaded; containers must not assume a shared filesystem; HLS playback uses token-gated `hls/` paths (signed cookies); original `uploads/` remain private (signed S3 URLs); local scratch files must be cleaned up after processing. Verify in `settings.py`, `media_urls.py`, `tasks.py`, `docker-compose.yml` before modifying.
+
+**Security:** Never hardcode secrets. Treat all input as untrusted. Validate/sanitize at boundaries. Before changing security-sensitive code, consider auth, authorization, injection, SSRF, path traversal, command execution, secret leakage, sensitive-data exposure, race conditions. For DB changes, inspect migrations, existing data, locking, rollback, compatibility.
+
+## Session Learnings & Known Things
+
+Durable, repo-specific knowledge. Append a concise entry at the end of each session.
+
+### YYYY-MM-DD — <short slug>
+**Learned:** 1-3 tight bullets.
+**Changed:** Files/migrations/tests affected.
+**Open:** Anything unresolved.
 
 ---
 
-## 2. Repository Truth Protocol
+### 2026-09-07 — media-image-build + test-suite-greening + db-init-rewiring
+**Learned:**
+- BuildKit `--mount=type=cache` paths are invisible to other build stages — `cp -a` to a real path before `COPY --from`.
+- `AudioClip.cover_image` was in the model with no migration → 71 fixture-error cascade. Fix: `makemigrations`. CI guard (`makemigrations --check`) not yet wired.
+- `ai_ml/scrapers/uploader.py` relative import `..models` resolves to `ai_ml.models`; use absolute `from backend.app.models import AudioClip`.
+- Postgres `docker-entrypoint-initdb.d` scripts run against `POSTGRES_DB`, not `template1` — vector on template1 needs its own `\c template1` script in alphabetical order (`00→01→02`).
+- Init scripts only run on fresh data volumes — `docker volume rm` needed to re-trigger.
+- `TestLiveNginxTerminator` false-fails when main stack's nginx is up — fixture only checks TCP connect, not upstream correctness.
 
-The repository is evolving. Documentation may become stale.
+**Changed:** Dockerfile (`cp -a` + COPY path), `migrations/0002_audioclip_cover_image.py`, uploader.py import fix, 3 postgres-init SQL scripts, docker-compose.yml db mount, CI workflow.
 
-When sources disagree, use this priority:
-
-1. Current source code and executable configuration
-2. Database migrations and schemas
-3. Tests and CI workflows
-4. Deployment/configuration files
-5. Current documentation
-6. Historical notes/comments
-
-Never invent behavior to reconcile conflicting documentation.
-
-When a conflict is discovered, report:
-
-* documented behavior
-* actual behavior
-* likely cause of the divergence
-* whether documentation should be updated
-
-Before making architectural changes, inspect the relevant execution path, callers, consumers, configuration, tests, and deployment assumptions.
+**Open:** `TestLiveNginxTerminator` fix (probe response body); `makemigrations --check` in CI.
 
 ---
 
-## 3. Understand Before Changing
+## DOs and DON'Ts
 
-Before a non-trivial change:
+Accumulated from user corrections. Append on your own when corrected.
 
-* inspect repository structure
-* inspect relevant modules and entry points
-* trace the data/control flow
-* identify callers and consumers
-* inspect configuration and dependencies
-* inspect related tests
-* inspect migrations/schema when relevant
-* inspect deployment/runtime assumptions
-* inspect Git state
+| DO | DON'T |
+|---|---|
+| Decisions → `docs/EXPLAIN/decisions/`, not AGENTS.md | Inlining long regulatory/explanatory content |
+| Lessons learned → AGENTS.md, max 3 lines per bullet | Listing full decision rationale in AGENTS.md |
+| DOs/DON'Ts → AGENTS.md, updated automatically on correction | Duplicating env-var tables across sections |
+| Link to docs instead of inlining | Asking permission to correct AGENTS.md after a user correction |
 
-Find the earliest incorrect point.
-
-Ask:
-
-* What happens now?
-* What should happen?
-* Where do they diverge?
-* Why did the current implementation reach this state?
-* What depends on it?
-* Is the proposed change fixing the cause or only the symptom?
-* What second-order effects could occur?
-
-Do not modify code merely because something looks unusual. First determine why it exists.
-
-Understand the architecture and how everything works to make sure you write code. Have a very detailed understanding of the code implimentation and be sure to discus these details with operator at very high verbosity and clarity.
-
----
-
-## 4. Change Scope
-
-Prefer the smallest safe change that fully solves the problem.
-
-Do not combine unrelated:
-
-* refactors
-* formatting changes
-* dependency upgrades
-* renames
-* cleanup
-* architecture changes
-
-Do not introduce new abstractions, services, frameworks, or dependencies unless they solve a demonstrated problem.
-
-Do not perform "while I'm here" cleanup.
-
-If another issue is discovered but does not block the requested task, document it separately rather than silently expanding scope.
-
----
-
-## 5. Approval Gates
-
-Work autonomously on local, reversible, convention-preserving implementation details.
-
-Ask before decisions that materially affect:
-
-* architecture
-* public APIs
-* database schemas
-* persistent data
-* authentication/authorization
-* security boundaries
-* compatibility
-* deployment
-* production behavior
-* dependencies
-* resource/cost requirements
-* irreversible operations
-
-Never delete, reset, overwrite, or discard user work without explicit approval.
-
-Never run destructive commands such as:
-
-```bash
-git reset --hard
-git clean
-git push --force
-```
-
-without explicit authorization.
-
-If deletion appears necessary, explain what is being removed, what depends on it, what will be lost, and the safer alternatives.
-
-### 5.1 Audit Verification
-
-When working from an existing audit or bug report, every "Confirmed" finding must be re-verified against the actual current source before fixing. Audit documents are often written against older snapshots. A direct `Read` of the cited file and line is the minimum verification; `Grep` across the codebase to confirm the bug pattern (or its absence) is preferred. Report confirmed true positives, confirmed false positives with evidence, and unverified findings separately. Do not "fix" a finding that the source contradicts — instead, update the audit doc to reflect reality.
-
----
-
-## 6. Git Safety
-
-Before meaningful work:
-
-```bash
-git status
-git branch --show-current
-git worktree list
-```
-
-Preserve uncommitted user changes.
-
-Never revert or overwrite unrelated work.
-
-For risky changes:
-
-1. Always create a dedicated branch/Worktree from the current working branch/Worktree
-2. make the smallest required change
-3. validate
-4. review the complete diff
-5. commit coherently
-6. push only when explicitly authorized
-
-Never push automatically.
-Command to add a new worktree : git worktree add <path-to-new-directory> -b <new-branch-name>
-Never rewrite shared history without explicit authorization.
-
----
-
-## 7. Coding Standards
-
-Follow existing repository conventions.
-
-Prefer:
-
-* clear names
-* simple control flow
-* explicit error handling
-* bounded resource usage
-* reusable existing utilities
-* deterministic behavior where practical
-* idempotent operations
-* atomic database updates where required
-
-Avoid:
-
-* unnecessary abstractions
-* dead code
-* commented-out implementations
-* unused imports
-* arbitrary sleeps
-* silent exception swallowing
-* magic flags added only to hide failures
-* speculative optimization
-
-Never add a dependency without first checking whether the repository already provides the required capability.
-
----
-
-## 8. Comments and Decision Logging
-
-Comments should explain **why**, not **what**.
-
-Add a decision comment only when a future developer might incorrectly "simplify" or replace the implementation without understanding an important constraint.
-
-Use:
-
-```text
-DECISION:
-SECURITY:
-HACK:
-TODO:
-```
-
-when appropriate.
-
-A `DECISION` comment should explain the chosen approach and the important trade-off.
-
-### DECISION / HACK / SECURITY / TODO tag patterns used in Agents 1-4
-
-The following patterns were applied across changed files (`serializers.py`, `middleware.py`, `models.py`, `settings.py`, `services/content_moderation.py`, `urls.py`, `views/auth.py`, `tests/test_auth_regulatory.py`):
-
-- **`DECISION:`** — `models.py:62-65` (DB audit table over file logs); `models.py:103-105` (DB-level negative counter constraints); `models.py:145-149` (CheckConstraint migration required); `middleware.py:292-293` (DB write overhead accepted for audit); `serializers.py:240-244` (pydub over ffprobe); `services/content_moderation.py:7` (v1 sha256 + blocked phrase list, offline); `services/content_moderation.py:92-94` (sha256 fingerprint sufficient for v1); `serializers.py:124` (serializer-level file validation before model); `settings.py:172-189` (psycopg2 `options` string for timeouts); `settings.py:204-233` (read-replica activation only when `READ_DATABASE_URL` set); `settings.py:245-252` (split Redis to prevent feed-spike eviction of queued tasks); `settings.py:454-456` (STORAGES dict over deprecated STATICFILES_STORAGE); `settings.py:621-629` (env-driven regulatory contacts); `AGENTS.md` (this note).
-- **`SECURITY:`** — `serializers.py:16-21` (pure-Python magic-byte allowlist as first defense); `serializers.py:128-133` (python-magic layer-2 check); `serializers.py:178-191` (copyright acknowledgment enforcement before DB persistence); `serializers.py:236-251` (duration probe at upload time to prevent 24h WAV abuse); `serializers.py:373-376` (watch_time_ms capped at 10h to prevent viewbot inflation); `serializers.py:350-365` (comment text null-byte / control-char stripping); `middleware.py:60` (audit DB failure never breaks request); `settings.py:86-88` (token_blacklist + rotation); `settings.py:467-479` (signed S3 URLs instead of public bucket); `models.py:192-195` (user identity retention for CERT-In); `services/content_moderation.py:12-14` (blocked-phrase check against lowercase transcript); `tests/test_auth_regulatory.py:52-60` (compliance endpoint requires auth + returns JSON).
-- **`HACK:`** — `models.py:294-295` (audit endpoint uses path only, no query params, to limit PII); `middleware.py:47-48` (audit DB write in finally block may fail silently if DB down — acceptable tradeoff); `serializers.py:246-250` (reading full upload into memory for pydub; needs temp-file stream if memory pressure grows); `services/content_moderation.py:16-18` (fingerprint blocklist is module-level set, not DB/Redis — production upgrade needed); `services/content_moderation.py:167-175` (AudioClip has no `transcript_text` field; moderation skips transcript check if missing — proper integration requires task-level transcript persistence).
-- **`TODO:`** — `serializers.py:250` (temp-file stream for pydub); `services/content_moderation.py:19-20` (multilingual India-specific prohibited-content database; replace blocked phrase list); `settings.py:378-379` (remove `flush_telemetry_legacy` after one stable cycle); `services/content_moderation.py:167-175` (transcript text persistence from `process_audio_to_hls` task); `docs/INDIA-REGULATORY-READINESS.md` (public clip endpoint needs `moderation_approved` filter).
-
-### Content Moderation Pipeline Design Note (Agent 2 / v1)
-
-The moderation pipeline (`services/content_moderation.py`) uses:
-
-1. `sha256` fingerprint of normalized file content (`DECISION`: sufficient for v1, no external dependency).
-2. Blocked-phrase substring match against lowercase transcript and AI tags (`SECURITY`: defense-in-depth before HLS generation).
-3. `AudioClip.moderation_approved` boolean (`models.py:113`) as gate: `process_audio_to_hls` should NOT run until `True`.
-
-Production upgrade options (open):
-- Move fingerprint blocklist to Redis (`_FINGERPRINT_BLOCKLIST` currently module-level set; `HACK` at line 16).
-- Replace blocked-phrase list with multilingual classifier or external moderation API (`TODO` at line 19).
-- Implement `StagingClip` promotion (audit doc proposes Option B) instead of `moderation_approved=False` on `AudioClip`.
-
-No extra `docs/EXPLAIN/` document is required unless the user explicitly requests one; the design notes above are sufficient per `AGENTS.md` §15.
-
-
-
-A `HACK` must explain why the workaround exists and what the proper replacement is.
-
-Do not add comments for obvious code behavior.
-
----
-
-## 9. Security and Data Safety
-
-Never hardcode secrets, passwords, tokens, private keys, or credentials.
-
-Treat all external input as untrusted.
-
-Before changing security-sensitive code, consider:
-
-* authentication
-* authorization
-* validation
-* injection
-* SSRF
-* path traversal
-* command execution
-* secret leakage
-* sensitive-data exposure
-* race conditions
-
-Do not weaken a security boundary merely to make an error disappear.
-
-For database changes, inspect migrations, existing data, dependencies, locking behavior, rollback strategy, and compatibility before modifying schemas.
-
-Never casually delete or rewrite persistent data.
-
----
-
-## 10. Distributed-System Rules
-
-EchoFlow uses Django, PostgreSQL/pgvector, Redis, Celery, object storage, FFmpeg, and ML processing.
-
-When changing distributed workflows, explicitly consider:
-
-* duplicate execution
-* retries
-* idempotency
-* race conditions
-* ordering
-* stale data
-* worker failure
-* process restart
-* partial completion
-* timeouts
-* resource exhaustion
-* network failure
-
-Never assume a task runs exactly once unless the system guarantees it.
-
-For every retryable operation, ask whether repeating it is safe.
-
----
-
-## 11. Media and Storage Invariants
-
-Respect the current object-storage architecture.
-
-Current invariants include:
-
-* original uploads live in object storage
-* HLS output is generated in local worker scratch space
-* generated HLS files are uploaded to object storage
-* containers must not assume a shared filesystem
-* HLS playback uses a **token-gated** `hls/` storage path (signed cookies validate at the Cloudflare Worker or nginx edge)
-* original `uploads/` remain private (signed S3 URLs)
-* browser-visible storage endpoints may differ from internal container endpoints
-* local scratch files must be cleaned up after processing
-
-Do not replace object storage with shared local volumes merely to simplify implementation.
-
-Verify current storage behavior in `settings.py`, `media_urls.py`, `tasks.py`, and `docker-compose.yml` before modifying it.
-
----
-
-## 12. API and Compatibility
-
-Before changing an API contract, inspect:
-
-* backend callers
-* frontend callers
-* serializers
-* authentication requirements
-* response formats
-* tests
-* documentation
-
-Prefer additive and backward-compatible changes where practical.
-
-Do not silently rename or remove endpoints, fields, parameters, status codes, or authentication behavior.
-
----
-
-## 13. Testing and Validation
-
-Tests are part of the implementation.
-
-For bug fixes:
-
-1. reproduce the problem when practical
-2. identify the root cause
-3. implement the fix
-4. add or update regression coverage
-5. run the relevant tests
-6. run broader validation when the change affects shared infrastructure
-
-Use the repository's actual validation mechanisms. Do not assume the README or AGENTS.md is current.
-
-Never:
-
-* delete failing tests
-* weaken assertions
-* skip failures without justification
-* change tests merely to make CI green
-* claim validation that was not performed
-
-Report exactly what was executed and what was not.
-
----
-
-## 14. Failure-Oriented Reasoning
-
-For important workflows ask:
-
-* What happens if this fails?
-* What happens if it fails twice?
-* What if the response is lost?
-* What if two workers execute simultaneously?
-* What if the process crashes halfway through?
-* What happens after restart?
-* Can the operation be retried safely?
-* Can stale state survive?
-* Can an operator understand what happened?
-* What is the recovery path?
-
-Design for realistic failure, not only the happy path.
-
----
-
-## 15. Documentation
-
-Update documentation when changing:
-
-* architecture
-* APIs
-* configuration
-* deployment
-* operational procedures
-* important behavior
-
-Whenever you are doing somethng that is not mentioned "explicitly" in user's prompt, then you must inform the user about the following :
-- what it is 
-- why it is needed
-- pros
-- cons
-- how it works
-
-Repository-specific explanations belong under:
-
-```text
-/docs/EXPLAIN/
-```
-
-That directory should contain detailed documentation of:
-
-* architecture
-* data flow
-* frontend
-* backend
-* APIs
-* models
-* functions
-* AI/ML pipeline
-* recommendations
-* Redis/Celery
-* media/HLS
-* object storage
-* scraping
-* authentication
-* deployment
-* testing
-* failure modes
-* design decisions
-* trade-offs
-* known limitations
-
-Do not document behavior that does not exist.
-
----
-
-## 16. Final Review
-
-Before declaring meaningful work complete, verify:
-
-### Correctness
-
-Did the change fix the root cause?
-
-### Scope
-
-Did unrelated code change?
-
-### Security
-
-Were secrets protected? Were security boundaries preserved?
-
-### Compatibility
-
-Were existing consumers/contracts preserved?
-
-### Testing
-
-What was actually tested?
-
-### Operations
-
-What happens under restart, failure, concurrency, and partial completion?
-
-### Documentation
-
-Does the repository documentation still describe the implementation?
-
-### Git
-
-Is the branch/Worktree correct? Is the diff clean? Are unrelated files excluded?
-
-### Uncertainty
-
-What could not be verified?
-
----
-
-## Golden Rule
-
-Before changing code, understand it.
-
-Before deleting code, prove it can be deleted.
-
-Before changing behavior, identify who depends on it.
-
-Before changing a schema, understand the data.
-
-Before changing an API, understand its consumers.
-
-Before adding a dependency, prove it is necessary.
-
-Before making a risky operation, obtain approval.
-
-Before declaring success, validate it.
-
-When documentation conflicts with implementation, investigate instead of guessing.
----
-
-## Interactive Design Review Protocol
-
-**This is a standing rule for all future sessions.** It applies whenever a task touches any of the trigger conditions in §5 (Approval Gates) of the Agent Engineering Rules:
-- architecture / public APIs / database schemas / persistent data
-- authentication / authorization / security boundaries / compatibility
-- deployment / production behavior / dependencies / resource requirements
-- irreversible operations
-
-**For small, self-contained tasks that do NOT trigger §5 (e.g., typo fixes, single-test additions, doc updates), this protocol may be skipped.**
-
----
-
-### The Protocol (Mandatory Sequence)
-
-1. **READ DEEPLY** — Before any proposal, inspect:
-   - Referenced spec/design doc (if any)
-   - Relevant source files, tests, migrations, configs, deployment files
-   - Callers, consumers, dependencies, data flows, failure paths
-   - Existing tests — what they guarantee and what they don't
-
-2. **QUESTION RELENTLESSLY** — Block progress with explicit questions until:
-   - Every ambiguity is resolved
-   - Every architectural decision is explicitly made
-   - Edge cases, failure modes, rollback paths are discussed
-   - You confirm the approach (or redirect)
-
-3. **PRODUCE DESIGN DOC** — Write a per-task design document at:
-   `docs/EXPLAIN/decisions/YYYY-MM-DD-<feature-slug>.md`
-   
-   The doc **must** contain these sections (matching your spec):
-   - **Changes Needed** — exhaustive list of what changes
-   - **How Changes Will Be Made** — step-by-step implementation approach
-   - **Why This & Not Anything Else** — tradeoffs, alternatives considered, rationale; include `DECISION:`, `SECURITY:`, `HACK:`, `TODO:` tags inline
-   - **Files Affected** — exact paths, symbols, line ranges where known
-   - **Architecture & Data Flow** — before/after diagrams (text), control/data flow traces
-   - **Test Cases** — existing coverage, gaps, new tests required
-   - **Edge Cases & Critical Code Details** — only the important ones
-   - **Atomic Commit Plan** — pre-listed commit units (one logical change per commit)
-
-4. **YOUR APPROVAL** — I do not write code until you explicitly greenlight the design doc.
-
-5. **IMPLEMENT** — Follow the atomic commit plan; update the design doc if reality diverges.
-
-6. **LOG LEARNINGS** — At session end, append to the Session Learnings section (see below).
-
----
-
-### Anti-Patterns (What This Protocol Prevents)
-
-| Anti-pattern | Protocol enforcement |
-|--------------|----------------------|
-| Code written before design approved | Step 4 is a hard gate |
-| Design doc missing edge cases | Template requires Edge Cases section |
-| Design doc not created | Step 3 is mandatory for §5-triggering tasks |
-| Assumptions silent | Step 2 forces explicit Q&A |
-| Commits not atomic | Atomic Commit Plan in design doc |
-| Learnings lost | Session Learnings section updated every session |
-
----
-
-### Linkage to Existing Rules
-
-- **§3 Understand Before Changing** — this protocol operationalizes it
-- **§5 Approval Gates** — the trigger conditions are identical
-- **§13 Testing** — design doc must specify validation strategy
-- **§15 Documentation** — design doc *is* the decision record; AGENTS.md stays lean
-- **Multi-Agent Protocol §4** — planning-before-implementation aligns with Step 3 here
-
----
-
-# Multi-Agent Engineering Protocol
-
-## Core Principle
-
-For any non-trivial task, decompose the work across multiple specialized sub-agents for both planning and implementation. Do not tackle large cross-cutting problems as a single-agent monolith.
-
-The lead agent owns:
-
-* problem definition and decomposition
-* agent assignment and coordination
-* conflict resolution across agents
-* integration of deliverables
-* verification of the complete solution
-* final architectural judgment
-
-Sub-agents contribute evidence and implementation; the lead agent retains accountability for correctness.
-
-## 1. Understand Before Spawning Agents
-
-Before launching implementation agents, thoroughly inspect the relevant code, tests, architecture, configuration, documentation, data flow, and existing failure-handling mechanisms.
-
-For previously reported bugs or audit findings:
-
-* Treat historical fixes as **claims requiring verification**, not established facts
-* Verify whether the problem still exists in the current codebase
-* Identify the actual root cause before changing any code
-* Determine whether previous fixes already altered adjacent behavior
-* Search the repository for all callers, dependencies, duplicated logic, and affected state transitions
-* Do not blindly repeat, revert, or "fix" documented issues without current evidence
-
-For EchoFlow specifically, always consider interactions across Django/DRF, PostgreSQL/pgvector, Redis, Celery, MinIO/S3, FFmpeg/HLS, ML workers, APIs, and frontend contracts.
-
-## 2. Decompose by Domain
-
-Split large missions into independent domains and assign specialized agents where appropriate:
-
-* architecture / system design
-* backend / Django / API
-* database / migrations / PostgreSQL / pgvector
-* Redis / caching / queues
-* Celery / concurrency / distributed execution
-* media / FFmpeg / storage / HLS
-* ML / inference / resource usage
-* security / abuse / authentication / authorization
-* performance / scalability / load
-* reliability / failure recovery / idempotency
-* testing / adversarial testing / regression prevention
-* deployment / Docker / CI/CD / operations
-* observability / logging / metrics / tracing
-* frontend / API contract validation
-
-Create additional specialists whenever the problem crosses a meaningful boundary.
-
-## 3. Parallel Execution
-
-Run independent investigations and implementations in parallel when they do not share mutable files or decisions.
-
-Every sub-agent must receive:
-
-* exact objective
-* relevant files and directories
-* known constraints
-* suspected interactions and conflicts
-* expected deliverable
-* explicit instruction not to modify unrelated areas
-
-Agents must report:
-
-1. what they inspected
-2. whether the problem actually exists
-3. root cause
-4. affected components and dependencies
-5. proposed solution
-6. tradeoffs
-7. edge cases
-8. tests required
-9. files changed
-10. remaining risks
-
-Do not parallelize tasks that depend on an unresolved architectural decision or modify the same critical files simultaneously.
-
-## 4. Planning Before Implementation
-
-For complex work, first produce a shared mission plan containing:
-
-* problem inventory
-* dependency graph
-* root causes
-* proposed fix order
-* conflicts between fixes
-* parallelizable work
-* sequential work
-* verification strategy
-* rollback and recovery considerations
-
-Fix ordering should normally follow:
-
-**root causes → foundational/infrastructure changes → simple fixes → dependent changes → difficult/high-risk changes → hardening → verification**
-
-Do not optimize for the number of changes. Optimize for eliminating the underlying failure mode.
-
-## 5. Implementation Standards
-
-Prefer small, coherent, independently verifiable changes.
-
-Agents must:
-
-* preserve existing behavior unless the task requires changing it
-* avoid speculative refactors
-* avoid duplicate implementations
-* preserve compatibility with existing APIs and data where possible
-* explain important architectural decisions in code comments
-* add or update tests with behavioral changes
-* inspect existing tests before creating new ones
-* never silently weaken validation, security, durability, or failure handling to make tests pass
-
-Ask the user before destructive, irreversible, externally impactful, or genuinely ambiguous decisions.
-
-## 6. Conflict Prevention
-
-Before modifying shared functionality, search for:
-
-* callers
-* imports
-* subclasses
-* serializers
-* tasks
-* signals
-* migrations
-* API consumers
-* configuration dependencies
-* tests
-* documentation assumptions
-
-When two agents propose conflicting solutions, halt implementation and compare them at the system level.
-
-Prefer the solution that:
-
-* removes the root cause
-* minimizes coupling
-* is safe under concurrency
-* remains correct under failure
-* scales with realistic load
-* preserves observability
-* is maintainable long term
-
-Never merge competing fixes merely because both appear locally correct.
-
-## 7. Verification Is Mandatory
-
-Every implementation must be independently verified.
-
-At minimum:
-
-* run targeted tests
-* run affected integration tests
-* run the broader test suite when practical
-* inspect migrations and schema changes
-* verify container startup
-* verify relevant services communicate correctly
-* verify failure paths
-* inspect logs and errors
-* test concurrency-sensitive behavior
-* test retry and idempotency behavior
-* test degraded dependencies
-
-For infrastructure changes, restart or rebuild the affected containers and verify behavior from a clean state.
-
-Do not consider a fix complete because the happy-path test passes.
-
-## 8. Adversarial and Production Testing
-
-For every significant change, explicitly consider:
-
-* malformed input
-* missing input
-* invalid authentication
-* authorization bypass
-* duplicate requests
-* replayed requests
-* concurrent requests
-* race conditions
-* retries
-* task duplication
-* partial failure
-* database failure
-* Redis failure
-* worker failure
-* storage failure
-* network timeouts
-* stale cache
-* corrupted files
-* oversized uploads
-* resource exhaustion
-* memory leaks
-* CPU exhaustion
-* queue overload
-* abusive users
-* scripted clients
-* request floods / DoS
-* algorithm manipulation
-* data corruption
-* migration failure
-* restart and recovery scenarios
-
-Add regression tests for important failure modes, not merely the original bug.
-
-## 9. EchoFlow-Specific Priorities
-
-When working on EchoFlow, pay particular attention to:
-
-* API correctness and backward compatibility
-* PostgreSQL integrity and transaction boundaries
-* pgvector dimensions and index behavior
-* Redis cache and queue failure semantics
-* Celery task idempotency and duplicate execution
-* feed generation and fallback behavior
-* telemetry aggregation and database pressure
-* global metric batch processing
-* ML model memory and CPU isolation
-* FFmpeg failure handling
-* HLS and object-storage consistency
-* MinIO and S3 semantics
-* media upload validation
-* authentication and authorization
-* rate limiting and abuse resistance
-* user and content enumeration
-* observability and correlation across API → task → storage
-* Docker and container startup with dependency readiness
-
-Never assume a component is isolated merely because its code lives in a separate file or service.
-
-## 10. Agent Handoffs
-
-When an agent finishes, the lead agent must review its findings before relying on them.
-
-Implementation agents must provide enough detail for another agent to reproduce and audit the reasoning.
-
-Review agents should actively try to disprove the implementation, not merely confirm it.
-
-Useful review roles include:
-
-* correctness reviewer
-* security reviewer
-* concurrency reviewer
-* scalability reviewer
-* failure-mode reviewer
-* test-gap reviewer
-
-A fix that survives independent review is preferred over one validated only by its author.
-
-## 11. Git Discipline
-
-For a large multi-agent mission:
-
-* create one dedicated branch or Worktree for the mission
-* never work directly on the main branch
-* keep commits small and logically grouped
-* commit verified units of work frequently
-* do not commit known-broken intermediate states unless explicitly necessary
-* inspect diffs before committing
-* ensure one agent does not overwrite another agent's changes
-* never force-push or rewrite history without explicit authorization
-
-The lead agent is responsible for integration and final branch/Worktree integrity.
-
-## 12. Completion Standard
-
-A task is complete only when:
-
-**the problem is reproduced or otherwise proven → root cause is understood → fix is implemented → affected behavior is tested → adversarial cases are tested → integrations are verified → containers and services are healthy → regressions are checked → architectural tradeoffs are acceptable → changes are documented and committed.**
-
-"Tests pass" alone is not completion.
-
-## 13. Communication Standards
-
-Prefer evidence over assumptions.
-
-Agents should explicitly distinguish:
-
-* confirmed facts
-* inferred behavior
-* hypotheses
-* unresolved risks
-
-When uncertain, investigate the repository, tests, runtime behavior, or history before guessing.
-
-The lead agent should continuously track:
-
-* what is known
-* what is being investigated
-* what has been changed
-* what remains
-* which decisions are still reversible
-* which risks remain
-
-The objective is not to make the most changes or finish fastest. The objective is to produce a system that remains correct under **real users, concurrency, failures, abuse, deployment, and future growth**.
+_(No user-corrected entries yet — add rows above as corrections come in.)_

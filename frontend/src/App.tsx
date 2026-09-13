@@ -10,15 +10,14 @@ import { ExplorePage } from "./pages/Explore";
 import { UploadPage } from "./pages/Upload";
 import { InboxPage } from "./pages/Inbox";
 import { ProfilePage } from "./pages/Profile";
-import { AuthModal } from "./components/auth/AuthModal";
+import { LoginPage } from "./pages/Login";
 import { shareAPI } from "./api/client";
 
 const MainContent: React.FC = () => {
-  const { isAuthenticated: _isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<string>("feed");
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [targetProfileUserId, setTargetProfileUserId] = useState<number | null>(null);
 
   // Poll unread count every 30s as specified in Section 4.7
@@ -52,6 +51,11 @@ const MainContent: React.FC = () => {
   const handleBackToMyProfile = () => {
     setTargetProfileUserId(null);
   };
+
+  // Show login page when not authenticated
+  if (!isAuthenticated && !isLoading) {
+    return <LoginPage />;
+  }
 
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] flex flex-col selection:bg-[#FF6321] selection:text-black font-sans">
@@ -111,16 +115,6 @@ const MainContent: React.FC = () => {
         onClose={() => setIsOnboardingOpen(false)}
         onInitialized={() => {
           setIsOnboardingOpen(false);
-          setActiveTab("feed");
-        }}
-      />
-
-      {/* Auth Modal */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        onLoginSuccess={() => {
-          refreshUnreadCount();
           setActiveTab("feed");
         }}
       />

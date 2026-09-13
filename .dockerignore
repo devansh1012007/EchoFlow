@@ -38,7 +38,8 @@ cache
 
 # Frontend (built/served separately, not needed in backend images)
 frontend
-
+mobile
+ai_ml/scrapers
 # NOTE: wheelhouse/ MUST stay in the build context — the Dockerfile COPYs it.
 
 # Docker
