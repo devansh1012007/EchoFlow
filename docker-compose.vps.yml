@@ -308,6 +308,8 @@ services:
       echoflow:
         ipv4_address: 172.28.0.13
     depends_on:
+      web:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis_broker:
