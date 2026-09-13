@@ -1,0 +1,39 @@
+make wheelhoue api only:
+
+mkdir -p wheelhouse-new
+
+docker run --rm \
+  -v "$PWD/requirements-base.txt:/req/requirements-base.txt" \
+  -v "$PWD/constraints.txt:/req/constraints.txt" \
+  -v "$PWD/wheelhouse-new:/out" \
+  python:3.11-slim-bookworm sh -c "\
+    pip wheel --no-deps -w /out 'dj-rest-auth==7.2.0' && \
+    pip download --prefer-binary --retries 10 --timeout 120 \
+      -c /req/constraints.txt -r /req/requirements-base.txt -d /out"
+
+rm -rf wheelhouse && mv wheelhouse-new wheelhouse
+
+==================================================================================
+
+make wheel  api + media : 
+
+mkdir -p wheelhouse
+
+docker run --rm \
+  -v "$PWD/requirements-base.txt:/req/requirements-base.txt" \
+  -v "$PWD/requirements-media.txt:/req/requirements-media.txt" \
+  -v "$PWD/constraints.txt:/req/constraints.txt" \
+  -v "$PWD/wheelhouse-new:/out" \
+  python:3.11-slim-bookworm sh -c "\
+    pip wheel --no-deps -w /out 'dj-rest-auth==7.2.0' && \
+    pip download --prefer-binary --retries 10 --timeout 120 \
+      --extra-index-url https://download.pytorch.org/whl/cpu \
+      -c /req/constraints.txt -r /req/requirements-base.txt -d /out && \
+    pip download --prefer-binary --retries 10 --timeout 120 \
+      --extra-index-url https://download.pytorch.org/whl/cpu \
+      -c /req/constraints.txt -r /req/requirements-media.txt -d /out"
+
+rm -rf wheelhouse && mv wheelhouse-new wheelhouse
+
+==================================================================================
+

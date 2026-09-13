@@ -38,7 +38,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2'
+          cpus: '1'
           memory: 2G
           pids: 500
         reservations:
@@ -167,7 +167,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2'
+          cpus: '1'
           memory: 1G
           pids: 500
         reservations:
