@@ -26,6 +26,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     networks:
       echoflow:
         ipv4_address: 172.28.0.4
@@ -38,11 +39,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 2G
+          cpus: '0.5'
+          memory: 1G
           pids: 500
         reservations:
-          cpus: '0.5'
+          cpus: '0.15'
           memory: 512M
     ulimits:
       nofile:
@@ -68,11 +69,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
+          cpus: '0.15'
+          memory: 256M
           pids: 300
         reservations:
-          cpus: '0.25'
+          cpus: '0.05'
           memory: 128M
     ulimits:
       nofile:
@@ -98,12 +99,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
+          cpus: '0.15'
+          memory: 384M
           pids: 300
         reservations:
-          cpus: '0.25'
-          memory: 256M
+          cpus: '0.05'
+          memory: 128M
     ulimits:
       nofile:
         soft: 65536
@@ -144,10 +145,6 @@ services:
              python manage.py migrate &&
              python manage.py collectstatic --noinput &&
              gunicorn -c gunicorn.conf.py backend.EchoFlow.wsgi:application"
-    volumes:
-      - .:/app
-    ports:
-      - "8005:8000"
     networks:
       echoflow:
         ipv4_address: 172.28.0.10
@@ -167,12 +164,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
+          cpus: '0.6'
+          memory: 768M
           pids: 500
         reservations:
-          cpus: '0.5'
-          memory: 256M
+          cpus: '0.2'
+          memory: 384M
     ulimits:
       nofile:
         soft: 65536
@@ -192,8 +189,6 @@ services:
     command: >
       sh -c "set -e && python wait_for_db.py &&
               celery -A backend.EchoFlow worker --loglevel=info"
-    volumes:
-      - .:/app
     networks:
       echoflow:
         ipv4_address: 172.28.0.11
@@ -223,12 +218,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
+          cpus: '0.3'
+          memory: 384M
           pids: 300
         reservations:
-          cpus: '0.25'
-          memory: 256M
+          cpus: '0.1'
+          memory: 192M
     ulimits:
       nofile:
         soft: 65536
@@ -243,7 +238,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c "set -e && python wait_for_db.py &&
-              celery -A backend.EchoFlow worker -Q fast_feed --concurrency=4 --loglevel=info"
+              celery -A backend.EchoFlow worker -Q fast_feed -n celery_feed@%h --concurrency=4 --loglevel=info"
     env_file:
       - .env
     networks:
@@ -272,17 +267,15 @@ services:
       - SENTRY_ENV=${SENTRY_ENV:-production}
       - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.1}
       - SENTRY_PROFILES_SAMPLE_RATE=${SENTRY_PROFILES_SAMPLE_RATE:-0.05}
-    volumes:
-      - .:/app
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
+          cpus: '0.25'
+          memory: 320M
           pids: 300
         reservations:
-          cpus: '0.25'
-          memory: 256M
+          cpus: '0.1'
+          memory: 160M
     ulimits:
       nofile:
         soft: 65536
@@ -302,14 +295,10 @@ services:
               celery -A backend.EchoFlow beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     healthcheck:
       disable: true
-    volumes:
-      - .:/app
     networks:
       echoflow:
         ipv4_address: 172.28.0.13
     depends_on:
-      web:
-        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis_broker:
@@ -331,12 +320,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 256M
-          pids: 200
-        reservations:
           cpus: '0.1'
           memory: 128M
+          pids: 200
+        reservations:
+          cpus: '0.05'
+          memory: 64M
     ulimits:
       nofile:
         soft: 65536
@@ -364,11 +353,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 128M
+          cpus: '0.2'
+          memory: 96M
           pids: 100
         reservations:
-          cpus: '0.1'
+          cpus: '0.05'
           memory: 32M
     ulimits:
       nofile:

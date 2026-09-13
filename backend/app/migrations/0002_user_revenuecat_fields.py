@@ -5,7 +5,7 @@ import uuid
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('app', '0001_initial'),
+        ('app', '0002_merged_scraper_flags'),
     ]
 
     operations = [
