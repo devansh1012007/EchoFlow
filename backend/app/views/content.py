@@ -32,6 +32,24 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
         return AudioClip.objects.filter(creator=self.request.user)
 
     def create(self, request, *args, **kwargs):
+        # Pro gating: check daily upload limit for free users BEFORE
+        # serializer validation to fail fast (no wasted work on files
+        # that would be rejected).
+        if not request.user.is_pro():
+            from django.conf import settings as django_settings
+            from django.utils import timezone
+            from rest_framework.exceptions import PermissionDenied
+            daily_limit = getattr(django_settings, "REVENUECAT_DAILY_UPLOAD_LIMIT_FREE", 5)
+            today = timezone.now().date()
+            created_today = AudioClip.objects.filter(
+                creator=request.user, created_at__date=today
+            ).count()
+            if created_today >= daily_limit:
+                raise PermissionDenied(
+                    f"Free tier limit of {daily_limit} daily uploads reached. "
+                    "Upgrade to Pro for unlimited uploads."
+                )
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         clip = serializer.save()

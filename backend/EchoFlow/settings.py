@@ -446,6 +446,13 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'backend.app.tasks.flush_counters_to_pg',
         'schedule': 300.0,
     },
+    'sync-revenuecat-entitlements': {
+        # Pro subscription sync via RevenueCat REST API polling.
+        # Polls every REVENUECAT_SYNC_INTERVAL_MINUTES (default: 360 = 6h).
+        # No webhooks in Phase 1 (free RevenueCat plan limitation).
+        'task': 'backend.app.tasks.sync_revenuecat_entitlements',
+        'schedule': int(os.environ.get('REVENUECAT_SYNC_INTERVAL_MINUTES', '360')) * 60,
+    },
 }
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
@@ -585,6 +592,7 @@ REST_FRAMEWORK = {
         'legal': '30/hour',       # ComplianceContactView / TakedownRequestView (issue-03/05)
         'grievance': '10/hour',   # GrievanceCreateView (issue-03)
         'data_subject': '5/hour', # DataSubjectAccessView / Erasure (issue-06)
+        'subscription_sync': '10/hour',  # manual RevenueCat sync trigger
     },
 }
 # lets set lifetimes for tokens
@@ -676,4 +684,23 @@ GRIEVANCE_OFFICER_NAME = os.environ.get('GRIEVANCE_OFFICER_NAME', 'EchoFlow Grie
 GRIEVANCE_OFFICER_EMAIL = os.environ.get('GRIEVANCE_OFFICER_EMAIL', 'grievance@echoflow.in')
 NODAL_CONTACT_NAME = os.environ.get('NODAL_CONTACT_NAME', 'EchoFlow Nodal Contact')
 NODAL_CONTACT_EMAIL = os.environ.get('NODAL_CONTACT_EMAIL', 'nodal@echoflow.in')
+PHYSICAL_ADDRESS = os.environ.get('PHYSICAL_ADDRESS', '')
+
+# --- RevenueCat (Pro subscription management) ---
+# SECURE: REVENUECAT_SECRET_KEY is backend-only. Never expose this to the
+# frontend. The public key (REVENUECAT_PUBLIC_KEY) is safe for browser use
+# but is not needed by Django (the SDK uses it client-side only).
+REVENUECAT_SECRET_KEY = os.environ.get('REVENUECAT_SECRET_KEY', '')
+REVENUECAT_PUBLIC_KEY = os.environ.get('REVENUECAT_PUBLIC_KEY', '')
+REVENUECAT_PROJECT_TOKEN = os.environ.get('REVENUECAT_PROJECT_TOKEN', '')
+REVENUECAT_ENTITLEMENT_ID = os.environ.get('REVENUECAT_ENTITLEMENT_ID', 'pro')
+REVENUECAT_SYNC_INTERVAL_MINUTES = int(os.environ.get('REVENUECAT_SYNC_INTERVAL_MINUTES', '360'))
+REVENUECAT_CUSTOMER_PORTAL_URL = os.environ.get('REVENUECAT_CUSTOMER_PORTAL_URL', '')
+
+# Usage limits for free (non-Pro) users. Pro users get unlimited / higher caps.
+REVENUECAT_DAILY_UPLOAD_LIMIT_FREE = int(os.environ.get('REVENUECAT_DAILY_UPLOAD_LIMIT_FREE', '5'))
+REVENUECAT_UPLOAD_MAX_SIZE_MB_FREE = int(os.environ.get('REVENUECAT_UPLOAD_MAX_SIZE_MB_FREE', '10'))
+REVENUECAT_CLIP_DURATION_LIMIT_FREE = int(os.environ.get('REVENUECAT_CLIP_DURATION_LIMIT_FREE', '60'))
+REVENUECAT_HD_QUALITY_BLOCKED_FREE = os.environ.get('REVENUECAT_HD_QUALITY_BLOCKED_FREE', 'True').lower() == 'true'
+
 VERSION = '1.0.0'
