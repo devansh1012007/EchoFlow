@@ -32,6 +32,7 @@ ai_ml/scrapers
 backend/app/tests/test_scraper.py
 mobile/package-lock.json
 frontend/package-lock.json
+backend/scratch/scraper_logs
 
 # Docker specific
 .dockerenv
