@@ -344,6 +344,8 @@ services:
     volumes:
       - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./docker/certs:/etc/nginx/certs:ro
+    networks:
+      echoflow:
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "https://localhost/health/"]
       interval: 30s
