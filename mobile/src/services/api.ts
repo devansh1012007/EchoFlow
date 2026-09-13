@@ -9,10 +9,8 @@ import {
   User,
 } from '../types';
 
-// Default API base URL for EchoFlow backend.
-// In Android emulator use 'http://10.0.2.2:3000' or 'http://10.0.2.2:8000'.
-// On physical devices, set to your computer's local network IP or Cloud Run URL.
-export const API_BASE_URL = 'https://ais-dev-ra6pa3urcinkopihtdgpz3-557708310129.asia-southeast1.run.app';
+// Backend server reachable from the mobile device on the local network.
+export const API_BASE_URL = 'http://100.124.196.125';
 
 const STORAGE_KEY_ACCESS = 'ef_mobile_access_token';
 const STORAGE_KEY_REFRESH = 'ef_mobile_refresh_token';
