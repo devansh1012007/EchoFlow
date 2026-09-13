@@ -44,7 +44,8 @@
         {
           "microphonePermission": "Allow EchoFlow to access your microphone for recording audio reels."
         }
-      ]
+      ],
+      "expo-asset"
     ]
   }
 }
