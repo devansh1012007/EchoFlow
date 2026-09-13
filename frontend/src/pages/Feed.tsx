@@ -12,6 +12,29 @@ interface FeedPageProps {
   onOpenOnboarding: () => void;
 }
 
+const FEED_CACHE_KEY = "ef_feed_cache";
+const CACHE_MAX_AGE_MS = 30000; // 30s
+
+function getCachedFeed(): FeedClip[] | null {
+  try {
+    const raw = sessionStorage.getItem(FEED_CACHE_KEY);
+    if (!raw) return null;
+    const { timestamp, clips } = JSON.parse(raw);
+    if (Date.now() - timestamp > CACHE_MAX_AGE_MS) return null;
+    return clips as FeedClip[];
+  } catch {
+    return null;
+  }
+}
+
+function setCachedFeed(clips: FeedClip[]) {
+  try {
+    sessionStorage.setItem(FEED_CACHE_KEY, JSON.stringify({ timestamp: Date.now(), clips }));
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpenOnboarding }) => {
   const [clips, setClips] = useState<FeedClip[]>([]);
   const [activeIndex, setActiveIndex] = useState<number>(0);
@@ -27,9 +50,21 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
 
   const { currentClip, playClip, setQueue, handsFreeMode } = usePlayer();
 
+  const maxFeedRetries = 3;
+  const [feedRetryCount, setFeedRetryCount] = useState<number>(0);
+
   const loadFeed = useCallback(async (retryCount = 0) => {
     setIsLoading(true);
     setErrorMsg(null);
+    setFeedRetryCount(retryCount);
+
+    // Production-grade: serve stale cache immediately while refreshing
+    const cached = getCachedFeed();
+    if (cached && cached.length > 0 && retryCount === 0) {
+      setClips(cached);
+      setQueue(cached);
+      setIsLoading(false);
+    }
 
     try {
       const data: FeedResponse = await feedAPI.getFeed();
@@ -55,13 +90,18 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
       setIsDegraded(!!data.degraded);
       setClips(data.results);
       setQueue(data.results);
+      setCachedFeed(data.results);
 
       // Auto-play the first reel if none playing
       if (data.results.length > 0 && !currentClip) {
         playClip(data.results[0], data.results);
       }
     } catch (err: any) {
-      setErrorMsg(err?.message || "Failed to load audio feed");
+      if (retryCount < maxFeedRetries) {
+        setTimeout(() => loadFeed(retryCount + 1), 1000 * (retryCount + 1));
+        return;
+      }
+      setErrorMsg(err?.message || "Failed to load audio feed after retries.");
     } finally {
       setIsLoading(false);
     }
@@ -136,6 +176,9 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
         <div className="space-y-1">
           <h2 className="text-lg font-black uppercase text-white">Connection Interrupted</h2>
           <p className="text-xs text-white/50">{errorMsg}</p>
+          {feedRetryCount > 0 && (
+            <p className="text-[10px] font-mono text-white/30">Attempted retries: {feedRetryCount}</p>
+          )}
         </div>
         <button
           type="button"

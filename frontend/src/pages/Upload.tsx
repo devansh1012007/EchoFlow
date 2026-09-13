@@ -6,6 +6,19 @@ interface UploadPageProps {
   onUploadSuccess: () => void;
 }
 
+const ALLOWED_AUDIO_MIMES = [
+  "audio/mpeg", "audio/wav", "audio/ogg", "audio/flac",
+  "audio/mp4", "audio/aac", "audio/webm", "audio/x-wav", "audio/x-mp3",
+];
+const ALLOWED_EXTS = [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".webm", ".opus"];
+const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
+const MAX_DURATION_SEC = 300; // 5 min
+
+function isAudioFile(f: File): boolean {
+  const ext = f.name.slice(f.name.lastIndexOf(".")).toLowerCase();
+  return ALLOWED_AUDIO_MIMES.includes(f.type) || ALLOWED_EXTS.includes(ext);
+}
+
 export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState<string>("");
@@ -25,31 +38,56 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
 
   const validateAndSetFile = (f: File) => {
     setErrorMessage(null);
+    setDurationSec(null);
 
-    // 100 MB Limit check
-    if (f.size > 100 * 1024 * 1024) {
-      setErrorMessage("File exceeds the 100 MB limit.");
+    if (!isAudioFile(f)) {
+      setErrorMessage(
+        `Unsupported file type ("${f.type || f.name.split(".").pop()}"). Supported: MP3, WAV, OGG, FLAC, M4A, AAC.`
+      );
+      setFile(null);
       return;
     }
 
-    // Audio duration probe check
-    const audio = new Audio();
-    const objectUrl = URL.createObjectURL(f);
-    audio.src = objectUrl;
-    audio.onloadedmetadata = () => {
-      const dur = Math.round(audio.duration);
-      setDurationSec(dur);
-      if (dur > 300) {
-        setErrorMessage(`Audio duration (${dur}s) exceeds the maximum allowed 300 seconds (5 minutes).`);
-      }
-      URL.revokeObjectURL(objectUrl);
-    };
+    if (f.size > MAX_FILE_SIZE) {
+      setErrorMessage(`File exceeds the 100 MB limit (${(f.size / (1024 * 1024)).toFixed(1)} MB).`);
+      setFile(null);
+      return;
+    }
 
     setFile(f);
     if (!title) {
       const cleanName = f.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
       setTitle(cleanName);
     }
+
+    const audio = new Audio();
+    const objectUrl = URL.createObjectURL(f);
+    audio.src = objectUrl;
+
+    // Timeout: if metadata doesn't load in 8s, treat as unknown duration
+    const timeout = setTimeout(() => {
+      setDurationSec(null);
+      URL.revokeObjectURL(objectUrl);
+    }, 8000);
+
+    audio.onloadedmetadata = () => {
+      clearTimeout(timeout);
+      const dur = Math.round(audio.duration);
+      setDurationSec(Number.isFinite(dur) ? dur : null);
+      if (dur > MAX_DURATION_SEC) {
+        setErrorMessage(
+          `Audio duration (${dur}s) exceeds the maximum allowed 300 seconds (5 minutes).`
+        );
+      }
+      URL.revokeObjectURL(objectUrl);
+    };
+
+    audio.onerror = () => {
+      clearTimeout(timeout);
+      setDurationSec(null);
+      setErrorMessage("Unable to read audio metadata. File may be corrupted.");
+      URL.revokeObjectURL(objectUrl);
+    };
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -101,39 +139,55 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
     setCategory("comedy");
   };
 
+  const [uploadRetryCount, setUploadRetryCount] = useState<number>(0);
+  const maxRetries = 2;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file || !title.trim()) return;
 
-    if (durationSec && durationSec > 300) {
-      setErrorMessage("Audio exceeds 300 seconds limit.");
+    if (durationSec !== null && durationSec > MAX_DURATION_SEC) {
+      setErrorMessage(`Audio exceeds ${MAX_DURATION_SEC} seconds limit.`);
       return;
     }
 
     setIsUploading(true);
     setErrorMessage(null);
+    setUploadRetryCount(0);
 
     const formData = new FormData();
     formData.append("original_file", file);
     formData.append("title", title.trim());
     formData.append("category", category);
 
-    try {
-      const res = await clipsAPI.uploadClip(formData);
-      setSuccessInfo(res);
-      setTimeout(() => {
-        onUploadSuccess();
-      }, 2500);
-    } catch (err: any) {
-      setErrorMessage(
-        err?.data?.original_file?.[0] ||
-        err?.data?.title?.[0] ||
-        err?.message ||
-        "Upload failed. Please check file format."
-      );
-    } finally {
-      setIsUploading(false);
+    let lastError: any = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await clipsAPI.uploadClip(formData);
+        setSuccessInfo(res);
+        setIsUploading(false);
+        setTimeout(() => {
+          onUploadSuccess();
+        }, 2500);
+        return; // success
+      } catch (err: any) {
+        lastError = err;
+        setUploadRetryCount(attempt + 1);
+        // Wait briefly before retry (exponential: 500ms * attempt)
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        }
+      }
     }
+
+    // All retries exhausted
+    const detailMsg =
+      lastError?.data?.original_file?.[0] ||
+      lastError?.data?.title?.[0] ||
+      lastError?.message ||
+      "Upload failed after retries. Please check file format and network.";
+    setErrorMessage(detailMsg);
+    setIsUploading(false);
   };
 
   return (
@@ -280,7 +334,11 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
             disabled={!file || !title.trim() || isUploading}
             className="w-full py-4 rounded-xl bg-[#FF6321] text-black font-black text-sm uppercase tracking-widest shadow-[0_0_25px_rgba(255,99,33,0.3)] hover:bg-[#ff753b] active:scale-[0.99] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {isUploading ? "Dispatching to Celery Queue..." : "Upload & Launch Reel"}
+            {isUploading
+              ? uploadRetryCount > 0
+                ? `Retrying upload (${uploadRetryCount}/${maxRetries})...`
+                : "Dispatching to Celery Queue..."
+              : "Upload & Launch Reel"}
           </button>
         </form>
       )}

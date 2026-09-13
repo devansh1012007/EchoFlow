@@ -14,6 +14,8 @@ interface PlayerContextType {
   queue: FeedClip[];
   audioFrequencies: number[];
   handsFreeMode: boolean;
+  isStreamLoading: boolean;
+  streamError: string | null;
   playClip: (clip: FeedClip, newQueue?: FeedClip[]) => void;
   togglePlay: () => void;
   pause: () => void;
@@ -40,6 +42,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [volume, _setVolume] = useState<number>(1);
   const [audioFrequencies, setAudioFrequencies] = useState<number[]>(new Array(24).fill(10));
   const [handsFreeMode, setHandsFreeMode] = useState<boolean>(true);
+  const [isStreamLoading, setIsStreamLoading] = useState<boolean>(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -98,6 +102,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     audio.addEventListener("play", handlePlay);
     audio.addEventListener("pause", handlePause);
     audio.addEventListener("ended", handleEnded);
+    audio.addEventListener("loadeddata", () => setIsStreamLoading(false));
+    audio.addEventListener("error", () => {
+      setIsStreamLoading(false);
+      setStreamError("Audio playback error — stream may be unavailable or format unsupported.");
+      console.warn("Audio element error:", audio.error);
+    });
 
     return () => {
       audio.pause();
@@ -178,15 +188,35 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (url.endsWith(".m3u8") && Hls.isSupported()) {
       const hls = new Hls();
       hlsRef.current = hls;
+      setIsStreamLoading(true);
+      setStreamError(null);
       hls.loadSource(url);
       hls.attachMedia(audio);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        setIsStreamLoading(false);
         audio.play().catch(() => {});
       });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        setIsStreamLoading(false);
+        if (data.fatal) {
+          const msg = `Stream error (${data.type}): ${data.details || "Playback failed"}.`;
+          setStreamError(msg);
+          console.warn("HLS fatal error:", data);
+          // Production-grade: attempt direct URL fallback
+          if (!url.includes(".m3u8") || audio.src !== url) {
+            audio.src = url;
+            audio.load();
+          }
+        }
+      });
     } else {
+      setIsStreamLoading(true);
+      setStreamError(null);
       audio.src = url;
       audio.playbackRate = playbackRate;
+      audio.load();
       audio.play().catch((err) => {
+        setIsStreamLoading(false);
         console.warn("Auto-play blocked, waiting for user gesture:", err);
       });
     }
@@ -271,6 +301,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         queue,
         audioFrequencies,
         handsFreeMode,
+        isStreamLoading,
+        streamError,
         playClip,
         togglePlay,
         pause,
