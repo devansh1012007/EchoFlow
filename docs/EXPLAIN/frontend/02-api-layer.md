@@ -50,7 +50,7 @@ async function api(path: string, opts: RequestInit = {}): Promise<any>
    - On failure: clears tokens, dispatches `ef_session_expired`, throws
 5. Normalizes errors: throws `{status, message, errors}`
 
-**API_BASE:** `import.meta.env.VITE_API_BASE_URL || 'http://100.124.196.125:8005'`
+**API_BASE:** `import.meta.env.VITE_API_BASE_URL || 'http://100.124.196.125:8000'`
 
 ---
 

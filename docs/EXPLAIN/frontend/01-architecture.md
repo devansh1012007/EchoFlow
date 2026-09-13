@@ -222,10 +222,10 @@ interface PlayerState { ... }
 
 ```bash
 # .env.local
-VITE_API_BASE_URL=http://100.124.196.125:8005  # Backend API
+VITE_API_BASE_URL=http://100.124.196.125:8000  # Backend API
 ```
 
-**Default:** `http://100.124.196.125:8005` (Tailscale IP for dev)
+**Default:** `http://100.124.196.125:8000` (Tailscale IP for dev)
 
 ---
 

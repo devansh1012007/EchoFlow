@@ -333,7 +333,7 @@ const loadSource = useCallback(async (clip: AudioClip) => {
   const src = clip.hls_playlist_url;
   if (!src) { setError('No stream available'); return; }
 
-  const fullSrc = src.startsWith('http') ? src : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8005') + src;
+  const fullSrc = src.startsWith('http') ? src : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000') + src;
 
   // Try to get playback token first
   let hasToken = false;

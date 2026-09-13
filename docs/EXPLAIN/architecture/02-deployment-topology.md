@@ -248,7 +248,7 @@ healthcheck: { disable: true }  # Image's HTTP probe would fail (no gunicorn)
 └─────────────────────────────────────────────────────────────────┘
 
 External Access:
-  localhost:8005  → web (gunicorn on 8000)
+  localhost:8000  → web (gunicorn on 8000)
   localhost:9000  → MinIO S3 API
   localhost:9001  → MinIO Console
   localhost:5432  → PostgreSQL

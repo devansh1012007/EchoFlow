@@ -770,13 +770,13 @@ are subtly wrong:
   `application/vnd.apple.mpegurl` for Safari. This is correct.
 - **Wrong base for src.** Line 55:
   ```ts
-  const fullSrc = src.startsWith('http') ? src : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8005') + src;
+  const fullSrc = src.startsWith('http') ? src : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000') + src;
   ```
   But `src` from `FeedClipSerializer.hls_playlist_url` is **always** an
   absolute HTTPS URL (the serializer calls
   `media_urls.get_hls_playback_url()` which returns
   `https://<host>:<port>/<bucket>/hls/<id>/master.m3u8`). The
-  fallback `http://localhost:8005 + src` is unreachable behind the
+  fallback `http://localhost:8000 + src` is unreachable behind the
   nginx terminator and would corrupt the URL if `src` ever does start
   with a `/` (e.g., during local non-TLS MinIO dev). **Status: Defensive
   but wrong default.**

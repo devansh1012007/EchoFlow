@@ -226,10 +226,10 @@ logger.warning("Rate limit exceeded", extra={
 
 ```bash
 # Test anon limit
-for i in {1..105}; do curl -X POST http://localhost:8005/auth/login/ -d '{"username":"x","password":"y"}'; done
+for i in {1..105}; do curl -X POST http://localhost:8000/auth/login/ -d '{"username":"x","password":"y"}'; done
 
 # Test user limit (with token)
-for i in {1..1005}; do curl -H "Authorization: Bearer $TOKEN" http://localhost:8005/feed/; done
+for i in {1..1005}; do curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/feed/; done
 ```
 
 ---
