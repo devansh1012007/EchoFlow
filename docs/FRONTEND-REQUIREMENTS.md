@@ -1446,7 +1446,39 @@ within ~15 min of a state change may still serve pre-state-change
 rankings if no telemetry has flushed yet. This is intentional
 performance behavior.
 
-### 4.6 Media URL handling
+### 4.6 HLS Playback Token (`ef_hls_token`)
+
+The `hls/` object storage prefix is **token-gated** — it is no longer
+public-read. All HLS playback requires a valid short-lived HMAC cookie.
+
+**What the frontend must do:**
+
+1. **Before playing any clip**, call `GET /media/playback-token/<clip_id>/`
+   with `Authorization: Bearer <access>` and `credentials: 'include'`.
+
+2. The backend sets an `HttpOnly` cookie `ef_hls_token` via `Set-Cookie`.
+   The frontend **cannot read this cookie** — it is handled automatically
+   by the browser on all `/hls/*` requests.
+
+3. **Error handling:** If the token endpoint returns 401/403/404/network
+   error, do NOT attempt playback. Show "Playback unavailable" UI.
+
+4. **Scope:** Token is per-clip (`hls/<clip_id>/`). Switching clips
+   requires a new token call.
+
+5. **TTL:** 10 minutes (configurable via `MEDIA_TOKEN_TTL_SECONDS`).
+
+**Why cookies, not signed URLs?**
+HLS uses relative references between master playlist → variant playlists
+→ segments. RFC 3986 §5.2.2 strips query strings during relative
+resolution, breaking signed URLs. Signed cookies survive because the
+browser sends them automatically on all requests to the cookie's path.
+
+**Implementation reference:**
+- `frontend/sample_frontend/src/api/client.ts` — `mediaAPI.getPlaybackToken()`
+- `frontend/sample_frontend/src/stores/player.tsx` — `loadSource()` calls token API before `hls.loadSource()`
+
+### 4.7 Media URL handling
 
 - `hls_playlist_url` from any `FeedClipSerializer` is an absolute
   HTTPS URL. **Use it verbatim.**
@@ -1465,7 +1497,7 @@ performance behavior.
     `profile_picture` is already an absolute URL (currently false
     on dev where `MEDIA_ROOT` is local).
 
-### 4.7 Polling cadences
+### 4.8 Polling cadences
 
 | Source | Endpoint | Polling cadence | Notes |
 | --- | --- | --- | --- |
@@ -1473,7 +1505,7 @@ performance behavior.
 | Feed cold retry | `GET /feed/` | `retry_after_ms` (1500 ms default) | Per-server hint |
 | Clip status (post-upload) | `GET /clips/{id}/` | not needed | clip won't appear in feed until ready; user can navigate away |
 
-### 4.8 Health, version, errors
+### 4.9 Health, version, errors
 
 - The frontend should surface a "Backend not reachable" banner when
   `GET /profile/me/` (or any authed call) returns 0 / network error.

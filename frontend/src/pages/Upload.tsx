@@ -117,6 +117,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
     formData.append("original_file", file);
     formData.append("title", title.trim());
     formData.append("category", category);
+    formData.append("copyright_acknowledgement", "true");
 
     try {
       const res = await clipsAPI.uploadClip(formData);

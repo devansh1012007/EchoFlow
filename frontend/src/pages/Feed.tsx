@@ -69,7 +69,11 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
 
   useEffect(() => {
     loadFeed();
-  }, [loadFeed]);
+    // Feed initialization should happen once for this page. Player callbacks
+    // are intentionally not dependencies because they are context actions.
+    // Re-running this effect on every provider render causes an update loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Keep active index in sync with player's current clip
   useEffect(() => {

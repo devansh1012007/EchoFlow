@@ -48,6 +48,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const animFrameRef = useRef<number | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const currentClipRef = useRef<FeedClip | null>(null);
+
+  useEffect(() => {
+    currentClipRef.current = currentClip;
+  }, [currentClip]);
 
   // Initialize audio element
   useEffect(() => {
@@ -64,9 +69,10 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       // Periodic heartbeat telemetry every ~6 seconds (Spec FR-TEL-1)
       const now = Date.now();
-      if (now - lastTelemetryRef.current > 6000 && currentClip) {
+      const clip = currentClipRef.current;
+      if (now - lastTelemetryRef.current > 6000 && clip) {
         lastTelemetryRef.current = now;
-        interactionsAPI.logTelemetry(currentClip.id, {
+        interactionsAPI.logTelemetry(clip.id, {
           action_type: "view",
           watch_time_ms: Math.floor(cur * 1000),
         }).catch(() => {});
@@ -82,8 +88,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const handlePause = () => {
       setIsPlaying(false);
       // Final telemetry on pause
-      if (currentClip && audio.currentTime > 0) {
-        interactionsAPI.logTelemetry(currentClip.id, {
+      const clip = currentClipRef.current;
+      if (clip && audio.currentTime > 0) {
+        interactionsAPI.logTelemetry(clip.id, {
           action_type: "view",
           watch_time_ms: Math.floor(audio.currentTime * 1000),
         }).catch(() => {});
@@ -109,7 +116,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         hlsRef.current.destroy();
       }
     };
-  }, [currentClip]);
+  }, []);
 
   // Synthetic frequency visualizer loop
   useEffect(() => {
@@ -199,12 +206,26 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (isPlaying) {
       audio.pause();
     } else {
-      audio.play().catch(() => {});
+      if (audio.readyState === HTMLMediaElement.HAVE_NOTHING) {
+        audio.load();
+      }
+      audio.play().catch((err) => {
+        console.warn("Playback requires a user gesture or failed to load:", err);
+      });
     }
   };
 
   const pause = () => audioRef.current?.pause();
-  const resume = () => audioRef.current?.play().catch(() => {});
+  const resume = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.readyState === HTMLMediaElement.HAVE_NOTHING) {
+      audio.load();
+    }
+    audio.play().catch((err) => {
+      console.warn("Playback failed:", err);
+    });
+  };
 
   const seek = (seconds: number) => {
     const audio = audioRef.current;

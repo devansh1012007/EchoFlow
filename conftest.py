@@ -47,6 +47,12 @@ if _existing_url:
     os.environ['PGPORT'] = '5432'
     os.environ['PGDATABASE'] = 'echoflow_test'
     print(f'[conftest] DATABASE_URL overridden to: {_test_url}', file=sys.stderr)
+# RevenueCat test defaults (no real API calls in unit tests).
+os.environ.setdefault('REVENUECAT_SECRET_KEY', '')
+os.environ.setdefault('REVENUECAT_PUBLIC_KEY', 'test-public-key')
+os.environ.setdefault('REVENUECAT_PROJECT_TOKEN', 'test-project')
+os.environ.setdefault('REVENUECAT_ENTITLEMENT_ID', 'pro')
+os.environ.setdefault('REVENUECAT_SYNC_INTERVAL_MINUTES', '360')
 
 # Add the repo root to sys.path so 'backend.EchoFlow.settings' resolves.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

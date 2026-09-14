@@ -69,7 +69,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (currentIndex >= 0 && currentIndex < queue.length - 1) {
       // Register skip telemetry
       try {
-        await interactionsAPI.registerSkip(currentClip.id);
+        await interactionsAPI.registerSkip(currentClip.id, {
+          listen_duration_ms: 0,
+          reel_position_ms: 0,
+          reel_id: currentClip.id,
+        });
       } catch {}
       await playClip(queue[currentIndex + 1]);
     } else if (queue.length > 0) {
@@ -101,13 +105,17 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setQueue((prev) =>
         prev.map((c) =>
           c.id === clipId
-            ? { ...c, is_liked: res.liked, likes: res.likes_count }
+            ? { ...c, is_liked: res.status === 'liked', likes: c.likes + (res.status === 'liked' ? 1 : -1) }
             : c
         )
       );
       setCurrentClip((prev) =>
         prev && prev.id === clipId
-          ? { ...prev, is_liked: res.liked, likes: res.likes_count }
+          ? {
+              ...prev,
+              is_liked: res.status === 'liked',
+              likes: prev.likes + (res.status === 'liked' ? 1 : -1),
+            }
           : prev
       );
     } catch (err) {

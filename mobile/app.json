@@ -34,9 +34,6 @@
         "android.permission.FOREGROUND_SERVICE"
       ]
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
     "scheme": "echoflow",
     "plugins": [
       [
