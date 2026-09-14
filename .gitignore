@@ -19,7 +19,7 @@ backend/media
 /.cache
 /cache
 /cache/pip
-/frontend
+#/frontend
 /--default-timeout=120
 *.venv
 /frontend/node_modules
@@ -28,7 +28,7 @@ frontend/sample_frontend
 *.vite
 backend/media/
 /frontend/sample_frontend2/node_modules
-/frontend/old_frontend
+#/frontend/old_frontend
 ai_ml/scrapers
 backend/app/tests/test_scraper.py
 mobile/package-lock.json
