@@ -1,0 +1,35 @@
+name: Deploy HLS Token Worker
+
+on:
+  push:
+    branches:
+      - RevnueCat-prod
+    paths:
+      - 'workers/hls-token-worker/**'
+  workflow_dispatch:  # allows manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/hls-token-worker
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: workers/hls-token-worker
+          command: deploy
