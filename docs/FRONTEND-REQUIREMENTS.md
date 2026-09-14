@@ -780,6 +780,69 @@ are subtly wrong:
   nginx terminator and would corrupt the URL if `src` ever does start
   with a `/` (e.g., during local non-TLS MinIO dev). **Status: Defensive
   but wrong default.**
+
+#### 2.3.1 HLS Playback Token (`ef_hls_token`) — REQUIRED for playback
+
+**The `hls/` prefix is NO LONGER PUBLIC.** All HLS segment requests
+(`/hls/<clip_id>/master.m3u8`, variant playlists, `.ts` segments) now
+require a valid **playback token cookie** (`ef_hls_token`). This is an
+HMAC-signed, short-lived cookie issued by the backend and validated by
+the edge proxy (Cloudflare Worker in production, nginx njs in dev).
+
+**How it works:**
+
+1. **Before loading HLS**, the frontend MUST call:
+   ```
+   GET /media/playback-token/<clip_id>/
+   Authorization: Bearer <access_token>
+   credentials: 'include'   // REQUIRED for Set-Cookie to work
+   ```
+
+2. The backend responds `200 {"status": "ok"}` and sets the `ef_hls_token`
+   cookie via `Set-Cookie` header:
+   ```
+   Set-Cookie: ef_hls_token=<base64url(payload).hmac>;
+       Path=/hls/; HttpOnly; Secure; SameSite=Lax; Max-Age=600
+   ```
+
+3. The browser **automatically** sends this cookie on ALL subsequent
+   requests to `/hls/*` paths (master.m3u8, variant playlists, segments).
+   The frontend JavaScript CANNOT read this cookie (HttpOnly) — it is
+   handled entirely by the browser's cookie jar.
+
+4. The edge proxy (Worker/nginx) validates the HMAC, checks expiry, and
+   verifies the clip scope (`c` field matches the requested path prefix).
+   If valid, it proxies the request to R2/MinIO. If invalid/missing:
+   **403 Forbidden**.
+
+**Frontend implementation requirements:**
+
+| Requirement | Detail |
+|-------------|--------|
+| **Call timing** | Must call `/media/playback-token/<clip_id>/` **before** `hls.loadSource()` for each clip. |
+| **Credentials** | The fetch MUST include `credentials: 'include'` or the browser will discard the `Set-Cookie` header silently. |
+| **Error handling** | If token issuance fails (401, 403, 404, network error), do NOT call `hls.loadSource()`. Show "Playback unavailable" UI. |
+| **Scope** | Token is per-clip (scope = `hls/<clip_id>/`). Switching clips requires a new token. |
+| **TTL** | 10 minutes (configurable via `MEDIA_TOKEN_TTL_SECONDS`). Token auto-expires; no explicit logout needed. |
+| **Cookie attributes** | `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/hls/`. `Domain` is empty in dev; in prod it may be set to parent domain (e.g., `.echo-flow.in`) for cross-subdomain cookies. |
+| **No token in response body** | Do NOT read the token from the JSON response (`{"status": "ok"}`). The token is ONLY in the cookie. |
+
+**Why signed cookies, not signed URLs?**
+HLS is a multi-file protocol: `master.m3u8` references variant playlists,
+which reference `.ts` segments, all via **relative paths**. RFC 3986
+§5.2.2 strips query strings during relative-reference resolution.
+A signed URL (`/hls/abc/master.m3u8?sig=xyz`) works for the master
+playlist, but when `master.m3u8` references `segment_1.ts?sig=xyz`,
+the browser resolves it relative to the playlist URL, **dropping the
+query string**. Signed cookies survive this because cookies are sent
+automatically on all requests to the cookie's path, independent of the
+URL structure.
+
+**Code reference:** `frontend/sample_frontend/src/stores/player.tsx`
+(`loadSource` now calls `mediaAPI.getPlaybackToken(clip.id)` before
+`hls.loadSource()`). `frontend/sample_frontend/src/api/client.ts`
+(`mediaAPI.getPlaybackToken` uses `credentials: 'include'`).
+
 - **Telemetry fired only on unmount/cleanup** (`stores/player.tsx:87-93`).
   If the user navigates away mid-clip without destroying the player,
   the event fires; if they `play(clip2)` while clip1 is still in
@@ -1446,7 +1509,39 @@ within ~15 min of a state change may still serve pre-state-change
 rankings if no telemetry has flushed yet. This is intentional
 performance behavior.
 
-### 4.6 Media URL handling
+### 4.6 HLS Playback Token (`ef_hls_token`)
+
+The `hls/` object storage prefix is **token-gated** — it is no longer
+public-read. All HLS playback requires a valid short-lived HMAC cookie.
+
+**What the frontend must do:**
+
+1. **Before playing any clip**, call `GET /media/playback-token/<clip_id>/`
+   with `Authorization: Bearer <access>` and `credentials: 'include'`.
+
+2. The backend sets an `HttpOnly` cookie `ef_hls_token` via `Set-Cookie`.
+   The frontend **cannot read this cookie** — it is handled automatically
+   by the browser on all `/hls/*` requests.
+
+3. **Error handling:** If the token endpoint returns 401/403/404/network
+   error, do NOT attempt playback. Show "Playback unavailable" UI.
+
+4. **Scope:** Token is per-clip (`hls/<clip_id>/`). Switching clips
+   requires a new token call.
+
+5. **TTL:** 10 minutes (configurable via `MEDIA_TOKEN_TTL_SECONDS`).
+
+**Why cookies, not signed URLs?**
+HLS uses relative references between master playlist → variant playlists
+→ segments. RFC 3986 §5.2.2 strips query strings during relative
+resolution, breaking signed URLs. Signed cookies survive because the
+browser sends them automatically on all requests to the cookie's path.
+
+**Implementation reference:**
+- `frontend/sample_frontend/src/api/client.ts` — `mediaAPI.getPlaybackToken()`
+- `frontend/sample_frontend/src/stores/player.tsx` — `loadSource()` calls token API before `hls.loadSource()`
+
+### 4.7 Media URL handling
 
 - `hls_playlist_url` from any `FeedClipSerializer` is an absolute
   HTTPS URL. **Use it verbatim.**
@@ -1465,7 +1560,7 @@ performance behavior.
     `profile_picture` is already an absolute URL (currently false
     on dev where `MEDIA_ROOT` is local).
 
-### 4.7 Polling cadences
+### 4.8 Polling cadences
 
 | Source | Endpoint | Polling cadence | Notes |
 | --- | --- | --- | --- |
@@ -1473,7 +1568,7 @@ performance behavior.
 | Feed cold retry | `GET /feed/` | `retry_after_ms` (1500 ms default) | Per-server hint |
 | Clip status (post-upload) | `GET /clips/{id}/` | not needed | clip won't appear in feed until ready; user can navigate away |
 
-### 4.8 Health, version, errors
+### 4.9 Health, version, errors
 
 - The frontend should surface a "Backend not reachable" banner when
   `GET /profile/me/` (or any authed call) returns 0 / network error.
