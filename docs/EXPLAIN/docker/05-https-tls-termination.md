@@ -37,7 +37,7 @@ The concrete consequences:
 | Browser CORS for HTTPS origin | always blocked | "works in dev, breaks in prod" |
 
 The browser-side break was the most visible: a Vite dev server on
-`http://localhost:3021` calling `http://localhost:8005` worked fine; the
+`http://localhost:3021` calling `http://localhost:8000` worked fine; the
 same call from a Vercel-deployed `https://app.echoflow.example` to
 `http://api.echoflow.example` was **silently blocked by mixed-content
 rules**, with no console error explaining why.
@@ -233,7 +233,7 @@ them, nginx terminates, and the request goes plain HTTP to MinIO's
   with `max-age=300` first; only bump to `max-age=31536000` once
   you're confident the HTTPS endpoint is permanent.
 - **Frontend `VITE_API_BASE_URL` change** is a breaking change for
-  any local dev that was working before. The old `http://localhost:8005`
+  any local dev that was working before. The old `http://localhost:8000`
   still works (the `web` container still publishes that port for
   escape-hatch direct access) but is not the supported path.
 

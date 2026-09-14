@@ -1385,7 +1385,7 @@ The read-replica block in `settings.py` had the same `options={'...': '...'}` kw
 ### A8 — Prometheus + Grafana (ready-to-configure)
 
 `docker-compose.yml` now includes 2 new services:
-- `prometheus` (`prom/prometheus:v2.55.0`, port 9090) — scrapes `web:8005/metrics/` every 15s.
+- `prometheus` (`prom/prometheus:v2.55.0`, port 9090) — scrapes `web:8000/metrics/` every 15s.
 - `grafana` (`grafana/grafana:11.2.0`, port 3000) — auto-provisions the Prometheus datasource and 2 dashboards.
 
 `docker/prometheus/prometheus.yml` and `docker/grafana/` mount the scraper config, provisioning, and 2 dashboard JSONs:

@@ -26,7 +26,7 @@ This document tracks where documentation (README, AGENTS.md, audit docs) conflic
 | 2 | "CORS_ALLOW_ALL_ORIGINS hardcoded True, env override exists but code sets True after" | `settings.py:27, 63`: **Fixed** — was True, now explicitly `False` | ⚠️ Fixed |
 | 3 | "requirements.txt lists librosa twice" | `requirements.txt:8, 28`: **Still duplicated** (lines 8 and 28) | ⚠️ Still exists |
 | 4 | ".gitignore has *.env but .env committed" | `.gitignore`: `*.env` present; `.env` exists in repo | ⚠️ Still exists |
-| 5 | "seed_db.py targets port 8005 (Docker) not 8000 (dev)" | `backend/scripts/seed_db.py:15`: `API_ENDPOINT = "http://localhost:8005"` | ✅ Accurate |
+| 5 | "seed_db.py targets port 8005 (Docker) not 8000 (dev)" | `backend/scripts/seed_db.py:15`: `API_ENDPOINT = "http://localhost:8000"` | ✅ Accurate |
 | 6 | "wait_for_db.py polls with exponential backoff (120 attempts)" | `wait_for_db.py:6-8`: `MAX_RETRIES = 120`, `BACKOFF_FACTOR = 2` | ✅ Accurate |
 | 7 | "process_audio_to_hls enqueued via transaction.on_commit" | `views.py:101`: **Confirmed** | ✅ Accurate |
 | 8 | "Comment count denormalized in Comment.save()/delete()" | `models.py:134-144`: **Confirmed** | ✅ Accurate |

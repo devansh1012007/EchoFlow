@@ -57,7 +57,7 @@ other service:
 
 | Symptom | Where to look |
 |---|---|
-| `health: down` on the web target | `docker compose logs prometheus` — usually a `connection refused` to `web:8005`. Check the web container's healthcheck is passing. |
+| `health: down` on the web target | `docker compose logs prometheus` — usually a `connection refused` to `web:8000`. Check the web container's healthcheck is passing. |
 | Grafana datasource not provisioned | `docker compose logs grafana | grep -i datasource` — typically a YAML parse error in `docker/grafana/provisioning/datasources/prometheus.yml`. |
 | Dashboards not loaded | `docker compose logs grafana | grep -i dashboard` — typically a JSON parse error in `docker/grafana/dashboards/*.json` or a path mismatch in `docker/grafana/provisioning/dashboards/echoflow.yml`. |
 | Metrics endpoint returns 200 but body is empty | The custom histograms (`echoflow_*`) only appear after their first observation. Trigger one by hitting `/feed/` or `/interactions/{id}/toggle-like/` on the web container. |

@@ -31,7 +31,7 @@ ReelCard (Feed) — full-screen visual + tap to play
 ### Initialization (`stores/player.tsx:loadSource`)
 
 ```typescript
-const fullSrc = src.startsWith('http') ? src : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8005') + src;
+const fullSrc = src.startsWith('http') ? src : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000') + src;
 
 if (Hls.isSupported()) {
   const hls = new Hls({ 

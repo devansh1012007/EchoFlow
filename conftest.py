@@ -21,6 +21,12 @@ os.environ.setdefault('AWS_STORAGE_BUCKET_NAME', 'test-bucket')
 os.environ.setdefault('AWS_ACCESS_KEY_ID', 'test')
 os.environ.setdefault('AWS_SECRET_ACCESS_KEY', 'test')
 
+# RevenueCat test defaults (no real API calls in unit tests).
+os.environ.setdefault('REVENUECAT_SECRET_KEY', '')
+os.environ.setdefault('REVENUECAT_PUBLIC_KEY', 'test-public-key')
+os.environ.setdefault('REVENUECAT_PROJECT_TOKEN', 'test-project')
+os.environ.setdefault('REVENUECAT_ENTITLEMENT_ID', 'pro')
+os.environ.setdefault('REVENUECAT_SYNC_INTERVAL_MINUTES', '360')
 # Override DATABASE_URL to point directly at the postgres container
 # (bypassing pgbouncer). pgbouncer is configured to whitelist only
 # `echoflow_db`, but the test DB is `echoflow_test`. Direct connection

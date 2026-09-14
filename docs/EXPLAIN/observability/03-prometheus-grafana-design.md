@@ -599,9 +599,9 @@ cycle.
    `Run tests` step (`django.yml:90-92`) that boots Compose (`docker compose
    up -d`), waits for `web` to be healthy (retry loop, see §8), then
    asserts:
-   - `curl -fsS http://localhost:8005/health/` → `200`
-   - `curl -fsS http://localhost:8005/ready/` → `200`
-   - `curl -fsS http://localhost:8005/metrics/` → `200` AND response
+   - `curl -fsS http://localhost:8000/health/` → `200`
+   - `curl -fsS http://localhost:8000/ready/` → `200`
+   - `curl -fsS http://localhost:8000/metrics/` → `200` AND response
      contains `django_http_requests_latency_seconds_by_view_bucket`
    - `curl -fsS http://localhost:9090/api/v1/query?query=up` → at least one
      target is `up`
@@ -685,7 +685,7 @@ acknowledges this). The CI step wraps each curl in a retry loop:
 
 ```bash
 for i in {1..30}; do
-  if curl -fsS http://localhost:8005/health/ >/dev/null; then break; fi
+  if curl -fsS http://localhost:8000/health/ >/dev/null; then break; fi
   sleep 2
 done
 ```
@@ -715,7 +715,7 @@ After implementation:
    loop:
    ```bash
    while true; do
-     curl -fsS -H "Authorization: Bearer $JWT" http://localhost:8005/feed/
+     curl -fsS -H "Authorization: Bearer $JWT" http://localhost:8000/feed/
    done
    ```
    Within 5 minutes Prometheus fires the alert; verify with

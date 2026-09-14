@@ -242,7 +242,7 @@ INSTALLED_APPS += [
 
 ### Get Tokens
 ```bash
-curl -X POST http://localhost:8005/auth/login/ \
+curl -X POST http://localhost:8000/auth/login/ \
   -H "Content-Type: application/json" \
   -d '{"username": "testuser", "password": "testpass"}'
 
@@ -252,12 +252,12 @@ curl -X POST http://localhost:8005/auth/login/ \
 ### Use Access Token
 ```bash
 curl -H "Authorization: Bearer <access_token>" \
-  http://localhost:8005/feed/
+  http://localhost:8000/feed/
 ```
 
 ### Refresh Token
 ```bash
-curl -X POST http://localhost:8005/auth/token/refresh/ \
+curl -X POST http://localhost:8000/auth/token/refresh/ \
   -H "Content-Type: application/json" \
   -d '{"refresh": "<refresh_token>"}'
 ```

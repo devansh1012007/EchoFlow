@@ -300,7 +300,7 @@ scrape_configs:
   - job_name: 'echoflow-web'
     metrics_path: '/metrics/'
     static_configs:
-      - targets: ['web:8005']
+      - targets: ['web:8000']
         labels: { service: 'echoflow', tier: 'web' }
 ```
 

@@ -111,7 +111,7 @@ export default {
 
     const rangeHeader = request.headers.get("Range");
     const object = await env.MEDIA_BUCKET.get(objectKey, {
-      range: rangeHeader || undefined,
+      range: rangeHeader ? request : undefined,
       onlyIf: request.headers,
     });
 
@@ -147,10 +147,7 @@ export default {
     // Determine status: 206 Partial Content for range requests, 200 otherwise
     const status = rangeHeader && object.range ? 206 : 200;
 
-    // R2Object has no .body; R2ObjectBody does. When rangeHeader is present,
-    // we get R2ObjectBody (with body). When not, use object.text() fallback.
-    const r2ObjectBody = object as R2ObjectBody;
-    return new Response(r2ObjectBody.body, {
+    return new Response(object.body, {
       status,
       headers: responseHeaders,
     });

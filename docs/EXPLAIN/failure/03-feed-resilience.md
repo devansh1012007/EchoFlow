@@ -395,7 +395,7 @@ class FeedResilienceTests(TestCase):
 # Simulate Redis outage
 docker compose pause redis
 # Test feed endpoint
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8005/feed/
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/feed/
 docker compose unpause redis
 ```
 
