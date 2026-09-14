@@ -1,6 +1,5 @@
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
-import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import multer from "multer";
 
@@ -9,26 +8,21 @@ const PORT = 3001;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Storage directory for uploads
-const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (_req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname) || ".mp3";
-    cb(null, `audio-${uniqueSuffix}${ext}`);
-  },
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
 });
 
 const upload = multer({
-  storage,
+  // The demo server must never become a second durable media store.
+  storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB max
 });
 
@@ -523,6 +517,7 @@ function serializeFeedClip(clip: AudioClipRecord, currentUser: UserRecord | null
     creator_name: clip.creator_name,
     creator_id: clip.creator_id,
     category: clip.category,
+    duration_ms: clip.duration_ms,
     hls_playlist_url: clip.status === "ready" ? hls_playlist_url : null,
     likes: Math.max(0, clip.likes),
     shares: Math.max(0, clip.shares),
@@ -551,9 +546,6 @@ app.get("/api/media/audio/:clip_id.wav", (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "public, max-age=3600");
   res.send(wavBuffer);
 });
-
-// Static uploaded file serving
-app.use("/uploads", express.static(UPLOADS_DIR));
 
 // 1. AUTH
 app.post("/auth/register/", (req: Request, res: Response) => {
@@ -653,11 +645,9 @@ app.post("/auth/logout/", (_req: Request, res: Response) => {
 
 // 2. FEED
 app.get("/feed/", (req: Request, res: Response) => {
-  const authUser = getAuthUser(req);
-  if (!authUser) {
-    res.status(401).json({ detail: "Authentication credentials were not provided." });
-    return;
-  }
+  // The local mobile/web demo has no login screen, so use the seeded demo
+  // profile for read-only feed serialization when no bearer token is present.
+  const authUser = getAuthUser(req) || users.get(1)!;
 
   // Get ready clips
   const readyClips = Array.from(clips.values()).filter((c) => c.status === "ready");
@@ -681,11 +671,7 @@ app.get("/feed/", (req: Request, res: Response) => {
 
 // 3. SUGGESTIONS
 app.get("/suggestions/", (req: Request, res: Response) => {
-  const authUser = getAuthUser(req);
-  if (!authUser) {
-    res.status(401).json({ detail: "Authentication credentials were not provided." });
-    return;
-  }
+  const authUser = getAuthUser(req) || users.get(1)!;
 
   const category = (req.query.category as string) || "all";
   let filtered = Array.from(clips.values()).filter((c) => c.status === "ready");
@@ -764,7 +750,7 @@ app.post("/clips/", upload.single("original_file"), (req: Request, res: Response
   // Determine media URL
   const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
   const host = req.get("host") || `localhost:${PORT}`;
-  const hlsUrl = `${protocol}://${host}/uploads/${file.filename}`;
+  const hlsUrl = `${protocol}://${host}/api/media/audio/${clipId}.wav`;
 
   const newClip: AudioClipRecord = {
     id: clipId,
@@ -782,7 +768,6 @@ app.post("/clips/", upload.single("original_file"), (req: Request, res: Response
     engagement_velocity: 5.0,
     avg_completion_rate: 0.0,
     audio_type: "music",
-    filePath: file.path,
     created_at: new Date().toISOString(),
   };
 

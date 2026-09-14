@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 import {
   AuthTokens,
   Comment,
@@ -9,8 +10,15 @@ import {
   User,
 } from '../types';
 
-// Backend server reachable from the mobile device on the local network.
-export const API_BASE_URL = 'http://100.124.196.125';
+// The Django debug port is exposed as 8005 by the local Docker stack.
+// Override this for a physical device or a deployed environment.
+export const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_BASE_URL ||
+  (Platform.OS === 'web'
+    ? 'http://localhost:8005'
+    : Platform.OS === 'android'
+      ? 'http://10.0.2.2:8005'
+      : 'http://localhost:8005');
 
 const STORAGE_KEY_ACCESS = 'ef_mobile_access_token';
 const STORAGE_KEY_REFRESH = 'ef_mobile_refresh_token';
@@ -148,7 +156,7 @@ export async function apiFetch<T = any>(
 
 // Feed API
 export const feedAPI = {
-  getFeed: async (): Promise<{ results: FeedClip[]; count: number }> => {
+  getFeed: async (): Promise<{ results: FeedClip[]; queue_health?: number; degraded?: boolean }> => {
     return apiFetch('/feed/');
   },
   getSuggestions: async (category?: string): Promise<{ results: FeedClip[] }> => {
@@ -159,16 +167,25 @@ export const feedAPI = {
 
 // Interactions API
 export const interactionsAPI = {
-  toggleLike: async (clipId: string): Promise<{ liked: boolean; likes_count: number }> => {
+  toggleLike: async (clipId: string): Promise<{ status: 'liked' | 'unliked' }> => {
     return apiFetch(`/interactions/${clipId}/toggle-like/`, { method: 'POST' });
   },
-  registerSkip: async (clipId: string): Promise<void> => {
-    return apiFetch(`/interactions/${clipId}/register-skip/`, { method: 'POST' });
+  registerSkip: async (
+    clipId: string,
+    data: { listen_duration_ms: number; reel_position_ms: number; reel_id: string }
+  ): Promise<{ status: string }> => {
+    return apiFetch(`/interactions/${clipId}/register-skip/`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   },
-  logTelemetry: async (clipId: string, listenDurationSec: number): Promise<void> => {
+  logTelemetry: async (
+    clipId: string,
+    data: { action_type: 'view' | 'like' | 'share' | 'skip'; watch_time_ms: number }
+  ): Promise<{ status: string }> => {
     return apiFetch(`/interactions/${clipId}/log-telemetry/`, {
       method: 'POST',
-      body: JSON.stringify({ listen_duration_sec: listenDurationSec }),
+      body: JSON.stringify(data),
     });
   },
 };
@@ -188,23 +205,28 @@ export const commentsAPI = {
 
 // Share API
 export const shareAPI = {
-  getInbox: async (): Promise<{ results: ShareEvent[] }> => {
-    return apiFetch('/share/inbox/');
+  getInbox: async (): Promise<ShareEvent[]> => {
+    const response = await apiFetch<ShareEvent[] | { results: ShareEvent[] }>('/share/inbox/');
+    return Array.isArray(response) ? response : response.results;
   },
   getUnreadCount: async (): Promise<{ unread: number }> => {
     return apiFetch('/share/unread-count/');
   },
-  sendShare: async (clipId: string, recipientUsername: string): Promise<{ id: number }> => {
+  sendShare: async (clipId: string, recipientUsername: string): Promise<{ status: string }> => {
+    const recipient = await shareAPI.findUser(recipientUsername.replace(/^@/, ''));
     return apiFetch(`/share/${clipId}/send-share/`, {
       method: 'POST',
-      body: JSON.stringify({ recipient_username: recipientUsername }),
+      body: JSON.stringify({ receiver_id: recipient.id }),
     });
+  },
+  findUser: async (username: string): Promise<{ id: number; username: string }> => {
+    return apiFetch(`/share/find-user/?username=${encodeURIComponent(username)}`);
   },
 };
 
 // Upload API
 export const uploadAPI = {
-  uploadAudio: async (formData: FormData): Promise<{ id: string; status: string }> => {
+  uploadAudio: async (formData: FormData): Promise<{ clip_id: string; status: string }> => {
     return apiFetch('/clips/', {
       method: 'POST',
       body: formData,
@@ -220,7 +242,27 @@ export const profileAPI = {
   getPublicProfile: async (userId: number): Promise<PublicProfile> => {
     return apiFetch(`/profile/${userId}/`);
   },
-  toggleFollow: async (userId: number): Promise<{ following: boolean; followers_count: number }> => {
+  toggleFollow: async (userId: number): Promise<{ status: 'followed' | 'unfollowed' }> => {
     return apiFetch(`/follow/${userId}/toggle-follow/`);
+  },
+};
+
+export const authAPI = {
+  logout: async (): Promise<void> => {
+    const tokens = await getStoredTokens();
+    if (tokens?.refresh) {
+      try {
+        await apiFetch('/auth/logout/', {
+          method: 'POST',
+          body: JSON.stringify({ refresh: tokens.refresh }),
+        });
+      } finally {
+        await setStoredTokens(null);
+        await setStoredUser(null);
+      }
+    } else {
+      await setStoredTokens(null);
+      await setStoredUser(null);
+    }
   },
 };

@@ -103,11 +103,12 @@ export const UploadScreen = ({ navigation }: any) => {
       const formData = new FormData();
       formData.append('title', title.trim());
       formData.append('category', category);
+      formData.append('copyright_acknowledgement', 'true');
 
       if (recordingUri) {
         const filename = recordingUri.split('/').pop() || 'recording.m4a';
         // Append audio file for React Native
-        formData.append('audio_file', {
+        formData.append('original_file', {
           uri: recordingUri,
           name: filename,
           type: 'audio/m4a',

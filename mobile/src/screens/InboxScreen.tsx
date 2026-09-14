@@ -27,7 +27,7 @@ export const InboxScreen = ({ navigation }: any) => {
   const loadInbox = async () => {
     try {
       const res = await shareAPI.getInbox();
-      setShares(res.results || []);
+      setShares(res);
     } catch {
       setShares([]);
     } finally {

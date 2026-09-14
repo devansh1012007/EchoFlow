@@ -116,7 +116,10 @@ class MobileAudioPlayer {
       this.startTimeMs = 0;
       if (durationSec > 1) {
         try {
-          await interactionsAPI.logTelemetry(clipId, durationSec);
+          await interactionsAPI.logTelemetry(clipId, {
+            action_type: 'view',
+            watch_time_ms: durationSec * 1000,
+          });
         } catch {
           // Telemetry fire & forget
         }

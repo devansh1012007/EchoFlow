@@ -49,8 +49,6 @@ export const ReelCard: React.FC<ReelCardProps> = ({
     playbackRate,
     setRate,
     audioFrequencies,
-    isStreamLoading,
-    streamError,
   } = usePlayer();
 
   const [isLiked, setIsLiked] = useState<boolean>(clip.is_liked);
@@ -142,23 +140,6 @@ export const ReelCard: React.FC<ReelCardProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Stream Status Indicator */}
-          {isActive && currentClip?.id === clip.id && (
-            <div className="flex items-center gap-1.5 text-[9px] font-mono font-bold uppercase">
-              {isStreamLoading && (
-                <span className="text-amber-400 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                  Buffering
-                </span>
-              )}
-              {streamError && (
-                <span className="text-rose-400 flex items-center gap-1" title={streamError}>
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-                  Stream Error
-                </span>
-              )}
-            </div>
-          )}
           {/* Speed Toggle */}
           <button
             type="button"

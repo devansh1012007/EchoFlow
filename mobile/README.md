@@ -51,10 +51,11 @@ npm install
 ```
 
 ### 3. Configure Backend URL
-Open `mobile/src/services/api.ts` and set `API_BASE_URL`:
-- **Android Emulator**: `http://10.0.2.2:3000` (or `http://10.0.2.2:8000`)
-- **iOS Simulator**: `http://localhost:3000`
-- **Physical Device**: Use your local network IP (e.g. `http://192.168.1.50:3000`) or your deployed Cloud Run URL.
+The app defaults to the local Django debug port exposed by Docker:
+- **Android Emulator**: `http://10.0.2.2:8005`
+- **iOS Simulator / Expo web**: `http://localhost:8005`
+- **Physical Device**: set `EXPO_PUBLIC_API_BASE_URL` to your computer's LAN IP
+  (for example `http://192.168.1.50:8005`) before starting Expo.
 
 ### 4. Run the App
 ```bash

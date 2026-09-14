@@ -1,11 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, AuthTokens } from '../types';
 import {
+  apiFetch,
+  authAPI,
   getStoredTokens,
   getStoredUser,
   setStoredTokens,
   setStoredUser,
-  API_BASE_URL,
 } from '../services/api';
 
 interface AuthContextType {
@@ -28,18 +29,17 @@ const AuthContext = createContext<AuthContextType>({
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     async function loadAuth() {
       try {
-        const storedUser = await getStoredUser();
         const storedTokens = await getStoredTokens();
-        if (storedTokens?.access && storedUser) {
-          setUser(storedUser);
+        if (storedTokens?.access) {
+          const storedUser = await getStoredUser();
+          if (storedUser) setUser(storedUser);
+          await refreshProfile();
         }
-      } catch {
-        // Ignore load error
       } finally {
         setIsLoading(false);
       }
@@ -54,40 +54,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
-    await setStoredTokens(null);
-    await setStoredUser(null);
-    setUser(null);
+    try {
+      await authAPI.logout();
+    } finally {
+      setUser(null);
+    }
   };
 
   const refreshProfile = async () => {
-    // If logged in, fetch profile
     const tokens = await getStoredTokens();
     if (!tokens?.access) return;
-    try {
-      const res = await fetch(`${API_BASE_URL}/profile/me/`, {
-        headers: { Authorization: `Bearer ${tokens.access}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const updated: User = { id: data.id, username: data.username, email: data.email };
-        await setStoredUser(updated);
-        setUser(updated);
-      }
-    } catch {
-      // Profile fetch
-    }
+    const data = await apiFetch<{ id: number; username: string; email: string }>('/profile/me/');
+    const updated: User = { id: data.id, username: data.username, email: data.email };
+    await setStoredUser(updated);
+    setUser(updated);
   };
 
   return (
     <AuthContext.Provider
-      value={{
-        user,
-        isAuthenticated: !!user,
-        isLoading,
-        login,
-        logout,
-        refreshProfile,
-      }}
+      value={{ user, isAuthenticated: !!user, isLoading, login, logout, refreshProfile }}
     >
       {children}
     </AuthContext.Provider>
