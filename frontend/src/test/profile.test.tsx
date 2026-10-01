@@ -244,8 +244,11 @@ describe("Profile — a failed fetch is never rendered as a fact", () => {
 
     render(<ProfilePage />);
 
-    await waitFor(() => expect(screen.getByText(/^Joined:/)).toBeInTheDocument());
-    expect(screen.getByText(/^Joined:/)).toHaveTextContent("—");
+    // Wait for the CONTENT, not for the node: the "Joined:" label and the <h1>
+    // are both rendered during loading with the value swapped out for a
+    // <Skeleton>, so `toBeInTheDocument()` is true while loading and the
+    // assertion below would read the skeleton.
+    await waitFor(() => expect(screen.getByText(/^Joined:/)).toHaveTextContent("—"));
     expect(screen.queryByText(new Date().toLocaleDateString())).not.toBeInTheDocument();
   });
 });
@@ -260,7 +263,10 @@ describe("Profile — counts come from the server, not from the page", () => {
 
     render(<ProfilePage />);
 
-    await waitFor(() => expect(screen.getByText("Audio Reels")).toBeInTheDocument());
+    // Wait for the counts, not for the tab label: the tabs render during loading
+    // with the numbers swapped out for skeletons, so `toBeInTheDocument()` is
+    // true while loading and `getAllByText("0")` below would read the skeleton.
+    await waitFor(() => expect(screen.getAllByText("0")).toHaveLength(3));
     expect(screen.queryByText(/CREATOR/i)).not.toBeInTheDocument();
     // A genuine zero is still shown as a zero: the fix is not "hide all zeros".
     expect(screen.getAllByText("0")).toHaveLength(3);
@@ -516,14 +522,21 @@ describe("Profile — form fields and headings", () => {
 
     render(<ProfilePage />);
 
-    await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument());
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("@waveform");
+    // The <h1> exists while loading too — it just holds a <Skeleton> instead of
+    // the username — so wait for the text, or this reads the skeleton.
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("@waveform")
+    );
     // The page used to start at <h2> and then jump to <h4>.
     expect(screen.queryByRole("heading", { level: 4 })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual([
-      "Reel 1",
-      "Reel 2",
-    ]);
+    // The clips are a separate request from the profile, so wait for them too
+    // rather than assuming they landed with the profile.
+    await waitFor(() =>
+      expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual([
+        "Reel 1",
+        "Reel 2",
+      ])
+    );
   });
 });
 
