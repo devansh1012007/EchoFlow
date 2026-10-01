@@ -89,9 +89,24 @@ class SubscriptionSyncView(APIView):
                 {"detail": "RevenueCat not configured."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-        from ..tasks import sync_revenuecat_entitlements
-        sync_revenuecat_entitlements.delay(str(request.user.id))
-        return Response({"detail": "Sync triggered. Check back in a few seconds."})
+        # A queued task made a purchase appear successful in RevenueCat while
+        # this request immediately returned the old Free limits. The mobile
+        # purchase flow then refreshed once, saw 60 seconds, and stayed there.
+        # Run the targeted lookup here so the response is the authoritative
+        # post-purchase state. The periodic Celery task remains the backstop
+        # for renewals and expirations.
+        from ..services.revenuecat import sync_entitlements
+        sync_entitlements(request.user)
+        request.user.refresh_from_db(fields=[
+            "has_pro_entitlement",
+            "pro_expires_at",
+            "pro_grace_until",
+            "pro_last_synced",
+        ])
+        return Response({
+            "detail": "Subscription synchronized.",
+            "is_pro": request.user.is_pro(),
+        })
 
 
 class SubscriptionManageView(APIView):

@@ -24,7 +24,7 @@ All RevenueCat env vars are defined in [AGENTS.md #environment-variables-require
 | `REVENUECAT_SECRET_KEY` | Yes (backend) | Secret API key for REST polling |
 | `REVENUECAT_PUBLIC_KEY` | Yes (frontend) | Public key for SDK init |
 | `REVENUECAT_PROJECT_TOKEN` | Yes | RevenueCat project token |
-| `REVENUECAT_ENTITLEMENT_ID` | Yes | Entitlement ID (`pro`) |
+| `REVENUECAT_ENTITLEMENT_ID` | Yes | Entitlement ID (`echoflow_pro`) |
 | `REVENUECAT_SYNC_INTERVAL_MINUTES` | No (default: 360) | Poll interval |
 | `REVENUECAT_WEBHOOK_SECRET` | Phase 2 | HMAC secret for webhooks |
 

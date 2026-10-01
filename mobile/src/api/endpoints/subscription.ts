@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { apiFetch } from '../client';
 import { subscriptionStatusSchema, type SubscriptionStatus } from '../schema';
 
-const syncResultSchema = z.object({ detail: z.string() });
+const syncResultSchema = z.object({ detail: z.string(), is_pro: z.boolean().optional() });
 const manageUrlSchema = z.object({ url: z.string().url() });
 
 /** Read the server-owned subscription state and stable RevenueCat id. */
@@ -12,7 +12,7 @@ export async function getSubscription(): Promise<SubscriptionStatus> {
 }
 
 /** Ask the backend to refresh RevenueCat state; entitlement remains server-owned. */
-export async function syncSubscription(): Promise<{ detail: string }> {
+export async function syncSubscription(): Promise<{ detail: string; is_pro?: boolean }> {
   return syncResultSchema.parse(await apiFetch('/subscription/sync/', { method: 'POST' }));
 }
 

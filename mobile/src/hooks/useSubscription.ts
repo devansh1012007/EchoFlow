@@ -30,6 +30,11 @@ export type SubscriptionState = {
 
 export type SubscriptionPlan = { productId: string; title: string; price: string };
 
+const SYNC_ATTEMPTS = 5;
+const SYNC_RETRY_MS = 500;
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /**
  * Coordinates the API-owned entitlement with RevenueCat's native customer
  * identity. Purchases never decide access locally; the API remains the source
@@ -104,9 +109,30 @@ export function useSubscription(): SubscriptionState {
   }, [authStatus, refresh]);
 
   const sync = useCallback(async () => {
-    await syncSubscription();
-    await refresh();
-  }, [refresh]);
+    const generationAtStart = generation.current;
+    setRefreshing(true);
+    setError(null);
+    try {
+      await syncSubscription();
+      // Older deployments may still enqueue the sync task. Poll briefly after
+      // the targeted request so a monthly purchase cannot leave the mobile state
+      // on the pre-purchase Free limits (60 seconds) while the backend catches up.
+      for (let attempt = 0; attempt < SYNC_ATTEMPTS; attempt += 1) {
+        const next = await getSubscription();
+        if (generation.current !== generationAtStart) return;
+        setStatus(next);
+        if (next.is_pro || attempt === SYNC_ATTEMPTS - 1) return;
+        await wait(SYNC_RETRY_MS);
+      }
+    } catch (cause) {
+      if (generation.current === generationAtStart) {
+        setError(cause instanceof Error ? cause.message : 'Could not synchronize subscription.');
+      }
+      throw cause;
+    } finally {
+      if (generation.current === generationAtStart) setRefreshing(false);
+    }
+  }, []);
 
   const presentPaywall = useCallback(async () => {
     await loadPlans();
