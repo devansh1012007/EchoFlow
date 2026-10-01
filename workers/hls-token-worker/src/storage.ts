@@ -219,9 +219,28 @@ export function createR2Backend(env: Env): StorageBackend {
       // production path uses a binding rather than an S3 fetch. Typed as
       // R2GetOptions rather than left to the overloaded `get` signature,
       // which has no overload accepting both Headers forms at once.
+      const range = request.headers.get("Range");
+      const conditionalHeaders = new Headers();
+      for (const name of [
+        "If-Match",
+        "If-None-Match",
+        "If-Modified-Since",
+        "If-Unmodified-Since",
+      ]) {
+        const value = request.headers.get(name);
+        if (value) conditionalHeaders.set(name, value);
+      }
+
+      // Do not pass the entire client request as `onlyIf`. In particular,
+      // X-EchoFlow-Media-Token is an application header, not an R2
+      // conditional request header. Passing it through makes a valid media
+      // request appear as a conditional miss in the binding.
       const options: R2GetOptions = {
-        range: request.headers.get("Range") ? request.headers : undefined,
-        onlyIf: request.headers,
+        // R2 accepts a Headers object for HTTP range parsing. A bare string
+        // type-checks through the broad union but fails at the binding
+        // boundary when a player requests a segment range.
+        range: range ? new Headers({ Range: range }) : undefined,
+        onlyIf: conditionalHeaders.keys().next().done ? undefined : conditionalHeaders,
       };
       const object = await bucket.get(key, options);
       if (object === null) return null;
