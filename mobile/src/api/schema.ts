@@ -129,6 +129,8 @@ export const feedClipSchema = z.object({
   duration_ms: z.number().optional(),
   /** B5: added to FeedClipSerializer for tag chips. */
   tags: z.array(z.string()).optional(),
+  /** Optional artwork. Older API deployments and clips without artwork send null. */
+  cover_image: z.string().url().nullable().optional(),
 });
 export type FeedClip = z.infer<typeof feedClipSchema>;
 

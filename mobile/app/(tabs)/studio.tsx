@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { RecordingPresets, requestRecordingPermissionsAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 
-import { approveClipModeration, getClipStatus, uploadClip, type CancellableUpload, type UploadAsset } from '../../src/api/endpoints/clips';
+import { approveClipModeration, createExternalShareLink, getClipStatus, uploadClip, type CancellableUpload, type UploadAsset } from '../../src/api/endpoints/clips';
 import { Button, ProgressBar } from '../../src/components/ui/Button';
 import { content, spacing, surface, accent, border } from '../../src/design/tokens';
 import { typography } from '../../src/design/typography';
@@ -23,6 +23,8 @@ export default function StudioScreen() {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [clipStatus, setClipStatus] = useState<string | null>(null);
+  const [publishedClipId, setPublishedClipId] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
   const upload = useRef<CancellableUpload | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -103,18 +105,33 @@ export default function StudioScreen() {
     setUploading(true);
     setProgress(0);
     setClipStatus(null);
+    setPublishedClipId(null);
     upload.current = uploadClip({ title, category, licenseType: 'Owned', asset }, setProgress);
     void upload.current.promise
       .then(async ({ clipId }) => {
         const approved = await approveClipModeration(clipId);
         setClipStatus(approved.status);
-        poll(clipId);
+        setPublishedClipId(clipId);
+        if (approved.status === 'processing') poll(clipId);
       })
       .catch((cause: unknown) => {
         if (cause instanceof DOMException && cause.name === 'AbortError') return;
         Alert.alert('Upload failed', cause instanceof Error ? cause.message : 'Try again.');
       })
       .finally(() => { setUploading(false); upload.current = null; });
+  };
+
+  const shareOutsideEchoFlow = async () => {
+    if (!publishedClipId || sharing || clipStatus !== 'ready') return;
+    setSharing(true);
+    try {
+      const { url } = await createExternalShareLink(publishedClipId);
+      await Share.share({ title: title.trim() || 'EchoFlow clip', message: `${title.trim() || 'Listen on EchoFlow'}\n${url}`, url });
+    } catch (cause) {
+      Alert.alert('Could not create share link', cause instanceof Error ? cause.message : 'Try again after processing finishes.');
+    } finally {
+      setSharing(false);
+    }
   };
 
   return (
@@ -133,6 +150,7 @@ export default function StudioScreen() {
       <Text style={styles.limit}>Limit: {maxDurationSeconds ?? '…'} seconds · {maxSizeMb ?? '…'} MB</Text>
       {uploading ? <><ProgressBar progress={progress} /><Button label="Cancel upload" onPress={() => upload.current?.cancel()} variant="ghost" /></> : null}
       {clipStatus ? <Text accessibilityLiveRegion="polite" style={styles.status}>Status: {clipStatus}</Text> : null}
+      {publishedClipId && clipStatus === 'ready' ? <Button label="Share outside EchoFlow" accessibilityLabel="Share this published clip outside EchoFlow" onPress={() => void shareOutsideEchoFlow()} loading={sharing} variant="ghost" /> : null}
       <Button label="Upload and process" onPress={publish} disabled={!asset || !title.trim() || recording.isRecording || uploading} loading={uploading} />
     </ScrollView>
   );

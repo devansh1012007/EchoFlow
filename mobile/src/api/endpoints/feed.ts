@@ -78,7 +78,7 @@ export async function getFeedPage(): Promise<FeedResponse> {
 export async function getSuggestions(
   category?: string,
   cursor?: string | null,
-): Promise<{ clips: FeedClip[]; next: string | null }> {
+): Promise<{ clips: FeedClip[]; next: string | null; personalized: boolean }> {
   const params = new URLSearchParams();
   if (category) params.set('category', category);
   if (cursor) params.set('cursor', cursor);
@@ -92,9 +92,15 @@ export async function getSuggestions(
       // `decode_cursor` base64-decode the url characters into garbage and
       // raise InvalidCursor (400), so extract the query parameter.
       next: z.string().nullable().default(null),
+      /** Whether the backend ranked against this listener's taste vectors. */
+      personalized: z.boolean().default(false),
     })
     .parse(raw);
-  return { clips: parsed.results, next: cursorFromNextUrl(parsed.next) };
+  return {
+    clips: parsed.results,
+    next: cursorFromNextUrl(parsed.next),
+    personalized: parsed.personalized,
+  };
 }
 
 /**

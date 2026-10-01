@@ -4,7 +4,12 @@ import Screen from '../explore';
 import { getSuggestions, mintPlaybackToken } from '../../../src/api/endpoints/feed';
 import { loadClip, pause, resume, usePlayerStore } from '../../../src/store/player';
 
+jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
 jest.mock('../../../src/hooks/useBackendStatus', () => ({ useBackendStatus: () => 'ok' }));
+jest.mock('../../../src/components/comments/CommentSheet', () => ({ CommentSheet: () => null }));
+jest.mock('../../../src/components/share/ShareModal', () => ({ ShareModal: () => null }));
+jest.mock('../../../src/api/endpoints/interactions', () => ({ toggleLike: jest.fn() }));
+jest.mock('../../../src/store/auth', () => ({ useAuthStore: (select: (state: { user: { id: number } }) => unknown) => select({ user: { id: 1 } }) }));
 jest.mock('../../../src/api/endpoints/feed', () => ({
   getSuggestions: jest.fn(),
   mintPlaybackToken: jest.fn(),
@@ -56,21 +61,21 @@ beforeEach(() => {
 
 describe('Discover', () => {
   it('uses the exact category value and renders results', async () => {
-    mockSuggestions.mockResolvedValue({ clips: [clip('a')], next: null });
+    mockSuggestions.mockResolvedValue({ clips: [clip('a')], next: null, personalized: false });
     const screen = await render(<Screen />);
 
     await screen.findByText('clip a');
     expect(mockSuggestions).toHaveBeenCalledWith('all');
 
-    await fireEvent.press(screen.getByRole('button', { name: 'Music' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Filter Discover by Music' }));
     await screen.findByText('clip a');
     expect(mockSuggestions).toHaveBeenLastCalledWith('music');
   });
 
   it('paginates with the cursor the endpoint returned', async () => {
     mockSuggestions
-      .mockResolvedValueOnce({ clips: [clip('a')], next: 'opaque-cursor' })
-      .mockResolvedValueOnce({ clips: [clip('b')], next: null });
+      .mockResolvedValueOnce({ clips: [clip('a')], next: 'opaque-cursor', personalized: false })
+      .mockResolvedValueOnce({ clips: [clip('b')], next: null, personalized: false });
     const screen = await render(<Screen />);
 
     await screen.findByText('clip a');
@@ -85,7 +90,7 @@ describe('Discover', () => {
   it('offers a retry when the initial request fails', async () => {
     mockSuggestions
       .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce({ clips: [], next: null });
+      .mockResolvedValueOnce({ clips: [], next: null, personalized: false });
     const screen = await render(<Screen />);
 
     await screen.findByText('offline');
@@ -94,7 +99,7 @@ describe('Discover', () => {
   });
 
   it('shows an accessible play control and starts the selected clip', async () => {
-    mockSuggestions.mockResolvedValue({ clips: [clip('a')], next: null });
+    mockSuggestions.mockResolvedValue({ clips: [clip('a')], next: null, personalized: false });
     mockMintPlaybackToken.mockResolvedValue({ status: 'ok', token: 'clip-scoped-token' });
     const screen = await render(<Screen />);
 
@@ -106,7 +111,7 @@ describe('Discover', () => {
   });
 
   it('uses the visible control to pause or resume the active Discover clip', async () => {
-    mockSuggestions.mockResolvedValue({ clips: [clip('a')], next: null });
+    mockSuggestions.mockResolvedValue({ clips: [clip('a')], next: null, personalized: false });
     usePlayerStore.setState({ playingClipId: 'a', playback: 'playing' });
     const screen = await render(<Screen />);
 

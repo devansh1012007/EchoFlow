@@ -28,11 +28,48 @@ export async function getClipStatus(clipId: string): Promise<{ id: string; statu
 }
 
 const moderationResultSchema = z.object({ status: z.string(), clip_id: z.string() });
+const shareLinkSchema = z.object({
+  clip_id: z.string(),
+  // The server intentionally returns null until PUBLIC_APP_BASE_URL is set.
+  // A mobile client must never guess an API or media hostname for a bearer URL.
+  url: z.string().url().nullable(),
+  expires_in: z.number().int().positive(),
+});
+const publicClipSchema = z.object({
+  id: z.string(), title: z.string(), creator_name: z.string(), category: z.string(),
+  duration_ms: z.number().nullable().optional(), tags: z.array(z.string()).default([]),
+  cover_image: z.string().url().nullable().optional(),
+});
+const sharedPlaybackSchema = z.object({ status: z.literal('ok'), token: z.string().min(1), hls_playlist_url: z.string().url() });
 
 /** Starts the owner-authorized moderation and HLS processing workflow. */
 export async function approveClipModeration(clipId: string): Promise<{ status: string; clipId: string }> {
   const result = moderationResultSchema.parse(await apiFetch(`/clips/${clipId}/approve-moderation/`, { method: 'POST' }));
   return { status: result.status, clipId: result.clip_id };
+}
+
+/** Mint an owner-authorized external link after the clip has reached `ready`. */
+export async function createExternalShareLink(clipId: string): Promise<{ url: string; expiresIn: number }> {
+  const result = shareLinkSchema.parse(await apiFetch(`/clips/${clipId}/share-link/`, { method: 'POST' }));
+  if (result.url === null) {
+    throw new Error('External sharing is not configured yet. Set PUBLIC_APP_BASE_URL on the API server.');
+  }
+  return { url: result.url, expiresIn: result.expires_in };
+}
+
+export type PublicClip = z.infer<typeof publicClipSchema>;
+
+/** Read reduced, anonymous-safe metadata for an external share landing screen. */
+export async function getPublicClip(clipId: string): Promise<PublicClip> {
+  return publicClipSchema.parse(await apiFetch(`/clips/${clipId}/public/`, { headers: { Accept: 'application/json' } }));
+}
+
+/** Exchange a bearer share token only when the recipient explicitly presses play. */
+export async function playSharedClip(clipId: string, shareToken: string): Promise<{ token: string; hlsPlaylistUrl: string }> {
+  const result = sharedPlaybackSchema.parse(await apiFetch(`/clips/${clipId}/play/`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ s: shareToken }),
+  }));
+  return { token: result.token, hlsPlaylistUrl: result.hls_playlist_url };
 }
 
 /**

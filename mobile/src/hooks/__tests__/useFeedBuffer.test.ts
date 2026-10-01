@@ -218,7 +218,7 @@ describe('useSuggestionsFallback', () => {
   // a destroyed page.
 
   it('does not call the API while disabled', async () => {
-    mockGetSuggestions.mockResolvedValue({ clips: [], next: null });
+    mockGetSuggestions.mockResolvedValue({ clips: [], next: null, personalized: false });
     await renderHook(() => useSuggestionsFallback('all', false));
     expect(mockGetSuggestions).not.toHaveBeenCalled();
   });
@@ -228,14 +228,14 @@ describe('useSuggestionsFallback', () => {
     // matched literally against a free-text column and matched nothing, which
     // is why this caller hardcoded 'music' and a cold start could only ever
     // show one category.
-    mockGetSuggestions.mockResolvedValue({ clips: [clip('a')], next: null });
+    mockGetSuggestions.mockResolvedValue({ clips: [clip('a')], next: null, personalized: false });
     const { result } = await renderHook(() => useSuggestionsFallback('all', true));
     await waitFor(() => expect(result.current.clips).toHaveLength(1));
     expect(mockGetSuggestions).toHaveBeenCalledWith('all');
   });
 
   it('returns validated clips through the typed endpoint', async () => {
-    mockGetSuggestions.mockResolvedValue({ clips: [clip('a'), clip('b')], next: null });
+    mockGetSuggestions.mockResolvedValue({ clips: [clip('a'), clip('b')], next: null, personalized: false });
     const { result } = await renderHook(() => useSuggestionsFallback('all', true));
     await waitFor(() => expect(result.current.clips).toHaveLength(2));
     expect(result.current.clips[0]?.id).toBe('a');
@@ -249,7 +249,7 @@ describe('useSuggestionsFallback', () => {
   });
 
   it('is safe to call repeatedly', async () => {
-    mockGetSuggestions.mockResolvedValue({ clips: [clip('a')], next: null });
+    mockGetSuggestions.mockResolvedValue({ clips: [clip('a')], next: null, personalized: false });
     const { result } = await renderHook(() => useSuggestionsFallback('all', true));
     await waitFor(() => expect(result.current.clips).toHaveLength(1));
     await act(async () => { result.current.clips.length; });

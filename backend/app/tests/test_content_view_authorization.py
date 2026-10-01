@@ -902,7 +902,7 @@ class TestSharePipelineIsNotWeakened:
             f"/clips/{clip.id}/share-link/", {}, format="json"
         )
         assert response.status_code == 201
-        assert response.json()["path"].startswith(f"/clips/{clip.id}/public/?s=")
+        assert response.json()["path"].startswith(f"/clip/{clip.id}?s=")
 
     def test_the_share_token_still_does_not_unlock_a_different_clip(
         self, owner

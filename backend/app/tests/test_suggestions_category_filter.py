@@ -60,6 +60,7 @@ class SuggestionCategoryFilterTests(TestCase):
         self.assertEqual(
             self._ids(r), {str(self.music.id), str(self.funny.id), str(self.science.id)},
         )
+        self.assertFalse(r.data['personalized'])
 
     def test_bare_request_defaults_to_unfiltered(self):
         """Omitting the param took the same `'all'` default, so the bare

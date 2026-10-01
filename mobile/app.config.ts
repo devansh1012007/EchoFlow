@@ -98,6 +98,9 @@ export default (_context: ConfigContext): ExpoConfig => {
     ios: {
       supportsTablet: false, // MVP, plan §12
       bundleIdentifier: 'com.echoflow.audio',
+      // The association file is hosted by app.echoflow.in. It must contain
+      // this app's Apple Team ID before an iOS release build is submitted.
+      associatedDomains: ['applinks:app.echoflow.in'],
       infoPlist: {
         UIBackgroundModes: ['audio'],
         NSMicrophoneUsageDescription:
@@ -106,6 +109,14 @@ export default (_context: ConfigContext): ExpoConfig => {
     },
     android: {
       package: 'com.echoflow.audio',
+      intentFilters: [
+        {
+          action: 'VIEW',
+          autoVerify: true,
+          data: [{ scheme: 'https', host: 'app.echoflow.in', pathPrefix: '/clip' }],
+          category: ['BROWSABLE', 'DEFAULT'],
+        },
+      ],
       adaptiveIcon: {
         backgroundColor: MIDNIGHT,
         foregroundImage: './assets/android-icon-foreground.png',
