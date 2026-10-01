@@ -1,5 +1,6 @@
 import { getPublicProfile, getPublicProfileClips, updateProfilePicture } from '../endpoints/profile';
 import { apiFetch } from '../client';
+import { ownProfileSchema } from '../schema';
 
 jest.mock('../client', () => ({ apiFetch: jest.fn() }));
 const mockApiFetch = apiFetch as jest.MockedFunction<typeof apiFetch>;
@@ -13,6 +14,13 @@ const profile = {
   id: 42, username: 'alice', profile_picture: null, profile_picture_url: null,
   followers_count: 12, following_count: 3, uploads_count: 1, is_following: false,
   date_joined: '2026-09-30T00:00:00Z',
+};
+
+const ownProfile = {
+  ...profile,
+  liked_clips: [],
+  profile_picture: 'avatars/alice.jpg',
+  profile_picture_url: 'https://media.example.test/avatars/alice.jpg?signature=valid',
 };
 
 beforeEach(() => mockApiFetch.mockReset());
@@ -59,5 +67,15 @@ describe('public profile endpoints', () => {
     expect(mockApiFetch).toHaveBeenCalledWith('/profile/me/update/', expect.objectContaining({
       method: 'PATCH', body: expect.any(FormData),
     }));
+  });
+});
+
+describe('own profile avatar contract', () => {
+  it('keeps the server-signed avatar URL distinct from the storage key', () => {
+    // `profile_picture` may be a private object key. The own-profile schema
+    // must preserve the signed URL used by the native Image component.
+    const parsed = ownProfileSchema.parse(ownProfile);
+    expect(parsed.profile_picture).toBe('avatars/alice.jpg');
+    expect(parsed.profile_picture_url).toBe('https://media.example.test/avatars/alice.jpg?signature=valid');
   });
 });

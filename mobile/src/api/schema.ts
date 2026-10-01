@@ -307,6 +307,9 @@ export const ownProfileSchema = z.object({
   username: z.string(),
   email: z.string().optional(),
   profile_picture: z.string().nullable().optional(),
+  // The raw field can be an internal object key. Images must use this signed,
+  // public URL emitted by OwnProfileSerializer instead.
+  profile_picture_url: z.string().url().nullable().optional(),
   followers_count: z.number().optional(),
   following_count: z.number().optional(),
   uploads_count: z.number().optional(),

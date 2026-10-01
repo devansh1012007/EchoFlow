@@ -75,7 +75,7 @@ export default function Screen() {
         ListHeaderComponent={
           <View style={styles.header}>
             <Pressable accessibilityRole="button" accessibilityLabel="Change profile picture" accessibilityState={{ busy: avatarBusy }} onPress={() => void chooseAvatar()} disabled={avatarBusy} style={styles.avatarButton}>
-              {profile.profile_picture ? <Image source={{ uri: profile.profile_picture }} style={styles.avatar} /> : <View style={styles.avatarFallback}><Text style={styles.avatarText}>{profile.username.slice(0, 1).toUpperCase()}</Text></View>}
+              {profile.profile_picture_url ? <Image source={{ uri: profile.profile_picture_url }} style={styles.avatar} accessibilityLabel={`${profile.username}'s profile picture`} /> : <View style={styles.avatarFallback}><Text style={styles.avatarText}>{profile.username.slice(0, 1).toUpperCase()}</Text></View>}
               <Text style={styles.avatarAction}>{avatarBusy ? 'Uploading…' : 'Change picture'}</Text>
             </Pressable>
             <Text style={styles.username}>{profile.username}</Text>

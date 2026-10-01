@@ -4,6 +4,7 @@ import * as WebBrowser from 'expo-web-browser';
 
 import { Button } from '../src/components/ui/Button';
 import { getLegalCompliance } from '../src/api/endpoints/auth';
+import type { LegalCompliance } from '../src/api/schema';
 import { getDataSummary, requestDataErasure, submitGrievance } from '../src/api/endpoints/legal';
 import { content, spacing, surface, accent, border } from '../src/design/tokens';
 import { typography } from '../src/design/typography';
@@ -12,14 +13,14 @@ import { useSubscription } from '../src/hooks/useSubscription';
 /** Account, billing, legal contacts and data-subject controls. */
 export default function SettingsScreen() {
   const subscription = useSubscription();
-  const [contacts, setContacts] = useState<Record<string, unknown> | null>(null);
+  const [contacts, setContacts] = useState<LegalCompliance | null>(null);
   const [subject, setSubject] = useState('');
   const [description, setDescription] = useState('');
   const [summary, setSummary] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState(false);
   const [purchasingProductId, setPurchasingProductId] = useState<string | null>(null);
 
-  useEffect(() => { void getLegalCompliance().then((value) => setContacts(value as Record<string, unknown>)).catch(() => undefined); }, []);
+  useEffect(() => { void getLegalCompliance().then(setContacts).catch(() => undefined); }, []);
 
   const openPortal = async () => {
     try { await WebBrowser.openBrowserAsync(await subscription.openCustomerPortal()); }
@@ -75,7 +76,7 @@ export default function SettingsScreen() {
       <Button label="Submit grievance" onPress={() => void sendGrievance()} disabled={!subject.trim() || !description.trim()} loading={busy} />
     </Section>
     <Section title="Compliance contacts">
-      <Text style={styles.body}>{contacts ? JSON.stringify(contacts, null, 2) : 'Loading contacts…'}</Text>
+      {contacts ? <ComplianceContacts contacts={contacts} /> : <Text style={styles.body}>Loading contacts…</Text>}
     </Section>
   </ScrollView>;
 }
@@ -84,11 +85,24 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text>{children}</View>;
 }
 
+function ComplianceContacts({ contacts }: { contacts: LegalCompliance }) {
+  const rows = [
+    ['Compliance officer', contacts.compliance_officer],
+    ['Grievance officer', contacts.grievance_officer],
+    ['Nodal contact', contacts.nodal_contact],
+  ] as const;
+  return <View style={styles.contactList}>
+    {rows.map(([role, person]) => <View key={role} style={styles.contactRow}><Text style={styles.contactRole}>{role}</Text><Text style={styles.contactName}>{person.name}</Text><Text selectable style={styles.contactEmail}>{person.email}</Text></View>)}
+    <View style={styles.contactRow}><Text style={styles.contactRole}>Registered address</Text><Text style={styles.body}>{contacts.physical_address}</Text></View>
+  </View>;
+}
+
 const styles = StyleSheet.create({
   screen: { flexGrow: 1, backgroundColor: surface.base, padding: spacing.stack, gap: spacing.stack },
   title: { ...typography.page, color: content.primary },
   section: { borderWidth: 1, borderColor: border.default, borderRadius: 16, padding: spacing.stack, gap: spacing.gutter },
   sectionTitle: { ...typography.label, color: accent.base }, body: { ...typography.bodySecondary, color: content.secondary },
+  contactList: { gap: spacing.stack }, contactRow: { gap: 3 }, contactRole: { ...typography.microLabel, color: content.tertiary }, contactName: { ...typography.body, color: content.primary }, contactEmail: { ...typography.bodySecondary, color: accent.base },
   error: { ...typography.bodySecondary, color: '#ffb4ab' },
   input: { minHeight: 48, borderWidth: 1, borderColor: border.default, borderRadius: 12, paddingHorizontal: spacing.gutter, color: content.primary },
   description: { minHeight: 110, paddingVertical: spacing.gutter, textAlignVertical: 'top' },

@@ -67,7 +67,9 @@ describe('Discover', () => {
     await screen.findByText('clip a');
     expect(mockSuggestions).toHaveBeenCalledWith('all');
 
-    await fireEvent.press(screen.getByRole('button', { name: 'Filter Discover by Music' }));
+    const music = screen.getByRole('tab', { name: 'Filter Discover by Music' });
+    expect(music).toHaveStyle({ minHeight: 44, flexShrink: 0 });
+    await fireEvent.press(music);
     await screen.findByText('clip a');
     expect(mockSuggestions).toHaveBeenLastCalledWith('music');
   });
