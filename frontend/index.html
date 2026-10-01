@@ -9,6 +9,23 @@
     <meta property="og:description" content="TikTok for your ears — an audio-first, short-form content platform for hands-free listening and discovery." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <!-- App icon. The mark is a 512px PNG with transparent corners, derived
+         from the master brand JPEG; favicon.ico carries real 16/32/48/64px art
+         (the one extension Pages is guaranteed to serve). -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/logo.png" />
+    <!-- Opaque and full-bleed on purpose: iOS applies its own squircle and
+         composites any alpha onto black. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- Absolute, not relative. Twitter/X does not reliably resolve a relative
+         og:image, and the page is only ever scraped at this origin. This also
+         fills a slot that was previously empty: the twitter:card above declared
+         summary_large_image with no image to show. -->
+    <meta property="og:image" content="https://app.echoflow.in/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:image" content="https://app.echoflow.in/og.png" />
+    <meta name="theme-color" content="#0A0A0A" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <!-- Lexend is the design-system face (src/styles/tokens.css --font-display /
