@@ -1,0 +1,92 @@
+# =============================================================================
+# EchoFlow — Small-scale all-in-one VPS deployment
+#
+# Includes the existing production VPS stack unchanged and adds the heavy
+# media processor on the same Docker network. This is intended for the
+# initial <=10-user deployment on a small, single-CPU VPS.
+#
+# Usage:
+#   bash scripts/refresh-media-wheelhouse.sh  # first media build on this VM
+#   docker compose --env-file .env -f docker-compose.vps-all-in-one.yml up -d --build
+#
+# Public ports and origins remain owned by docker-compose.vps.yml:
+#   nginx: 80/443, API: api.echoflow.in, HLS Worker: media.echoflow.in
+# The media worker publishes no host port. It reads uploads and writes HLS
+# output through the same private Cloudflare R2 bucket as the laptop worker.
+# =============================================================================
+
+include:
+  - path: docker-compose.vps.yml
+
+services:
+  celery_media:
+    image: echoflow-media:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: media
+    restart: unless-stopped
+    command: ["sh", "media-worker-entrypoint.sh"]
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+      - REDIS_BROKER_URL=${REDIS_BROKER_URL:-redis://redis_broker:6379/0}
+      - REDIS_CACHE_URL=${REDIS_CACHE_URL:-redis://redis_cache:6379/0}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
+      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-api.echoflow.in}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_STORAGE_BUCKET_NAME=${AWS_STORAGE_BUCKET_NAME:-echoflow-media}
+      - AWS_S3_ENDPOINT_URL=${AWS_S3_ENDPOINT_URL}
+      - AWS_S3_REGION_NAME=${AWS_S3_REGION_NAME:-auto}
+      - AWS_S3_QUERYSTRING_EXPIRE=${AWS_S3_QUERYSTRING_EXPIRE:-3600}
+      - PUBLIC_MEDIA_ENDPOINT_URL=${PUBLIC_MEDIA_ENDPOINT_URL:-https://media.echoflow.in}
+      - PUBLIC_HLS_ENDPOINT_URL=${PUBLIC_HLS_ENDPOINT_URL:-https://media.echoflow.in}
+      - HLS_URL_STYLE=${HLS_URL_STYLE:-edge}
+      - MEDIA_TOKEN_SECRET=${MEDIA_TOKEN_SECRET}
+      - MEDIA_TOKEN_TTL_SECONDS=${MEDIA_TOKEN_TTL_SECONDS:-600}
+      - HF_HOME=/home/appuser/.cache/huggingface
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - MEDIA_WORKER_CONCURRENCY=1
+      - MEDIA_WORKER_MAX_TASKS_PER_CHILD=5
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENV=${SENTRY_ENV:-production}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      - SENTRY_PROFILES_SAMPLE_RATE=${SENTRY_PROFILES_SAMPLE_RATE:-0.05}
+    volumes:
+      - vps_media_scratch:/tmp
+    networks:
+      echoflow:
+        ipv4_address: 172.28.0.14
+    depends_on:
+      db:
+        condition: service_healthy
+      redis_broker:
+        condition: service_healthy
+      redis_cache:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.EchoFlow inspect ping -d \"celery@$$(hostname)\" --timeout=10 || exit 1"]
+      interval: 30s
+      timeout: 15s
+      start_period: 90s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.85"
+          memory: 2304M
+          pids: 250
+        reservations:
+          cpus: "0.25"
+          memory: 768M
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+volumes:
+  vps_media_scratch:

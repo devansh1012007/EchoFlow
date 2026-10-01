@@ -251,6 +251,7 @@ COPY --from=py-deps-media --chown=appuser:appgroup \
 # Same explicit allowlist as the api stage.
 COPY --chown=appuser:appgroup backend/ ./backend/
 COPY --chown=appuser:appgroup manage.py wait_for_db.py gunicorn.conf.py ./
+COPY --chown=appuser:appgroup docker/media-worker-entrypoint.sh ./media-worker-entrypoint.sh
 COPY --chown=appuser:appgroup ai_ml/ ./ai_ml/
 
 # Worker-role liveness: passes ONLY if THIS container's Celery consumer
