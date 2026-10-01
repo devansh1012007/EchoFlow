@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, Text, TextInput, View, Pressable, KeyboardAvoidingView, Platform } from 'react-native';
+import { Image, ScrollView, Text, TextInput, View, Pressable, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
+
+import brandMark from '../../assets/brand-mark.png';
 
 import { Button } from '../../src/components/ui/Button';
 import { uiStyles, uiTints, MIN_TOUCH_TARGET } from '../../src/components/ui/primitives';
@@ -153,6 +155,10 @@ export default function RegisterScreen() {
     >
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
+          {/* Brand mark — see the identical block in (auth)/login.tsx for why it
+              is derived from the web master, why it is accessible={false}, and
+              why it carries no glow. */}
+          <Image source={brandMark} style={styles.brandMark} accessible={false} />
           <Text style={typography.microLabel}>EchoFlow</Text>
           <Text style={styles.title}>Create an account</Text>
         </View>
@@ -315,6 +321,8 @@ const styles = {
     paddingBottom: spacing.stack * 2,
   },
   header: { gap: 6, marginBottom: spacing.stack },
+  // 0.1695 * 56 = 9.5, rounded — matches (auth)/login.tsx.
+  brandMark: { width: 56, height: 56, borderRadius: 10 },
   title: { ...typography.page, color: content.primary },
   form: { gap: spacing.gutter },
   field: { gap: 6 },

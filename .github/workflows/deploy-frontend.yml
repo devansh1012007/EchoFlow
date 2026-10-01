@@ -29,6 +29,28 @@
 #   is dead on arrival: an https page fetching http://localhost is blocked as
 #   mixed content, with no error in CI and no build warning.
 #
+# TWO DEPLOY PATHS TO ONE PROJECT — read this before changing either
+#   The Pages project's own build pipeline (Workers Builds) deploys it, and this
+#   workflow deploys it. They are independent and nothing keeps them in sync.
+#
+#   The dashboard deploy command MUST be the Pages variant:
+#       npx wrangler pages deploy dist
+#   NOT `npx wrangler deploy`, which is the WORKERS variant. With no wrangler
+#   config in the repo, that runs autoconfig instead: wrangler invents a Worker
+#   named after the directory, sets assets.not_found_handling to
+#   single-page-application, and then rejects frontend/public/_redirects with
+#   "Line 17: Infinite loop detected in this rule". That rejection is not a bug
+#   in _redirects — Pages serves real files before the catch-all, so the rule
+#   cannot loop, while a Worker's SPA handling already covers it. wrangler's own
+#   guard ("you've run a Workers-specific command in a Pages project") only
+#   fires when a config with pages_build_output_dir exists, so with no config it
+#   autoconfigs a Worker instead of erroring.
+#
+#   npm run deploy (frontend/package.json) is that same Pages command, so the
+#   dashboard field and the script stay one thing. `wrangler` is a devDependency
+#   for the same reason: `npx wrangler deploy` fetched wrangler@4.145.0 ad hoc
+#   at build time, unpinned and unreviewed.
+#
 # SPA FALLBACK
 #   frontend/public/_redirects carries `/* /index.html 200`, which is what
 #   makes hard refreshes and shared `?clip=<id>` links work. It is committed,
@@ -74,9 +96,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          # Matches .github/workflows/deploy-hls-worker.yml:25 so the two
-          # pipelines do not disagree about the runtime.
-          node-version: '20'
+          # NOT pinned here on purpose. This used to hardcode '20' while local
+          # development ran 24, and three tests in profile.test.tsx passed on
+          # one major and failed on the other for reasons that had nothing to
+          # do with the tests (see AGENTS.md, 2026-10-01). Pinning one number
+          # in three places that can disagree is what hid it; a CI matrix is
+          # the fix, and it is not added yet. Until then this tracks whatever
+          # the Pages project runs, so change both together.
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 

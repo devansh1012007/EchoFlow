@@ -107,7 +107,7 @@ class TestShareLinkIssuance:
         # against the raw UUID object would fail on a correct response.
         assert body["clip_id"] == str(clip.id)
         assert body["token"]
-        assert body["path"].startswith(f"/clips/{clip.id}/public/?s=")
+        assert body["path"].startswith(f"/clip/{clip.id}?s=")
 
     def test_a_stranger_cannot_mint_a_link_for_someone_elses_clip(self, stranger, clip):
         response = authed(stranger).post(f"/clips/{clip.id}/share-link/", {}, format="json")

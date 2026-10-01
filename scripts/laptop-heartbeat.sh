@@ -15,11 +15,26 @@
 
 set -euo pipefail
 
-# Use the Redis broker URL from .env (via Tailscale to VPS)
-REDIS_URL="${REDIS_BROKER_URL:-redis://172.28.0.2:6379/0}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+COMPOSE_FILE="${PROJECT_DIR}/docker-compose.laptop.yml"
+ENV_FILE="${PROJECT_DIR}/.env.laptop"
+
+# Use a complete URL when supplied, otherwise construct one from the same
+# split host/port/password variables used by the worker.  Percent encoding is
+# required because the generated Redis password may contain URL-reserved bytes.
+if [ -z "${REDIS_BROKER_URL:-}" ] && [ -n "${REDIS_BROKER_PASSWORD:-}" ]; then
+    REDIS_URL="$(python3 - "${REDIS_BROKER_HOST:-172.28.0.2}" "${REDIS_BROKER_PORT:-6379}" "${REDIS_BROKER_PASSWORD}" <<'PY'
+from sys import argv
+from urllib.parse import quote
+print(f"redis://:{quote(argv[3], safe='')}@{argv[1]}:{argv[2]}/0")
+PY
+)"
+else
+    REDIS_URL="${REDIS_BROKER_URL:-redis://172.28.0.2:6379/0}"
+fi
 
 echo "Starting EchoFlow heartbeat..."
-echo "  Redis: ${REDIS_URL}"
 echo "  Interval: 30s"
 echo "  TTL: 60s"
 echo ""
@@ -32,18 +47,14 @@ if command -v redis-cli &>/dev/null; then
         sleep 30
     done
 else
-    echo "  redis-cli not found — falling back to python redis client"
+    echo "  redis-cli not found — writing through the media container"
     while true; do
-        python -c "
-import redis, sys
-try:
-    r = redis.from_url('${REDIS_URL}')
-    r.set('media_worker:alive', __import__('time').time(), ex=60)
-    r.close()
-    print(f'  [{__import__(\"datetime\").datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\")}] Heartbeat OK')
-except Exception as e:
-    print(f'  [{__import__(\"datetime\").datetime.now().strftime(\"%Y-%m-%d %H:%M:%S\")}] Heartbeat FAILED: {e}', file=sys.stderr)
-" 2>&1
+        if docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" exec -T celery_media \
+            python3 -c "from redis import Redis; from backend.EchoFlow.settings import REDIS_BROKER_URL; Redis.from_url(REDIS_BROKER_URL).set('media_worker:alive', __import__('time').time(), ex=60)"; then
+            echo "  [$(date '+%Y-%m-%d %H:%M:%S')] Heartbeat OK"
+        else
+            echo "  [$(date '+%Y-%m-%d %H:%M:%S')] Heartbeat FAILED" >&2
+        fi
         sleep 30
     done
 fi

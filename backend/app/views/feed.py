@@ -209,6 +209,19 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = FeedCursorPagination
 
+    def list(self, request, *args, **kwargs):
+        """Expose whether this page used a listener taste vector.
+
+        The client must not guess from local likes: watch telemetry and
+        onboarding tags can produce a useful taste vector without a like.  A
+        stable server-owned flag lets Discover call a cold account "Fresh
+        picks" and only call ranked results "For you".
+        """
+        response = super().list(request, *args, **kwargs)
+        if isinstance(response.data, dict):
+            response.data['personalized'] = getattr(self, '_personalized', False)
+        return response
+
     def get_queryset(self):
         user = self.request.user
         # `category` is a free-text CharField (models.py:112), NOT a
@@ -252,6 +265,7 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
         with metrics.time_suggestion_ranking(category=safe_category) as timer:
             try:
                 sem_query, ac_query = get_user_vectors(user)
+                self._personalized = bool(sem_query and ac_query)
                 if sem_query and ac_query:
                     queryset = queryset.annotate(
                         combined_distance=(
@@ -260,6 +274,7 @@ class SuggestionViewSet(viewsets.ReadOnlyModelViewSet):
                         )
                     ).order_by('combined_distance')
             except Exception as e:
+                self._personalized = False
                 logging.getLogger(__name__).warning(
                     "vector ranking failed for user %s; falling back to engagement_velocity: %s",
                     user.id, e,

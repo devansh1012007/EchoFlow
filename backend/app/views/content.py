@@ -865,7 +865,11 @@ class AudioUploadViewSet(viewsets.ModelViewSet):
             clip_key=clip_key,
             ttl=settings.SHARE_TOKEN_TTL_SECONDS,
         )
-        relative = f"/clips/{clip.id}/public/?s={token}"
+        # The bearer link is a product URL, never an API URL.  The public web
+        # app resolves its metadata/playback through the API after the user
+        # reaches this route; keeping that split prevents `api.` from becoming
+        # a confusing share destination and gives app links one canonical path.
+        relative = f"/clip/{clip.id}?s={token}"
         base = getattr(settings, "PUBLIC_APP_BASE_URL", "")
         return Response({
             "clip_id": clip.id,

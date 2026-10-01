@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { Headphones, Radio, Eye, EyeOff, ArrowRight } from "lucide-react";
+import { Radio, Eye, EyeOff, ArrowRight } from "lucide-react";
 import { useAuth } from "../stores/auth";
 
 interface LoginPageProps {
@@ -229,9 +229,17 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       <div className="w-full max-w-md relative z-10">
         {/* Logo + Brand */}
         <div className="text-center mb-10">
-          <div className="w-16 h-16 rounded-2xl bg-[#FF6321] flex items-center justify-center mx-auto mb-5 shadow-[0_0_32px_rgba(255,99,33,0.35)]">
-            <Headphones className="w-8 h-8 text-black" />
-          </div>
+          {/* Real brand mark, matching Header.tsx. `alt` is empty because the
+              <h1> immediately below carries the accessible name, and this
+              <main aria-labelledby={TITLE_ID}> is addressed by that heading —
+              a described image here would only add a second name. */}
+          <img
+            src="/logo.png"
+            alt=""
+            width={64}
+            height={64}
+            className="w-16 h-16 rounded-[17%] mx-auto mb-5 shadow-[0_0_32px_rgba(235,163,115,0.35)]"
+          />
           <h1
             id={TITLE_ID}
             className="text-3xl md:text-4xl font-black uppercase tracking-tight text-white"

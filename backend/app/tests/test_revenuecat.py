@@ -56,6 +56,30 @@ class TestIsPro:
 # 2. RevenueCat service layer (sync_entitlements)
 # ---------------------------------------------------------------------------
 class TestSyncEntitlements:
+    def test_monthly_product_grants_configured_echoflow_pro_entitlement(self, user, settings):
+        """Products identify the purchase; the entitlement grants Pro access."""
+        from backend.app.services.revenuecat import sync_entitlements
+
+        settings.REVENUECAT_SECRET_KEY = "test-secret-key"
+        settings.REVENUECAT_ENTITLEMENT_ID = "echoflow_pro"
+        expires_at = timezone.now() + timedelta(days=30)
+        fake_subscriber = {
+            "entitlements": {
+                "echoflow_pro": {
+                    "product_identifier": "monthly",
+                    "expires_date": expires_at.isoformat(),
+                }
+            },
+            "subscriptions": {"monthly": {"store": "test_store"}},
+        }
+
+        with mock.patch("backend.app.services.revenuecat.get_subscriber_info", return_value=fake_subscriber):
+            assert sync_entitlements(user) is True
+
+        user.refresh_from_db()
+        assert user.is_pro() is True
+        assert user.pro_expires_at == expires_at
+
     def test_sync_accepts_documented_v1_entitlement_payload(self, user, settings):
         """RevenueCat v1 keys entitlements by ID and uses ISO timestamps."""
         from backend.app.services.revenuecat import sync_entitlements
@@ -219,7 +243,7 @@ class TestSubscriptionStatusView:
         r = auth_client.get(self.URL)
         assert r.status_code == 200
         assert r.data["is_pro"] is True
-        assert "limits" in r.data
+        assert r.data["limits"]["max_clip_duration_seconds"] == "300"
 
     def test_status_for_free_user(self, auth_client, user):
         r = auth_client.get(self.URL)
@@ -557,12 +581,13 @@ class TestSubscriptionManageView:
 class TestSubscriptionSyncView:
     URL = "/subscription/sync/"
 
-    def test_sync_task_triggered(self, auth_client, user, settings):
+    def test_sync_runs_targeted_lookup_before_returning(self, auth_client, user, settings):
         settings.REVENUECAT_SECRET_KEY = "test-secret"
-        with mock.patch("backend.app.tasks.sync_revenuecat_entitlements") as mock_task:
+        with mock.patch("backend.app.services.revenuecat.sync_entitlements") as mock_sync:
             r = auth_client.post(self.URL)
             assert r.status_code == 200
-            mock_task.delay.assert_called_once_with(str(user.id))
+            mock_sync.assert_called_once_with(mock.ANY)
+            assert r.data["is_pro"] is False
 
     def test_sync_rejected_when_no_secret_key(self, auth_client, user, settings):
         settings.REVENUECAT_SECRET_KEY = ""

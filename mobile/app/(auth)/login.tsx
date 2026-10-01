@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { ScrollView, Text, TextInput, View, KeyboardAvoidingView, Platform } from 'react-native';
+import { Image, ScrollView, Text, TextInput, View, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
+
+import brandMark from '../../assets/brand-mark.png';
 
 import { Button } from '../../src/components/ui/Button';
 import { uiStyles, uiTints, onAccent } from '../../src/components/ui/primitives';
@@ -47,6 +49,21 @@ export default function LoginScreen() {
     >
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
+          {/* Brand mark, mirroring the web lockup (Header.tsx / Login.tsx). The
+              PNG is derived from the committed web master
+              (frontend/public/logo.png) rather than re-rendered from the source
+              JPEG, so the two clients ship the same pixels; brandMark keeps the
+              squircle silhouette (0.1695 of the mark's width, measured) even
+              where the alpha is lost.
+
+              `accessible={false}` because the microLabel directly below already
+              names the brand -- the same reason the web uses alt="". A
+              focusable image here would make VoiceOver read "EchoFlow" twice.
+
+              No glow, unlike the web header: the mobile tokens define no shadow
+              or elevation scale, and RN has no shadowColor glow to tint, so
+              faking one would invent a token the design system does not have. */}
+          <Image source={brandMark} style={styles.brandMark} accessible={false} />
           <Text style={typography.microLabel}>EchoFlow</Text>
           <Text style={styles.title}>Sign in</Text>
           <Text style={styles.subtitle}>TikTok for your ears.</Text>
@@ -134,6 +151,9 @@ const styles = {
     alignSelf: 'center',
   },
   header: { gap: 6, marginBottom: spacing.stack },
+  // 0.1695 * 56 = 9.5, rounded. The PNG already carries transparent corners;
+  // this is belt-and-braces so the mark never renders as a hard square.
+  brandMark: { width: 56, height: 56, borderRadius: 10 },
   title: { ...typography.page, color: content.primary },
   subtitle: { ...typography.bodySecondary, color: content.tertiary },
   form: { gap: spacing.gutter },

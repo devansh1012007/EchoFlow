@@ -70,14 +70,14 @@ one file (decision O2).
 
 ## Known friction
 
-**No committed lockfile.** The root `.gitignore:34` ignores
-`mobile/package-lock.json` (and `frontend/package-lock.json`) — a pre-existing
-repo convention, not something this branch introduced. It means `npm install`
-resolves fresh on every machine, so the SDK-aligned versions that
-`npx expo install` selected are not reproducible, and two developers can end up
-on different trees. Left alone deliberately: changing it affects `frontend/`
-too and is a repo-wide reproducibility decision, not a mobile one. Worth an
-explicit decision.
+**No committed lockfile.** The root `.gitignore` still ignores
+`mobile/package-lock.json` — a pre-existing repo convention, not something this
+branch introduced. It means `npm install` resolves fresh on every machine, so
+the SDK-aligned versions that `npx expo install` selected are not reproducible,
+and two developers can end up on different trees. Left alone deliberately:
+`frontend/` was un-ignored from this same rule on 2026-10-01 (npm is now the
+frontend's package manager of record), but mobile remains `npx expo install`
+driven, so its resolution is a separate decision.
 
 **Typed routes need one command.** `experiments.typedRoutes` is on, but
 `.expo/types/router.d.ts` is generated and gitignored. Run `npx expo start` or

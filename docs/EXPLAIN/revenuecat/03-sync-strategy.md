@@ -91,7 +91,7 @@ def get_subscriber_info(app_user_id: str) -> dict | None:
 
 ```python
 def _is_active_entitlement(subscriber: dict) -> tuple[bool, datetime | None, datetime | None]:
-    entitlement_id = getattr(settings, "REVENUECAT_ENTITLEMENT_ID", "pro")
+    entitlement_id = getattr(settings, "REVENUECAT_ENTITLEMENT_ID", "echoflow_pro")
     entitlements = subscriber.get("entitlements", {})
     
     for _, ent_data in entitlements.items():

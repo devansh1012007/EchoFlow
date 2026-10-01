@@ -1053,6 +1053,40 @@ docker compose exec -e PYTHONPATH=/app -e TEST_DB_NAME=echoflow_test_<unique> \
 
 ---
 
+### 2026-10-01 — frontend deploy: lockfile, and a test race that was really a Node-major race
+**Learned:**
+- **Cloudflare Pages picks the package manager from the lockfile in the repo**, so a committed `bun.lock` forced `bun install --frozen-lockfile` against Pages' pinned Bun 1.2.15 while `bun.lock` was `lockfileVersion: 2` (needs Bun ≥ 1.3) — the deploy died at install, before the build command. That lockfile was also an AI Studio scaffold that had drifted from `package.json` (locked `@google/genai`/`dotenv`/`express`/`multer`/`motion`, locked nothing for `vitest`/`jsdom`/`@testing-library/*`). Meanwhile `.gitignore` excluded `frontend/package-lock.json`, so `deploy-frontend.yml`'s `npm ci` could not have worked either. **A lockfile policy and the deploy workflow silently contradicted each other and only the Pages failure was visible.**
+- **`waitFor` runs its callback synchronously on the first check** (`node_modules/@testing-library/dom/dist/wait-for.js`: `checkCallback()` is called inside the Promise executor, after `setInterval`/`MutationObserver`, with no `await` before it) and then resolves. So `await waitFor(() => expect(node).toBeInTheDocument())` is **already true while the node is a `<Skeleton>`**, and the assertion on the next line reads the pre-fetch DOM. Measured on `ProfilePage`: `h1` was still empty after 6 microtask hops, `waitFor`'s first check saw `""`, and the DOM was populated only by the time the `await` resumed — a margin of a few microtasks.
+- **"Passes locally, fails in CI" was a Node *major* difference, not slowness.** No `engines`, no `.nvmrc`; local ran v24.19.0 while Pages and all three workflows pinned 20. Proven in Docker on one host, so speed was controlled: unpatched `profile.test.tsx` → **2 failed under `node:20`, 22 passed under `node:24`**, and the two failures were byte-for-byte the CI ones. Patched: 443/443 under `node:20`. **Do not explain a green local suite as a slow CI machine without testing the runtime — `docker run node:<ci-major>` is the instrument.**
+- **Latency probes must not use real timers.** Injecting `setTimeout` into `fetchMock` breaks the 7 of 22 files that call `vi.useFakeTimers()`, so its failure count measures nothing. Running the suite under the CI's Node major is both cleaner and exact.
+
+**Changed:** `frontend/src/test/profile.test.tsx` (3 tests now wait on the value that proves the fetch landed, not on a node the skeleton owns), `951e431`; `e215330` removed `frontend/bun.lock` and committed `frontend/package-lock.json`; `mobile/README.md` lockfile note.
+
+**Verified:** `node:20` (Pages' runtime) → 443/443 in Docker. Unpatched → the 2 CI failures reproduced deterministically.
+
+**Open:**
+- **The Node version is pinned in three places that disagree, and one is not in the repo.** Pages is set in the dashboard (`NODE_VERSION`), workflows hardcode `node-version`, and a developer's local Node is whatever they happen to have. Pages now reports `nodejs@24.19.0` and the workflow says `'24'`, but there is still **no `.nvmrc` and no `engines` field**, so nothing *enforces* it and the two can drift apart again silently. A two-version CI matrix plus an `engines` pin is the real fix; neither added.
+- No guard against the class: any future test that waits on a skeleton-owned node can pass on one Node major and fail on another. A two-version CI matrix would catch it; not added.
+
+---
+
+### 2026-10-01 — Pages deploy: `wrangler deploy` is the Workers variant, not Pages
+**Learned:**
+- **The deploy command cannot be left empty** on Workers Builds (the unified pipeline: `WORKERS_CI`, "Executing user deploy command"). It is required and *defaults* to `npx wrangler deploy` — the **Workers** command. Correct value for this project: **`npx wrangler pages deploy dist`**. I first told the owner to clear the field; that was wrong, and the fix is to change the command, not remove it.
+- **`wrangler deploy` on a Pages project does not fail loudly — it autoconfigs a Worker.** With no wrangler config in the repo, wrangler invented a Worker named `echoflow`, set `assets.not_found_handling: "single-page-application"`, re-ran the build through `@cloudflare/vite-plugin`, and then failed on `frontend/public/_redirects` with `Line 17: Infinite loop detected in this rule [100324]`. **That rejection is not a defect in `_redirects`:** Pages serves real files before the catch-all so the rule cannot re-trigger, while a Worker's SPA handling already covers that job. wrangler's own guard ("you've run a Workers-specific command in a Pages project") only fires when a config containing `pages_build_output_dir` exists — with no config it autoconfigs instead of erroring.
+- **The generated config lives only in the build container.** `git status` was clean afterwards: the `wrangler.jsonc` wrangler offered to create never reached the repo, so the build was not reproducible and nothing in the tree recorded which target was intended. `.github/workflows/deploy-frontend.yml`, `_redirects` and `PUBLIC_APP_BASE_URL` all said Pages all along.
+
+**Changed:** `frontend/package.json` (`deploy` script = `npm run build && wrangler pages deploy dist`; `wrangler` pinned as a devDependency — `npx wrangler deploy` had been fetching 4.145.0 ad hoc and unpinned), `frontend/package-lock.json`, `.github/workflows/deploy-frontend.yml` (node-version `'20'`→`'24'` + a header note on the two-deploy-path trap and why `_redirects` must not be "fixed").
+
+**Verified:** lint clean, 443/443 tests, `vite build` emits `dist/` with `_redirects` byte-identical to `public/_redirects`, and `wrangler pages deploy --help` confirms the positional `directory` + `--project-name` flags. The deploy itself is **not** verified — it needs dashboard credentials and an authenticated run.
+
+**Open:**
+- **The dashboard deploy command is the one thing still unverified.** It must be `npx wrangler pages deploy dist` (or `npm run deploy`). If it still says `npx wrangler deploy`, the same autoconfig-to-Worker failure returns. The Pages project name is not in the repo — `CLOUDFLARE_PAGES_PROJECT` is only a GitHub variable, so `wrangler pages deploy` without `--project-name` may need it added.
+- **`deploy-frontend.yml` is a second, independent deploy path to the same Pages project**, triggered only on `main`, and nothing keeps the two in agreement. Two writers, one target.
+- No `.nvmrc` / `engines` (see the previous entry).
+
+---
+
 ## DOs and DON'Ts
 
 Accumulated from user corrections. Append on your own when corrected.

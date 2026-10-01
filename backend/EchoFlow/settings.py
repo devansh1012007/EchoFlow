@@ -1194,7 +1194,10 @@ PRIVACY_VERSION = os.environ.get('PRIVACY_VERSION', 'v1.0')
 REVENUECAT_SECRET_KEY = os.environ.get('REVENUECAT_SECRET_KEY', '')
 REVENUECAT_PUBLIC_KEY = os.environ.get('REVENUECAT_PUBLIC_KEY', '')
 REVENUECAT_PROJECT_TOKEN = os.environ.get('REVENUECAT_PROJECT_TOKEN', '')
-REVENUECAT_ENTITLEMENT_ID = os.environ.get('REVENUECAT_ENTITLEMENT_ID', 'pro')
+# Must match the entitlement configured in the RevenueCat project and the
+# mobile Test Store build. Products (monthly/yearly/lifetime) grant this one
+# entitlement; they are not entitlement identifiers themselves.
+REVENUECAT_ENTITLEMENT_ID = os.environ.get('REVENUECAT_ENTITLEMENT_ID', 'echoflow_pro')
 REVENUECAT_SYNC_INTERVAL_MINUTES = int(os.environ.get('REVENUECAT_SYNC_INTERVAL_MINUTES', '360'))
 REVENUECAT_CUSTOMER_PORTAL_URL = os.environ.get('REVENUECAT_CUSTOMER_PORTAL_URL', '')
 

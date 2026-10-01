@@ -11,6 +11,7 @@ export type SuggestionsState = {
   loadingMore: boolean;
   error: string | null;
   hasNextPage: boolean;
+  personalized: boolean;
   refresh: () => void;
   loadMore: () => void;
 };
@@ -22,6 +23,7 @@ export function useSuggestions(category: string): SuggestionsState {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [personalized, setPersonalized] = useState(false);
   const [reload, setReload] = useState(0);
   const generationRef = useRef(0);
   const pagingRef = useRef(false);
@@ -33,6 +35,7 @@ export function useSuggestions(category: string): SuggestionsState {
     setRefreshing(false);
     setLoadingMore(false);
     setError(null);
+    setPersonalized(false);
     setClips([]);
     setNext(null);
 
@@ -41,6 +44,7 @@ export function useSuggestions(category: string): SuggestionsState {
         if (generationRef.current !== generation) return;
         setClips(page.clips);
         setNext(page.next);
+        setPersonalized(page.personalized);
       },
       (err: unknown) => {
         if (generationRef.current !== generation) return;
@@ -84,5 +88,5 @@ export function useSuggestions(category: string): SuggestionsState {
     });
   }, [category, loading, next]);
 
-  return { clips, loading, refreshing, loadingMore, error, hasNextPage: next !== null, refresh, loadMore };
+  return { clips, loading, refreshing, loadingMore, error, hasNextPage: next !== null, personalized, refresh, loadMore };
 }

@@ -76,15 +76,36 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
             A <button>, not a <div onClick>: this is the shortest route back to
             the feed from anywhere in the app, and as a div it had no role, no
             tabIndex and no key handler, so it was unreachable by keyboard
-            (RECON-06 §10). `type="button"` keeps it from submitting anything. */}
+            (RECON-06 §10). `type="button"` keeps it from submitting anything.
+
+            The mark was CSS-drawn (an orange disc with a pulsing dot) and is now
+            the real brand image, served from public/logo.png — 512px with
+            transparent corners, so no import and no bundler asset entry. `alt`
+            is empty because the wordmark beside it already names the brand; a
+            non-empty alt would announce "EchoFlow" twice. The glow keeps the
+            original's 0.35 alpha but in the logo's own terracotta
+            (#EBA373) rather than the UI accent orange: the mark's plate is
+            #0B0C10, only a shade off this header's #0A0A0A, so it is the
+            terracotta that carries the separation. `rounded-[17%]` is the
+            mark's measured corner radius (0.1695 of its width), so the
+            silhouette still reads as a squircle rather than a hard square.
+
+            The old mark pulsed (`animate-pulse` on the inner dot). That motion
+            is not carried over: pulsing a 32px image is a far larger flicker
+            than pulsing a 14px dot, and the concentric arcs are a static
+            emission graphic. Hover scale is unchanged. */}
         <button
           type="button"
           onClick={() => setActiveTab("feed")}
           className="flex items-center gap-3 cursor-pointer select-none group text-left"
         >
-          <div className="w-8 h-8 bg-[#FF6321] rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(255,99,33,0.35)] transition-transform group-hover:scale-105">
-            <div className="w-3.5 h-3.5 border-2 border-black rounded-full animate-pulse" aria-hidden="true" />
-          </div>
+          <img
+            src="/logo.png"
+            alt=""
+            width={32}
+            height={32}
+            className="w-8 h-8 rounded-[17%] shadow-[0_0_20px_rgba(235,163,115,0.35)] transition-transform group-hover:scale-105"
+          />
           <div>
             <span className="text-xl md:text-2xl font-black tracking-tighter uppercase text-[#F5F5F5] leading-none">
               EchoFlow
