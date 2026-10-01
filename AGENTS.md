@@ -1053,6 +1053,24 @@ docker compose exec -e PYTHONPATH=/app -e TEST_DB_NAME=echoflow_test_<unique> \
 
 ---
 
+### 2026-10-01 — frontend deploy: lockfile, and a test race that was really a Node-major race
+**Learned:**
+- **Cloudflare Pages picks the package manager from the lockfile in the repo**, so a committed `bun.lock` forced `bun install --frozen-lockfile` against Pages' pinned Bun 1.2.15 while `bun.lock` was `lockfileVersion: 2` (needs Bun ≥ 1.3) — the deploy died at install, before the build command. That lockfile was also an AI Studio scaffold that had drifted from `package.json` (locked `@google/genai`/`dotenv`/`express`/`multer`/`motion`, locked nothing for `vitest`/`jsdom`/`@testing-library/*`). Meanwhile `.gitignore` excluded `frontend/package-lock.json`, so `deploy-frontend.yml`'s `npm ci` could not have worked either. **A lockfile policy and the deploy workflow silently contradicted each other and only the Pages failure was visible.**
+- **`waitFor` runs its callback synchronously on the first check** (`node_modules/@testing-library/dom/dist/wait-for.js`: `checkCallback()` is called inside the Promise executor, after `setInterval`/`MutationObserver`, with no `await` before it) and then resolves. So `await waitFor(() => expect(node).toBeInTheDocument())` is **already true while the node is a `<Skeleton>`**, and the assertion on the next line reads the pre-fetch DOM. Measured on `ProfilePage`: `h1` was still empty after 6 microtask hops, `waitFor`'s first check saw `""`, and the DOM was populated only by the time the `await` resumed — a margin of a few microtasks.
+- **"Passes locally, fails in CI" was a Node *major* difference, not slowness.** No `engines`, no `.nvmrc`; local ran v24.19.0 while Pages and all three workflows pinned 20. Proven in Docker on one host, so speed was controlled: unpatched `profile.test.tsx` → **2 failed under `node:20`, 22 passed under `node:24`**, and the two failures were byte-for-byte the CI ones. Patched: 443/443 under `node:20`. **Do not explain a green local suite as a slow CI machine without testing the runtime — `docker run node:<ci-major>` is the instrument.**
+- **Latency probes must not use real timers.** Injecting `setTimeout` into `fetchMock` breaks the 7 of 22 files that call `vi.useFakeTimers()`, so its failure count measures nothing. Running the suite under the CI's Node major is both cleaner and exact.
+
+**Changed:** `frontend/src/test/profile.test.tsx` (3 tests now wait on the value that proves the fetch landed, not on a node the skeleton owns), `951e431`; `e215330` removed `frontend/bun.lock` and committed `frontend/package-lock.json`; `mobile/README.md` lockfile note.
+
+**Verified:** `node:20` (Pages' runtime) → 443/443 in Docker. Unpatched → the 2 CI failures reproduced deterministically.
+
+**Open:**
+- **The Node version is pinned in three places that disagree, and one is not in the repo.** Pages is set in the dashboard (`NODE_VERSION`), workflows hardcode `node-version: '20'`, and a developer's local Node is whatever they happen to have. Changing the Pages dashboard alone does not change the workflows, and a build that reports `nodejs@20.20.2` ignored the intended change.
+- `951e431` is on `feat/frontend-mvp` and **was not pushed** when Pages built, so the same failure recurred verbatim (the error's line numbers were the pre-patch ones — read them to tell "same bug" from "new bug").
+- No guard against the class: any future test that waits on a skeleton-owned node can pass on one Node major and fail on another. A two-version CI matrix would catch it; not added.
+
+---
+
 ## DOs and DON'Ts
 
 Accumulated from user corrections. Append on your own when corrected.
