@@ -10,7 +10,7 @@
 #   3. Media image built: docker build --target media -t echoflow-media:local --secret id=hf_token,env=HF_TOKEN .
 #
 # Usage:
-#   docker compose -f docker-compose.laptop.yml up -d
+#   docker compose --env-file .env.laptop -f docker-compose.laptop.yml up -d
 #
 # DATABASE_URL is BUILT from DB_USER/DB_PASSWORD/DB_HOST/DB_PORT/DB_NAME, not
 # passed through from .env.laptop. It used to be `- DATABASE_URL=${DATABASE_URL}`,
@@ -20,9 +20,14 @@
 # file, so the URL must be assembled here, in `environment:`.
 # =============================================================================
 
+name: echoflow-laptop-media
+
 services:
   celery_media:
-    image: echoflow-media:${TAG:-local}
+    # Keep a distinct tag from docker-compose.local.yml.  Running containers
+    # are already immutable, but this prevents a later laptop build from
+    # retagging the local-development media image.
+    image: echoflow-media:${TAG:-laptop}
     build:
       context: .
       dockerfile: Dockerfile
@@ -45,8 +50,14 @@ services:
           memory: 2G
     environment:
       - DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
-      - REDIS_BROKER_URL=${REDIS_BROKER_URL}
-      - REDIS_CACHE_URL=${REDIS_CACHE_URL}
+      # Settings builds encoded Redis URLs from these parts.  Do not construct
+      # a URL in Compose: the generated passwords contain URL-reserved bytes.
+      - REDIS_BROKER_HOST=${REDIS_BROKER_HOST}
+      - REDIS_BROKER_PORT=${REDIS_BROKER_PORT:-6379}
+      - REDIS_BROKER_PASSWORD=${REDIS_BROKER_PASSWORD}
+      - REDIS_CACHE_HOST=${REDIS_CACHE_HOST}
+      - REDIS_CACHE_PORT=${REDIS_CACHE_PORT:-6379}
+      - REDIS_CACHE_PASSWORD=${REDIS_CACHE_PASSWORD}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
       - DJANGO_DEBUG=${DJANGO_DEBUG:-False}
       - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-api.echoflow.in}
