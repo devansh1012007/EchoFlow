@@ -127,7 +127,7 @@ services:
     working_dir: /app
     restart: unless-stopped
     env_file:
-      - .env
+      - ${VPS_ENV_FILE:-.env}
     environment:
       - DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
       - REDIS_BROKER_URL=${REDIS_BROKER_URL:-redis://redis_broker:6379/0}
@@ -205,7 +205,7 @@ services:
     working_dir: /app
     user: "1000:1000"
     env_file:
-      - .env
+      - ${VPS_ENV_FILE:-.env}
     restart: unless-stopped
     command: >
       sh -c "set -e && python wait_for_db.py &&
@@ -261,7 +261,7 @@ services:
       sh -c "set -e && python wait_for_db.py &&
               celery -A backend.EchoFlow worker -Q fast_feed -n celery_feed@%h --concurrency=4 --loglevel=info"
     env_file:
-      - .env
+      - ${VPS_ENV_FILE:-.env}
     networks:
       echoflow:
         ipv4_address: 172.28.0.12
@@ -327,7 +327,7 @@ services:
       redis_cache:
         condition: service_healthy
     env_file:
-      - .env
+      - ${VPS_ENV_FILE:-.env}
     environment:
       - DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
       - REDIS_BROKER_URL=${REDIS_BROKER_URL:-redis://redis_broker:6379/0}

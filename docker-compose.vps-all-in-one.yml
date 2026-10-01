@@ -7,7 +7,9 @@
 #
 # Usage:
 #   bash scripts/refresh-media-wheelhouse.sh  # first media build on this VM
-#   docker compose --env-file .env -f docker-compose.vps-all-in-one.yml up -d --build
+#   VPS_ENV_FILE=.env.vps-all-in-one docker compose \
+#     --env-file .env.vps-all-in-one \
+#     -f docker-compose.vps-all-in-one.yml up -d --build
 #
 # Public ports and origins remain owned by docker-compose.vps.yml:
 #   nginx: 80/443, API: api.echoflow.in, HLS Worker: media.echoflow.in
@@ -28,7 +30,7 @@ services:
     restart: unless-stopped
     command: ["sh", "media-worker-entrypoint.sh"]
     env_file:
-      - .env
+      - ${VPS_ENV_FILE:-.env.vps-all-in-one}
     environment:
       - DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
       - REDIS_BROKER_URL=${REDIS_BROKER_URL:-redis://redis_broker:6379/0}
