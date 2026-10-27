@@ -3,6 +3,7 @@
 import {
   AuthTokens,
   Comment,
+  ComplianceInfo,
   CursorPaginated,
   DataAccessSummary,
   ErasureReceipt,
@@ -559,12 +560,7 @@ export const authAPI = {
     return user;
   },
 
-  async getCompliance(): Promise<{
-    terms_versions: string[];
-    current_terms_version: string;
-    privacy_version: string;
-    physical_address: string;
-  }> {
+  async getCompliance(): Promise<ComplianceInfo> {
     return apiRequest("/legal/compliance/", { method: "GET", skipAuth: true });
   },
 

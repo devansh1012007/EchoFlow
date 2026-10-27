@@ -532,9 +532,13 @@ describe("Profile — form fields and headings", () => {
     // The clips are a separate request from the profile, so wait for them too
     // rather than assuming they landed with the profile.
     await waitFor(() =>
+      // Two reels, then the account sections (plan, data) that follow them. All h2,
+      // directly under the page's h1, so no level is skipped.
       expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual([
         "Reel 1",
         "Reel 2",
+        "Plan",
+        "Your data",
       ])
     );
   });

@@ -165,5 +165,27 @@ export interface SubscriptionStatus {
   expires_at: string | null;
   grace_until: string | null;
   last_synced: string | null;
-  limits?: Record<string, unknown>;
+  limits?: {
+    /** A number as a string, or "unlimited" for Pro. */
+    daily_uploads_remaining: string;
+    max_clip_duration_seconds: number;
+    max_upload_size_mb: number;
+    hd_quality_allowed: boolean;
+  };
+}
+
+export interface ContactPerson {
+  name: string;
+  email: string;
+}
+
+/** `GET /legal/compliance/`. Officers read "Not configured" with an empty email until the operator sets them. */
+export interface ComplianceInfo {
+  compliance_officer?: ContactPerson;
+  grievance_officer?: ContactPerson;
+  nodal_contact?: ContactPerson;
+  terms_versions: string[];
+  current_terms_version: string;
+  privacy_version: string;
+  physical_address: string;
 }

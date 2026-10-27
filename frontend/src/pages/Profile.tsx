@@ -4,6 +4,7 @@ import {
   Heart,
   Music,
   Edit3,
+  Link2,
   Trash2,
   LogOut,
   Play,
@@ -17,6 +18,8 @@ import { clipsAPI, profileAPI } from "../api/client";
 import { useAuth } from "../stores/auth";
 import { usePlayer } from "../stores/player";
 import { FeedClip, OwnProfile, PublicProfile } from "../types/echoflow";
+import { AccountPanel } from "../components/profile/AccountPanel";
+import { ShareLinkDialog } from "../components/sharing/ShareLinkDialog";
 
 interface ProfilePageProps {
   targetUserId?: number | null;
@@ -223,6 +226,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
   const [clipCategory, setClipCategory] = useState<string>("");
   const [clipEditError, setClipEditError] = useState<string | null>(null);
   const [clipDeleteError, setClipDeleteError] = useState<string | null>(null);
+  const [shareLinkClip, setShareLinkClip] = useState<FeedClip | null>(null);
 
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -583,6 +587,15 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                           <div className="flex items-center gap-1.5">
                             <button
                               type="button"
+                              onClick={() => setShareLinkClip(clip)}
+                              className="p-2 rounded-lg text-fg-subtle hover:text-fg hover:bg-white/10"
+                              aria-label={`Get a public link for ${clip.title}`}
+                              title="Public link"
+                            >
+                              <Link2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => {
                                 setEditingClip(clip);
                                 setClipTitle(clip.title);
@@ -666,6 +679,14 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
           </>
         )}
       </div>
+
+      {isOwnProfile && !isProfileLoading && (
+        <div className="px-5 pb-28">
+          <AccountPanel onSignedOut={logout} />
+        </div>
+      )}
+
+      {shareLinkClip && <ShareLinkDialog clipId={shareLinkClip.id} clipTitle={shareLinkClip.title} onClose={() => setShareLinkClip(null)} />}
 
       {/* Edit Profile Modal */}
       {isEditingProfile && (
