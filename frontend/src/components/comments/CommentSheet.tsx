@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { X, Send, MessageSquare, AlertCircle } from "lucide-react";
 import { commentsAPI } from "../../api/client";
+import { describeApiError } from "../../api/messages";
 import { Comment, FeedClip } from "../../types/echoflow";
 import { useAuth } from "../../stores/auth";
 
@@ -284,6 +285,10 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [postError, setPostError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState<string>("");
+  const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
   // Monotonic token for the top-level fetch. The sheet can be closed and
@@ -446,6 +451,34 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
     }
   };
 
+  const handleSaveEdit = async (commentId: string) => {
+    if (isSavingEdit) return; // one PATCH at a time
+    const text = editText.trim();
+    if (!text) {
+      setEditError("A comment can't be empty. Delete it instead.");
+      return;
+    }
+    setEditError(null);
+    setIsSavingEdit(true);
+    try {
+      const saved = await commentsAPI.updateComment(commentId, text);
+      // Only `text` is taken from the response: `author_id` is not guaranteed on a
+      // PATCH body, and the row's identity must not change under the user.
+      const patch = (c: CommentNode): CommentNode => (c.id === commentId ? { ...c, text: saved.text ?? text } : c);
+      setComments((prev) => prev.map(patch));
+      setRepliesByParent((prev) => {
+        const next: Record<string, ReplyBundle> = {};
+        for (const [k, b] of Object.entries(prev)) next[k] = { ...b, comments: b.comments.map(patch) };
+        return next;
+      });
+      setEditingId(null);
+    } catch (err: unknown) {
+      setEditError(describeApiError(err, "Could not save your edit. Try again."));
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   const handleToggleReplies = (parentId: string) => {
     if (!clip) return;
     const bundle = repliesByParent[parentId];
@@ -502,9 +535,51 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
                     Parent comment not loaded
                   </p>
                 )}
-                <p className="text-xs text-mist-300 mt-0.5 leading-relaxed font-sans">
-                  {comment.text}
-                </p>
+                {editingId === comment.id ? (
+                  <div className="mt-1 space-y-2">
+                    <label htmlFor={`edit-${comment.id}`} className="sr-only">
+                      Edit your comment
+                    </label>
+                    <textarea
+                      id={`edit-${comment.id}`}
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      maxLength={500}
+                      rows={3}
+                      autoFocus
+                      aria-describedby={editError ? `edit-err-${comment.id}` : undefined}
+                      className="w-full rounded-md border border-control bg-canvas px-2.5 py-2 text-xs text-fg focus:border-link"
+                    />
+                    {editError && (
+                      <p id={`edit-err-${comment.id}`} role="alert" className="text-[11px] text-danger">
+                        {editError}
+                      </p>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveEdit(comment.id)}
+                        disabled={isSavingEdit}
+                        className="min-h-8 rounded-md bg-accent px-3 text-[11px] font-semibold text-accent-fg hover:bg-accent-hover disabled:opacity-50"
+                      >
+                        {isSavingEdit ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(null);
+                          setEditError(null);
+                        }}
+                        disabled={isSavingEdit}
+                        className="min-h-8 rounded-md border border-control px-3 text-[11px] text-fg hover:bg-white/10 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-mist-300 mt-0.5 leading-relaxed font-sans">{comment.text}</p>
+                )}
 
                 <div className="flex items-center gap-3 mt-1">
                   <button
@@ -517,6 +592,19 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
                   >
                     Reply
                   </button>
+                  {isAuthor(comment) && editingId !== comment.id && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingId(comment.id);
+                        setEditText(comment.text);
+                        setEditError(null);
+                      }}
+                      className="inline-flex items-center min-h-6 text-[11px] tabular-nums text-fg-subtle hover:text-fg"
+                    >
+                      Edit
+                    </button>
+                  )}
                   {isAuthor(comment) && (
                     <button
                       type="button"

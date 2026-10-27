@@ -675,3 +675,75 @@ describe("CommentSheet — author identity and time", () => {
     expect(screen.getByText(/undated/i)).toBeInTheDocument();
   });
 });
+
+describe("CommentSheet: editing your own comment (PATCH /comments/{id}/)", () => {
+  beforeEach(() => {
+    api = installFetchMock();
+  });
+
+  it("offers Edit on your own comments only", async () => {
+    mockCommentPage([
+      makeComment({ id: PARENT_ID, author_id: VIEWER_ID, text: "mine" }),
+      makeComment({ id: REPLY_ID, author_id: OTHER_ID, author_username: "bob", text: "theirs" }),
+    ]);
+    await renderSheet();
+    await screen.findByText("mine");
+    expect(screen.getAllByRole("button", { name: /^edit$/i })).toHaveLength(1);
+  });
+
+  it("saves trimmed text with a PATCH and shows it without a reload", async () => {
+    mockCommentPage([makeComment({ author_id: VIEWER_ID, text: "first draft" })]);
+    api.on("PATCH", /\/comments\/.+\//, ({ body }) => ({ status: 200, body: { ...makeComment({ author_id: VIEWER_ID }), text: body.text } }));
+    const user = await renderSheet();
+    await screen.findByText("first draft");
+
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    const box = screen.getByLabelText(/edit your comment/i);
+    expect(box).toHaveValue("first draft");
+    await user.clear(box);
+    await user.type(box, "  better draft  ");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(await screen.findByText("better draft")).toBeInTheDocument();
+    const calls = api.callsTo(`/comments/${PARENT_ID}/`).filter((c) => c.method === "PATCH");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.body).toEqual({ text: "better draft" });
+    expect(screen.queryByLabelText(/edit your comment/i)).not.toBeInTheDocument();
+  });
+
+  it("refuses an empty edit without calling the server", async () => {
+    mockCommentPage([makeComment({ author_id: VIEWER_ID, text: "keep me" })]);
+    const user = await renderSheet();
+    await screen.findByText("keep me");
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    await user.clear(screen.getByLabelText(/edit your comment/i));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/can't be empty/i);
+    expect(api.calls.filter((c) => c.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("on a failed save keeps the editor open with the typed text and says why", async () => {
+    mockCommentPage([makeComment({ author_id: VIEWER_ID, text: "original" })]);
+    api.on("PATCH", /comments/, () => ({ status: 500, body: { detail: "boom" } }));
+    const user = await renderSheet();
+    await screen.findByText("original");
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    const box = screen.getByLabelText(/edit your comment/i);
+    await user.clear(box);
+    await user.type(box, "changed");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/something went wrong/i);
+    expect(screen.getByLabelText(/edit your comment/i)).toHaveValue("changed");
+  });
+
+  it("Cancel discards the edit and makes no request", async () => {
+    mockCommentPage([makeComment({ author_id: VIEWER_ID, text: "unchanged" })]);
+    const user = await renderSheet();
+    await screen.findByText("unchanged");
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    await user.type(screen.getByLabelText(/edit your comment/i), " more");
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(screen.getByText("unchanged")).toBeInTheDocument();
+    expect(api.calls.filter((c) => c.method === "PATCH")).toHaveLength(0);
+  });
+});

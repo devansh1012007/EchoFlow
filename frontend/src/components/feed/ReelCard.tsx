@@ -11,11 +11,13 @@ import {
   UserPlus,
   UserCheck,
   Gauge,
+  Flag,
 } from "lucide-react";
 import { followAPI, interactionsAPI } from "../../api/client";
 import { useAuth } from "../../stores/auth";
 import { usePlayer } from "../../stores/player";
 import { FeedClip } from "../../types/echoflow";
+import { ReportDialog } from "./ReportDialog";
 
 interface ReelCardProps {
   clip: FeedClip;
@@ -33,6 +35,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   onCreatorClick,
 }) => {
   const { user } = useAuth();
+  const [isReportOpen, setIsReportOpen] = React.useState(false);
   const {
     isPlaying,
     currentClip,
@@ -567,9 +570,26 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                 {clip.shares}
               </span>
             </button>
+            {user?.id !== clip.creator_id && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsReportOpen(true);
+                }}
+                className="flex flex-col items-center group/btn tap-target justify-center"
+                title="Report clip"
+                aria-label={`Report ${clip.title}`}
+              >
+                <span className="w-9 h-9 rounded-full border border-line bg-white/5 text-fg-subtle group-hover/btn:text-danger group-hover/btn:border-danger/40 flex items-center justify-center transition-colors">
+                  <Flag className="w-4 h-4" aria-hidden="true" />
+                </span>
+              </button>
+            )}
           </div>
         </div>
       </div>
+      {isReportOpen && <ReportDialog clipId={clip.id} clipTitle={clip.title} onClose={() => setIsReportOpen(false)} />}
     </div>
   );
 };
