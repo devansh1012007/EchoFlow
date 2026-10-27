@@ -91,3 +91,79 @@ export interface AuthTokens {
   access: string;
   refresh: string;
 }
+
+/** Mirrors `Report.REPORT_REASONS` in the backend. The label is what the UI shows. */
+export const REPORT_REASONS = [
+  { value: "obscene", label: "Obscene or sexually explicit" },
+  { value: "hate_speech", label: "Hate speech" },
+  { value: "violence", label: "Promotes violence" },
+  { value: "csam", label: "Child sexual abuse material" },
+  { value: "terrorism", label: "Terrorism or extremism" },
+  { value: "copyright", label: "Copyright infringement" },
+  { value: "impersonation", label: "Impersonation" },
+  { value: "privacy", label: "Invasion of privacy" },
+  { value: "spam", label: "Spam or misleading" },
+  { value: "other", label: "Other" },
+] as const;
+export type ReportReason = (typeof REPORT_REASONS)[number]["value"];
+
+export interface ShareLink {
+  clip_id: string;
+  /** Absolute only when the server has `PUBLIC_APP_BASE_URL` configured. */
+  url: string | null;
+  path: string;
+  token: string;
+  expires_in: number;
+}
+
+export interface PublicClip {
+  id: string;
+  title: string;
+  creator_name?: string;
+  duration_ms?: number;
+  category?: string;
+  tags?: string[];
+  cover_image?: string | null;
+}
+
+export interface GrievanceReceipt {
+  grievance_id: number | string;
+  status: string;
+  acknowledgment_due?: string;
+  message: string;
+}
+
+export interface DataAccessSummary {
+  user_id: number;
+  categories: {
+    profile: {
+      username: string;
+      email: string;
+      dob: string | null;
+      is_minor: boolean;
+      consent_accepted: boolean;
+      terms_version: string | null;
+      parent_email: string | null;
+    };
+    interactions_count: number;
+    comments_count: number;
+    shares_sent_count: number;
+    audio_clips_created: number;
+  };
+}
+
+export interface ErasureReceipt {
+  request_id: number | string;
+  status: string;
+  cooling_off_until?: string;
+  message?: string;
+}
+
+export interface SubscriptionStatus {
+  app_user_id?: string;
+  is_pro: boolean;
+  expires_at: string | null;
+  grace_until: string | null;
+  last_synced: string | null;
+  limits?: Record<string, unknown>;
+}

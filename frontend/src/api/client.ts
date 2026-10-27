@@ -4,11 +4,18 @@ import {
   AuthTokens,
   Comment,
   CursorPaginated,
+  DataAccessSummary,
+  ErasureReceipt,
   FeedClip,
   FeedResponse,
+  GrievanceReceipt,
   OwnProfile,
+  PublicClip,
   PublicProfile,
+  ReportReason,
   ShareEvent,
+  ShareLink,
+  SubscriptionStatus,
   User,
 } from "../types/echoflow";
 
@@ -628,6 +635,92 @@ export const clipsAPI = {
     return apiRequest<void>(`/clips/${id}/`, {
       method: "DELETE",
     });
+  },
+
+  /** `POST /clips/{id}/report/`. `report_reason` must be one of `REPORT_REASONS`; the backend rejects an empty `content`. */
+  async reportClip(id: string, reportReason: ReportReason, content: string): Promise<{ detail?: string }> {
+    return apiRequest<{ detail?: string }>(`/clips/${id}/report/`, {
+      method: "POST",
+      body: JSON.stringify({ report_reason: reportReason, content }),
+    });
+  },
+
+  /** `POST /clips/{id}/share-link/` — creator-only. 403 = not approved / sharing disallowed, 409 = media not ready. */
+  async createShareLink(id: string): Promise<ShareLink> {
+    return apiRequest<ShareLink>(`/clips/${id}/share-link/`, { method: "POST", body: JSON.stringify({}) });
+  },
+
+  /** `GET /clips/{id}/public/` — anonymous, reduced metadata for the share page. */
+  async getPublicClip(id: string): Promise<PublicClip> {
+    return apiRequest<PublicClip>(`/clips/${id}/public/`, { skipAuth: true, headers: { Accept: "application/json" } });
+  },
+
+  /**
+   * `POST /clips/{id}/play/` — anonymous exchange of a share token for a short-lived media cookie
+   * (path `/hls/`, so `credentials: "include"` is required) plus the playlist URL.
+   */
+  async playSharedClip(id: string, shareToken: string): Promise<{ status: string; token: string; hls_playlist_url: string }> {
+    const response = await fetch(apiUrl(`/clips/${id}/play/`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ s: shareToken }),
+    });
+    if (!response.ok) {
+      throw new ApiError("Shared playback failed", {
+        kind: "http",
+        status: response.status,
+        data: await readBody(response).catch(() => null),
+        retryAfterSeconds: readRetryAfterSeconds(response.headers),
+      });
+    }
+    return response.json();
+  },
+};
+
+export const legalAPI = {
+  /** `POST /grievance/` — anonymous allowed. `user_email` must be a valid address if supplied. */
+  async submitGrievance(input: { subject: string; description: string; user_email?: string }): Promise<GrievanceReceipt> {
+    return apiRequest<GrievanceReceipt>("/grievance/", { method: "POST", body: JSON.stringify(input) });
+  },
+
+  /** `POST /legal/takedown/` — `clip_id` is a UUID, 404 means no such clip. */
+  async submitTakedown(input: { clip_id: string; reason: string; requester_email?: string }): Promise<{ detail?: string; message?: string }> {
+    return apiRequest<{ detail?: string; message?: string }>("/legal/takedown/", { method: "POST", body: JSON.stringify(input) });
+  },
+};
+
+export const dataSubjectAPI = {
+  /** `GET /data-subject/access/` — what the service holds about the signed-in user. */
+  async getAccessSummary(): Promise<DataAccessSummary> {
+    return apiRequest<DataAccessSummary>("/data-subject/access/");
+  },
+
+  /**
+   * `POST /data-subject/erasure/`.
+   *
+   * IRREVERSIBLE. The first call opens a 30-day cooling-off. A later call
+   * *after* the cooling-off ends starts the real deletion. During cooling-off
+   * the server answers 403 with `cooling_off_until`; that is not a failure.
+   */
+  async requestErasure(): Promise<ErasureReceipt> {
+    return apiRequest<ErasureReceipt>("/data-subject/erasure/", { method: "POST", body: JSON.stringify({ confirm: true }) });
+  },
+};
+
+export const subscriptionAPI = {
+  async getStatus(): Promise<SubscriptionStatus> {
+    return apiRequest<SubscriptionStatus>("/subscription/");
+  },
+
+  /** `POST /subscription/sync/` — 503 means billing is not configured on this server. */
+  async sync(): Promise<{ detail: string; is_pro: boolean }> {
+    return apiRequest<{ detail: string; is_pro: boolean }>("/subscription/sync/", { method: "POST", body: JSON.stringify({}) });
+  },
+
+  /** `GET /subscription/manage/` — `url` may be null when the provider has no portal for this user. */
+  async getManageUrl(): Promise<{ url: string | null }> {
+    return apiRequest<{ url: string | null }>("/subscription/manage/");
   },
 };
 
