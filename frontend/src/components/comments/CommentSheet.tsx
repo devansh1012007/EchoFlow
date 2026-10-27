@@ -477,32 +477,32 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
 
     return (
       <li key={comment.id} className="space-y-2">
-        <div className={depth > 0 ? "ml-3 pl-3 border-l border-white/10" : ""}>
+        <div className={depth > 0 ? "ml-3 pl-3 border-l border-line" : ""}>
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2.5">
-              <div className="w-7 h-7 rounded-full bg-white/10 border border-white/20 flex items-center justify-center font-black text-xs text-[#FF6321] flex-shrink-0 mt-0.5">
+              <div className="w-7 h-7 rounded-full bg-white/10 border border-line-strong flex items-center justify-center font-semibold text-xs text-link flex-shrink-0 mt-0.5">
                 {comment.author_username[0]?.toUpperCase()}
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-black uppercase text-white">
+                  <span className="text-xs font-semibold text-fg">
                     @{comment.author_username}
                   </span>
                   {timeLabel && (
                     <time
                       dateTime={comment.created_at}
-                      className="text-[9px] font-mono text-white/30"
+                      className="text-[11px] tabular-nums text-fg-subtle"
                     >
                       {timeLabel}
                     </time>
                   )}
                 </div>
                 {node.isDetachedReply && (
-                  <p className="text-[9px] font-mono uppercase text-white/30 mt-0.5">
+                  <p className="text-[11px] tabular-nums text-fg-subtle mt-0.5">
                     Parent comment not loaded
                   </p>
                 )}
-                <p className="text-xs text-white/80 mt-0.5 leading-relaxed font-sans">
+                <p className="text-xs text-mist-300 mt-0.5 leading-relaxed font-sans">
                   {comment.text}
                 </p>
 
@@ -513,7 +513,7 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
                       setReplyToId(comment.id);
                       setReplyToUser(comment.author_username);
                     }}
-                    className="inline-flex items-center min-h-6 text-[10px] font-mono uppercase text-[#FF6321] hover:underline"
+                    className="inline-flex items-center min-h-6 text-[11px] tabular-nums text-link hover:underline"
                   >
                     Reply
                   </button>
@@ -521,19 +521,19 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
                     <button
                       type="button"
                       onClick={() => void handleDeleteComment(comment.id)}
-                      className="inline-flex items-center min-h-6 text-[10px] font-mono uppercase text-white/30 hover:text-rose-400"
+                      className="inline-flex items-center min-h-6 text-[11px] tabular-nums text-fg-subtle hover:text-danger"
                     >
                       Delete
                     </button>
                   )}
                   {knownReplies > 0 && (
-                    <span className="inline-flex items-center min-h-6 text-[10px] font-mono text-white/30">
+                    <span className="inline-flex items-center min-h-6 text-[11px] tabular-nums text-fg-subtle">
                       {unloadedReplies > 0 ? (
                         <button
                           type="button"
                           onClick={() => handleToggleReplies(comment.id)}
                           aria-busy={bundle?.isLoading === true}
-                          className="inline-flex items-center min-h-6 hover:underline hover:text-white/60"
+                          className="inline-flex items-center min-h-6 hover:underline hover:text-fg-muted"
                         >
                           {bundle?.isLoading
                             ? "Loading replies..."
@@ -547,7 +547,7 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
                 </div>
 
                 {bundle?.error && (
-                  <p className="text-[10px] font-mono text-rose-400 mt-1">{bundle.error}</p>
+                  <p className="text-[11px] tabular-nums text-danger mt-1">{bundle.error}</p>
                 )}
               </div>
             </div>
@@ -558,7 +558,7 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
           <ul
             role="list"
             aria-label={`Replies to @${comment.author_username}`}
-            className="ml-3 pl-3 border-l border-white/10 space-y-2"
+            className="ml-3 pl-3 border-l border-line space-y-2"
           >
             {node.children.map((child) => renderRow(child, depth + 1))}
           </ul>
@@ -568,7 +568,7 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/80 backdrop-blur-sm transition-opacity">
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/80 transition-opacity">
       <div
         ref={dialogRef}
         role="dialog"
@@ -577,28 +577,28 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
         tabIndex={-1}
         onKeyDown={handleDialogKeyDown}
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg max-h-[85vh] h-[600px] bg-[#111111] border-t md:border border-white/15 rounded-t-3xl md:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-5 duration-200"
+        className="w-full max-w-lg max-h-[85vh] h-[600px] bg-panel border-t md:border border-line rounded-t-3xl md:rounded-3xl flex flex-col shadow-float overflow-hidden animate-in slide-in-from-bottom-5 duration-200"
       >
         {/* Header */}
-        <div className="flex items-start justify-between gap-3 px-6 py-4 border-b border-white/10">
+        <div className="flex items-start justify-between gap-3 px-6 py-4 border-b border-line">
           <div className="min-w-0">
             <h2
               id={DIALOG_TITLE_ID}
-              className="text-sm font-black uppercase tracking-tight text-white flex items-center gap-2"
+              className="text-sm font-semibold tracking-tight text-fg flex items-center gap-2"
             >
-              <MessageSquare className="w-4 h-4 text-[#FF6321]" aria-hidden="true" />
+              <MessageSquare className="w-4 h-4 text-link" aria-hidden="true" />
               Discussions ({clip.comment_count})
             </h2>
-            <p className="text-[10px] font-mono uppercase text-white/40 truncate max-w-xs">
+            <p className="text-[11px] tabular-nums text-fg-subtle truncate max-w-xs">
               {clip.title}
             </p>
-            {summary && <p className="text-[10px] font-mono text-white/30 mt-1">{summary}</p>}
+            {summary && <p className="text-[11px] tabular-nums text-fg-subtle mt-1">{summary}</p>}
           </div>
           <button
             type="button"
             aria-label="Close comments"
             onClick={onClose}
-            className="p-1.5 rounded-full hover:bg-white/10 text-white/40 hover:text-white transition-colors"
+            className="p-1.5 rounded-full hover:bg-white/10 text-fg-subtle hover:text-fg transition-colors"
           >
             <X className="w-4 h-4" aria-hidden="true" />
           </button>
@@ -611,7 +611,7 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
           <p
             role="status"
             aria-live="polite"
-            className={`text-center font-mono text-xs uppercase text-white/40 ${
+            className={`text-center tabular-nums text-xs text-fg-subtle ${
               isLoading ? "py-12" : "sr-only"
             }`}
           >
@@ -622,30 +622,30 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
             id={DELETE_ERROR_ID}
             role="status"
             aria-live="polite"
-            className={`text-[10px] font-mono text-rose-400 ${deleteError ? "" : "sr-only"}`}
+            className={`text-[11px] tabular-nums text-danger ${deleteError ? "" : "sr-only"}`}
           >
             {deleteError ?? ""}
           </p>
 
           {isLoading ? null : loadError ? (
             <div role="alert" className="py-12 text-center space-y-3">
-              <p className="text-sm font-black uppercase text-white flex items-center justify-center gap-2">
-                <AlertCircle className="w-4 h-4 text-rose-400" aria-hidden="true" />
+              <p className="text-sm font-semibold text-fg flex items-center justify-center gap-2">
+                <AlertCircle className="w-4 h-4 text-danger" aria-hidden="true" />
                 Could not load comments
               </p>
-              <p className="text-xs font-sans text-white/60">{loadError}</p>
+              <p className="text-xs font-sans text-fg-muted">{loadError}</p>
               <button
                 type="button"
                 onClick={() => void loadComments(clip.id)}
-                className="inline-flex items-center min-h-6 px-3 rounded-lg border border-white/20 text-[10px] font-mono uppercase text-white hover:bg-white/10"
+                className="inline-flex items-center min-h-6 px-3 rounded-lg border border-line-strong text-[11px] tabular-nums text-fg hover:bg-white/10"
               >
                 Try again
               </button>
             </div>
           ) : comments.length === 0 ? (
             <div className="py-16 text-center space-y-2">
-              <p className="text-sm font-black uppercase text-white">No comments yet</p>
-              <p className="text-xs font-mono uppercase text-white/40">
+              <p className="text-sm font-semibold text-fg">No comments yet</p>
+              <p className="text-xs tabular-nums text-fg-subtle">
                 Be the first to share your reaction on this audio reel.
               </p>
             </div>
@@ -657,9 +657,9 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
         </div>
 
         {/* Input Footer */}
-        <div className="p-4 bg-black/60 border-t border-white/10">
+        <div className="p-4 bg-black/60 border-t border-line">
           {replyToId && (
-            <div className="flex items-center justify-between text-[10px] font-mono text-[#FF6321] uppercase mb-2 px-1">
+            <div className="flex items-center justify-between text-[11px] tabular-nums text-link mb-2 px-1">
               <span>Replying to @{replyToUser}</span>
               <button
                 type="button"
@@ -676,7 +676,7 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
           <form onSubmit={handlePostComment} className="space-y-2">
             <label
               htmlFor={COMPOSER_INPUT_ID}
-              className="block text-[10px] font-mono uppercase text-white/40"
+              className="block text-[11px] tabular-nums text-fg-subtle"
             >
               Add a comment
             </label>
@@ -684,7 +684,7 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
               id={COMPOSER_ERROR_ID}
               role="status"
               aria-live="polite"
-              className={`text-[10px] font-mono text-rose-400 ${postError ? "" : "sr-only"}`}
+              className={`text-[11px] tabular-nums text-danger ${postError ? "" : "sr-only"}`}
             >
               {postError ?? ""}
             </p>
@@ -696,7 +696,7 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
                 onChange={(e) => setNewComment(e.target.value)}
                 placeholder="Drop an audio comment or reaction..."
                 aria-describedby={postError ? COMPOSER_ERROR_ID : undefined}
-                className="flex-1 bg-[#111111] border border-white/15 rounded-xl px-4 py-2.5 text-xs text-white placeholder-white/30 focus:outline-none focus:border-[#FF6321]"
+                className="flex-1 bg-panel border border-line rounded-xl px-4 py-2.5 text-xs text-fg placeholder-white/30 focus:outline-none focus:border-link"
               />
               {/* `aria-disabled` rather than `disabled`: a natively disabled
                   button leaves the tab order and drops focus to <body>
@@ -708,7 +708,7 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
                 aria-label="Post comment"
                 aria-disabled={!canSubmit}
                 aria-busy={isSubmitting}
-                className="p-2.5 rounded-xl bg-[#FF6321] text-black hover:bg-[#ff753b] aria-disabled:opacity-40 aria-disabled:cursor-not-allowed transition-all"
+                className="p-2.5 rounded-xl bg-accent text-accent-fg hover:bg-accent-hover aria-disabled:opacity-40 aria-disabled:cursor-not-allowed transition-all"
               >
                 <Send className="w-4 h-4" aria-hidden="true" />
               </button>

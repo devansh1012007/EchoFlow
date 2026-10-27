@@ -334,28 +334,28 @@ function SharedClipView({
 
   return (
     <div className="w-full max-w-2xl mx-auto px-4 md:px-8 py-10 space-y-6">
-      <p className="text-[10px] uppercase font-mono font-bold tracking-[0.18em] text-[#FF6321]">
+      <p className="text-[11px] tabular-nums font-bold text-link">
         Shared clip
       </p>
 
       {state.kind === "resolving" && (
-        <p role="status" className="text-sm text-white/50">
+        <p role="status" className="text-sm text-fg-subtle">
           Opening the shared clip…
         </p>
       )}
 
       {state.kind === "failed" && (
         <div role="alert" className="space-y-3">
-          <h1 className="text-xl font-black uppercase tracking-tight text-white">
+          <h1 className="text-xl font-semibold tracking-tight text-fg">
             This shared link did not open
           </h1>
-          <p className="text-sm text-white/50">{state.message}</p>
+          <p className="text-sm text-fg-subtle">{state.message}</p>
           <div className="flex flex-wrap gap-3">
             {state.canRetry && (
               <button
                 type="button"
                 onClick={onRetry}
-                className="px-5 py-2.5 rounded bg-[#FF6321] text-black text-xs font-black uppercase tracking-wider"
+                className="px-5 py-2.5 rounded bg-accent text-accent-fg text-xs font-semibold "
               >
                 Try again
               </button>
@@ -363,7 +363,7 @@ function SharedClipView({
             <button
               type="button"
               onClick={onBack}
-              className="px-5 py-2.5 rounded border border-white/20 text-white text-xs font-black uppercase tracking-wider"
+              className="px-5 py-2.5 rounded border border-line-strong text-fg text-xs font-semibold "
             >
               Back to feed
             </button>
@@ -374,22 +374,22 @@ function SharedClipView({
       {clip && (
         <div className="space-y-5">
           <div className="space-y-2">
-            <h1 className="text-2xl font-black tracking-tight text-white">{clip.title}</h1>
-            <p className="text-xs font-mono uppercase text-white/50">
+            <h1 className="text-2xl font-semibold tracking-tight text-fg">{clip.title}</h1>
+            <p className="text-xs tabular-nums text-fg-subtle">
               @{clip.creator_name}
               {clip.category ? ` · ${clip.category}` : ""}
             </p>
           </div>
 
           {isThisClip ? (
-            <p className="text-xs text-white/50" role="status">
+            <p className="text-xs text-fg-subtle" role="status">
               {isPlaying ? "Playing this clip." : "Ready to play."}
             </p>
           ) : (
             <button
               type="button"
               onClick={() => playClip(clip, [clip, ...queue])}
-              className="px-6 py-3 rounded bg-[#FF6321] text-black text-xs font-black uppercase tracking-wider"
+              className="px-6 py-3 rounded bg-accent text-accent-fg text-xs font-semibold "
             >
               Play
             </button>
@@ -399,7 +399,7 @@ function SharedClipView({
             <button
               type="button"
               onClick={togglePlay}
-              className="px-5 py-2.5 rounded border border-white/20 text-white text-xs font-black uppercase tracking-wider"
+              className="px-5 py-2.5 rounded border border-line-strong text-fg text-xs font-semibold "
             >
               {isPlaying ? "Pause" : "Resume"}
             </button>
@@ -408,7 +408,7 @@ function SharedClipView({
           <button
             type="button"
             onClick={onBack}
-            className="block px-5 py-2.5 rounded border border-white/20 text-white/50 text-xs font-black uppercase tracking-wider"
+            className="block px-5 py-2.5 rounded border border-line-strong text-fg-subtle text-xs font-semibold "
           >
             Back to feed
           </button>
@@ -887,7 +887,7 @@ const MainContent: React.FC = () => {
   // the first one again the next time the gate changed.
 
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] flex flex-col selection:bg-[#FF6321] selection:text-black font-sans">
+    <div className="min-h-screen bg-canvas text-fg flex flex-col selection:bg-accent selection:text-accent-fg font-sans">
       {/* Connectivity banner — FRONTEND-REQUIREMENTS.md §4.9 */}
       <NetworkBanner />
 
@@ -1169,17 +1169,17 @@ function hasStoredSession(): boolean {
  *
  * Not a spinner with no content: it carries `role="status"` and its own text so
  * the wait is announced rather than silent, and it is `aria-busy` on the region
- * that will hold the app. Text is `text-white/50` (5.29:1) — the floor the rest
- * of the app settled on; `text-white/40` is 3.77:1 and `text-white/30` is
+ * that will hold the app. Text is `text-fg-subtle` (5.29:1) — the floor the rest
+ * of the app settled on; `text-fg-subtle` is 3.77:1 and `text-fg-subtle` is
  * 2.61:1, both under WCAG 1.4.3.
  */
 function AuthLoadingScreen() {
   return (
     <div
-      className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] flex items-center justify-center"
+      className="min-h-screen bg-canvas text-fg flex items-center justify-center"
       aria-busy="true"
     >
-      <p role="status" className="text-xs font-mono uppercase text-white/50">
+      <p role="status" className="text-xs tabular-nums text-fg-subtle">
         Signing you in…
       </p>
     </div>

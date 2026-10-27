@@ -243,12 +243,12 @@ export function ReelList({
             type="button"
             onClick={onLoadMore}
             disabled={isLoadingMore}
-            className="px-6 py-2.5 rounded-xl border border-white/15 bg-[#111111] text-[#F5F5F5] text-xs font-black uppercase tracking-wider hover:border-[#FF6321] hover:text-[#FF6321] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            className="px-6 py-2.5 rounded-xl border border-line bg-panel text-fg text-xs font-semibold hover:border-accent hover:text-link transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {isLoadingMore ? "Loading..." : "Load more reels"}
           </button>
           {queueHealth !== null && queueHealth > 0 && (
-            <p className="text-[10px] font-mono uppercase text-white/50">
+            <p className="text-[11px] tabular-nums text-fg-subtle">
               {queueHealth} more reel{queueHealth === 1 ? "" : "s"} queued for you
             </p>
           )}
@@ -261,7 +261,7 @@ export function ReelList({
         <p
           role="status"
           aria-live="polite"
-          className="text-center uppercase text-white/50"
+          className="text-center text-fg-subtle"
           style={{ fontSize: 11, letterSpacing: "0.08em" }}
         >
           All caught up
@@ -390,7 +390,7 @@ function ListEmpty({
           type="button"
           onClick={onLoadMore}
           disabled={isLoadingMore}
-          className="px-6 py-2.5 rounded-xl border border-white/15 bg-[#111111] text-[#F5F5F5] text-xs font-black uppercase tracking-wider hover:border-[#FF6321] hover:text-[#FF6321] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          className="px-6 py-2.5 rounded-xl border border-line bg-panel text-fg text-xs font-semibold hover:border-accent hover:text-link transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {isLoadingMore ? "Loading..." : "Load more reels"}
         </button>

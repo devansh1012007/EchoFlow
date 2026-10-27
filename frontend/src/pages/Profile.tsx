@@ -151,11 +151,11 @@ const StatBlock: React.FC<{
   loading: boolean;
   accent?: boolean;
 }> = ({ label, value, loading, accent = false }) => (
-  <div className="p-3 rounded-xl bg-black/50 border border-white/10">
-    <span className={`block text-2xl font-black font-mono ${accent ? "text-[#FF6321]" : "text-white"}`}>
+  <div className="p-3 rounded-xl bg-black/50 border border-line">
+    <span className={`block text-2xl font-semibold tabular-nums ${accent ? "text-link" : "text-fg"}`}>
       {loading ? <Skeleton /> : formatCount(value)}
     </span>
-    <span className="text-[10px] font-mono uppercase text-white/40 tracking-wider">{label}</span>
+    <span className="text-[11px] tabular-nums text-fg-subtle ">{label}</span>
   </div>
 );
 
@@ -171,17 +171,17 @@ const LoadError: React.FC<{
 }> = ({ heading, detail, onRetry }) => (
   <div
     role="alert"
-    className="p-8 rounded-2xl bg-[#111111] border border-rose-500/30 text-center space-y-3"
+    className="p-8 rounded-2xl bg-panel border border-danger/30 text-center space-y-3"
   >
-    <p className="flex items-center justify-center gap-2 text-sm font-black uppercase text-rose-400">
+    <p className="flex items-center justify-center gap-2 text-sm font-semibold text-danger">
       <AlertCircle className="w-4 h-4" aria-hidden="true" />
       {heading}
     </p>
-    {detail && <p className="text-xs font-mono text-white/50">{detail}</p>}
+    {detail && <p className="text-xs tabular-nums text-fg-subtle">{detail}</p>}
     <button
       type="button"
       onClick={onRetry}
-      className="px-4 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/15 text-xs font-black uppercase tracking-wider text-white inline-flex items-center gap-2"
+      className="px-4 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-line text-xs font-semibold text-fg inline-flex items-center gap-2"
     >
       <RotateCw className="w-3.5 h-3.5" aria-hidden="true" />
       Retry
@@ -351,7 +351,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
           <button
             type="button"
             onClick={onBackToMyProfile}
-            className="text-xs font-mono uppercase font-black text-[#FF6321] hover:underline flex items-center gap-1"
+            className="text-xs tabular-nums font-semibold text-link hover:underline flex items-center gap-1"
           >
             ← Back to primary account
           </button>
@@ -366,7 +366,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
         ) : (
           <>
             {/* Profile Header Card */}
-            <div className="p-6 md:p-8 rounded-2xl md:rounded-3xl bg-[#111111] border border-white/10 shadow-2xl space-y-6">
+            <div className="p-6 md:p-8 rounded-2xl md:rounded-3xl bg-panel border border-line shadow-float space-y-6">
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-5">
                   <div className="relative">
@@ -375,12 +375,12 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                       <img
                         src={avatarUrl}
                         alt=""
-                        className="w-20 h-20 rounded-2xl object-cover border border-white/20 shadow-md"
+                        className="w-20 h-20 rounded-2xl object-cover border border-line-strong shadow-float"
                       />
                     ) : (
                       <div
                         aria-hidden="true"
-                        className="w-20 h-20 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center text-[#FF6321] text-3xl font-black"
+                        className="w-20 h-20 rounded-2xl bg-white/10 border border-line-strong flex items-center justify-center text-link text-3xl font-semibold"
                       >
                         {username?.[0]?.toUpperCase() ?? <UserIcon className="w-10 h-10" />}
                       </div>
@@ -388,7 +388,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                   </div>
 
                   <div>
-                    <h1 className="text-2xl md:text-3xl font-black uppercase tracking-tight text-white">
+                    <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-fg">
                       {isProfileLoading ? (
                         <Skeleton className="w-32" />
                       ) : username ? (
@@ -398,11 +398,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                       )}
                     </h1>
                     {isProfileLoading && (
-                      <p role="status" className="text-[10px] font-mono uppercase text-white/30 mt-1">
+                      <p role="status" className="text-[11px] tabular-nums text-fg-subtle mt-1">
                         Loading profile…
                       </p>
                     )}
-                    <p className="text-[10px] font-mono uppercase text-white/30 mt-1">
+                    <p className="text-[11px] tabular-nums text-fg-subtle mt-1">
                       Joined:{" "}
                       {isProfileLoading ? (
                         <Skeleton className="w-20" />
@@ -422,7 +422,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                         setEditUsername(username ?? "");
                         setIsEditingProfile(true);
                       }}
-                      className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-white transition-colors"
+                      className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-line text-fg transition-colors"
                       aria-label="Edit profile"
                       title="Edit Profile"
                     >
@@ -431,7 +431,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                     <button
                       type="button"
                       onClick={logout}
-                      className="p-2.5 rounded-xl bg-white/5 hover:bg-rose-500/20 border border-white/15 text-white/50 hover:text-rose-400 transition-colors"
+                      className="p-2.5 rounded-xl bg-white/5 hover:bg-danger/20 border border-line text-fg-subtle hover:text-danger transition-colors"
                       aria-label="Log out"
                       title="Log Out"
                     >
@@ -442,7 +442,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
               </div>
 
               {/* Stats Row with Bold Typography & Monospace Metric */}
-              <div className="grid grid-cols-3 gap-3 pt-4 border-t border-white/10 text-center">
+              <div className="grid grid-cols-3 gap-3 pt-4 border-t border-line text-center">
                 <StatBlock
                   label="Followers"
                   value={currentDisplayProfile?.followers_count}
@@ -464,15 +464,15 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
 
             {/* Tabs for Own Profile */}
             {isOwnProfile && (
-              <div className="flex items-center gap-2 p-1 rounded-xl bg-[#111111] border border-white/10">
+              <div className="flex items-center gap-2 p-1 rounded-xl bg-panel border border-line">
                 <button
                   type="button"
                   onClick={() => setActiveTab("uploads")}
                   aria-pressed={activeTab === "uploads"}
-                  className={`flex-1 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
+                  className={`flex-1 py-2.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-2 ${
                     activeTab === "uploads"
-                      ? "bg-[#FF6321] text-black shadow-[0_0_15px_rgba(255,99,33,0.3)]"
-                      : "text-white/40 hover:text-white"
+                      ? "bg-accent text-accent-fg "
+                      : "text-fg-subtle hover:text-fg"
                   }`}
                 >
                   <Music className="w-3.5 h-3.5" aria-hidden="true" />
@@ -485,10 +485,10 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                   type="button"
                   onClick={() => setActiveTab("liked")}
                   aria-pressed={activeTab === "liked"}
-                  className={`flex-1 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
+                  className={`flex-1 py-2.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-2 ${
                     activeTab === "liked"
-                      ? "bg-[#FF6321] text-black shadow-[0_0_15px_rgba(255,99,33,0.3)]"
-                      : "text-white/40 hover:text-white"
+                      ? "bg-accent text-accent-fg "
+                      : "text-fg-subtle hover:text-fg"
                   }`}
                 >
                   <Heart className="w-3.5 h-3.5" aria-hidden="true" />
@@ -518,13 +518,13 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
             ) : isLoadingClips ? (
               <div
                 role="status"
-                className="py-20 text-center font-mono text-xs uppercase text-white/40"
+                className="py-20 text-center tabular-nums text-xs text-fg-subtle"
               >
                 Loading audio library...
               </div>
             ) : activeTab === "uploads" ? (
               userClips.length === 0 ? (
-                <div className="p-12 rounded-3xl bg-[#111111] border border-white/10 text-center text-white/40 font-mono text-xs uppercase">
+                <div className="p-12 rounded-3xl bg-panel border border-line text-center text-fg-subtle tabular-nums text-xs ">
                   No audio reels published to network.
                 </div>
               ) : (
@@ -532,7 +532,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                   {clipDeleteError && (
                     <p
                       role="alert"
-                      className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs font-mono text-rose-300"
+                      className="p-3 rounded-xl bg-danger/10 border border-danger/30 text-xs tabular-nums text-danger"
                     >
                       {clipDeleteError}
                     </p>
@@ -542,7 +542,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                     return (
                       <div
                         key={clip.id}
-                        className="p-4 rounded-xl bg-[#111111] border border-white/10 flex items-center justify-between gap-4 group"
+                        className="p-4 rounded-xl bg-panel border border-line flex items-center justify-between gap-4 group"
                       >
                         <button
                           type="button"
@@ -553,8 +553,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                           aria-label={isThisPlaying ? `Pause ${clip.title}` : `Play ${clip.title}`}
                           className={`w-11 h-11 rounded-lg flex items-center justify-center flex-shrink-0 transition-transform ${
                             isThisPlaying
-                              ? "bg-[#FF6321] text-black scale-105 shadow-[0_0_15px_rgba(255,99,33,0.35)]"
-                              : "bg-white/10 text-white group-hover:bg-[#FF6321] group-hover:text-black"
+                              ? "bg-accent text-accent-fg scale-105 "
+                              : "bg-white/10 text-fg group-hover:bg-accent group-hover:text-accent-fg"
                           }`}
                         >
                           {isThisPlaying ? (
@@ -565,11 +565,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                         </button>
 
                         <div className="flex-1 min-w-0">
-                          <span className="text-[9px] uppercase font-mono font-bold text-[#FF6321] tracking-wider">
+                          <span className="text-[11px] tabular-nums font-bold text-link ">
                             {clip.category}
                           </span>
-                          <h2 className="text-sm font-black uppercase text-white truncate">{clip.title}</h2>
-                          <p className="text-[10px] font-mono text-white/40 mt-0.5">
+                          <h2 className="text-sm font-semibold text-fg truncate">{clip.title}</h2>
+                          <p className="text-[11px] tabular-nums text-fg-subtle mt-0.5">
                             {/* The emoji are decoration; the words carry the
                                 meaning, so a screen reader is not told
                                 "loudly crying face" instead of "comments". */}
@@ -589,7 +589,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                                 setClipCategory(clip.category);
                                 setClipEditError(null);
                               }}
-                              className="p-2 rounded-lg text-white/40 hover:text-white hover:bg-white/10"
+                              className="p-2 rounded-lg text-fg-subtle hover:text-fg hover:bg-white/10"
                               aria-label={`Edit reel details for ${clip.title}`}
                               title="Edit Details"
                             >
@@ -598,7 +598,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                             <button
                               type="button"
                               onClick={() => handleDeleteClip(clip.id)}
-                              className="p-2 rounded-lg text-white/40 hover:text-rose-400 hover:bg-white/10"
+                              className="p-2 rounded-lg text-fg-subtle hover:text-danger hover:bg-white/10"
                               aria-label={`Delete reel ${clip.title}`}
                               title="Delete Reel"
                             >
@@ -612,7 +612,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                 </div>
               )
             ) : likedClips === undefined || likedClips.length === 0 ? (
-              <div className="p-12 rounded-3xl bg-[#111111] border border-white/10 text-center text-white/40 font-mono text-xs uppercase">
+              <div className="p-12 rounded-3xl bg-panel border border-line text-center text-fg-subtle tabular-nums text-xs ">
                 {likedClips === undefined
                   ? "Liked reels unavailable."
                   : "No audio reels saved yet. Heart reels in the live feed to archive them here."}
@@ -635,12 +635,12 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                         else playClip(clip, likedClips);
                       }}
                       aria-label={isThisPlaying ? `Pause ${clip.title}` : `Play ${clip.title}`}
-                      className="w-full p-4 rounded-xl bg-[#111111] border border-white/10 flex items-center gap-4 text-left hover:border-white/20 transition-colors"
+                      className="w-full p-4 rounded-xl bg-panel border border-line flex items-center gap-4 text-left hover:border-line-strong transition-colors"
                     >
                       <span
                         aria-hidden="true"
                         className={`w-11 h-11 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                          isThisPlaying ? "bg-[#FF6321] text-black" : "bg-white/10 text-white"
+                          isThisPlaying ? "bg-accent text-accent-fg" : "bg-white/10 text-fg"
                         }`}
                       >
                         {isThisPlaying ? (
@@ -650,14 +650,14 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                         )}
                       </span>
                       <span className="flex-1 min-w-0">
-                        <span className="block text-[9px] uppercase font-mono font-bold text-[#FF6321] tracking-wider">
+                        <span className="block text-[11px] tabular-nums font-bold text-link ">
                           {clip.category} • @{clip.creator_name}
                         </span>
-                        <span className="block text-sm font-black uppercase text-white truncate">
+                        <span className="block text-sm font-semibold text-fg truncate">
                           {clip.title}
                         </span>
                       </span>
-                      <Heart className="w-4 h-4 text-[#FF6321] fill-[#FF6321] flex-shrink-0" aria-hidden="true" />
+                      <Heart className="w-4 h-4 text-link fill-link flex-shrink-0" aria-hidden="true" />
                     </button>
                   );
                 })}
@@ -670,7 +670,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
       {/* Edit Profile Modal */}
       {isEditingProfile && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 "
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) closeProfileDialog();
           }}
@@ -681,17 +681,17 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
             aria-modal="true"
             aria-labelledby="edit-profile-dialog-title"
             tabIndex={-1}
-            className="w-full max-w-sm bg-[#111111] border border-white/15 rounded-2xl p-6 shadow-2xl space-y-4 outline-none"
+            className="w-full max-w-sm bg-panel border border-line rounded-2xl p-6 shadow-float space-y-4 outline-none"
           >
-            <div className="flex items-center justify-between pb-2 border-b border-white/10">
-              <h3 id="edit-profile-dialog-title" className="text-sm font-black uppercase text-white">
+            <div className="flex items-center justify-between pb-2 border-b border-line">
+              <h3 id="edit-profile-dialog-title" className="text-sm font-semibold text-fg">
                 Edit Profile Details
               </h3>
               <button
                 type="button"
                 onClick={closeProfileDialog}
                 aria-label="Close edit profile dialog"
-                className="p-2 -m-2 rounded-lg text-white/40 hover:text-white"
+                className="p-2 -m-2 rounded-lg text-fg-subtle hover:text-fg"
               >
                 <X className="w-4 h-4" aria-hidden="true" />
               </button>
@@ -701,7 +701,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
               <p
                 id="profile-update-error"
                 role="alert"
-                className="text-xs font-mono text-rose-400"
+                className="text-xs tabular-nums text-danger"
               >
                 {profileUpdateError}
               </p>
@@ -711,7 +711,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
               <div>
                 <label
                   htmlFor="profile-username"
-                  className="text-xs font-mono uppercase text-white/50 block mb-1"
+                  className="text-xs tabular-nums text-fg-subtle block mb-1"
                 >
                   Username
                 </label>
@@ -722,7 +722,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                   onChange={(e) => setEditUsername(e.target.value)}
                   aria-invalid={profileUpdateError ? true : undefined}
                   aria-describedby={profileUpdateError ? "profile-update-error" : undefined}
-                  className="w-full bg-black border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#FF6321]"
+                  className="w-full bg-black border border-line rounded-lg px-3 py-2 text-xs text-fg focus:outline-none focus:border-link"
                   required
                 />
               </div>
@@ -730,7 +730,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
               <div>
                 <label
                   htmlFor="profile-avatar"
-                  className="text-xs font-mono uppercase text-white/50 block mb-1"
+                  className="text-xs tabular-nums text-fg-subtle block mb-1"
                 >
                   Avatar Image
                 </label>
@@ -749,25 +749,25 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                 <button
                   type="button"
                   onClick={() => avatarInputRef.current?.click()}
-                  className="w-full py-2.5 px-3 rounded-lg bg-black border border-white/15 text-xs font-mono uppercase text-white/60 flex items-center justify-center gap-2 hover:border-white/30"
+                  className="w-full py-2.5 px-3 rounded-lg bg-black border border-line text-xs tabular-nums text-fg-muted flex items-center justify-center gap-2 hover:border-line-strong"
                 >
-                  <Camera className="w-4 h-4 text-[#FF6321]" aria-hidden="true" />
+                  <Camera className="w-4 h-4 text-link" aria-hidden="true" />
                   <span>{avatarFile ? avatarFile.name : "Select Image Asset (Max 5MB)"}</span>
                 </button>
               </div>
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-white/10">
+              <div className="flex justify-end gap-2 pt-2 border-t border-line">
                 <button
                   type="button"
                   onClick={closeProfileDialog}
-                  className="px-3 py-1.5 rounded text-xs font-mono uppercase text-white/50 hover:text-white"
+                  className="px-3 py-1.5 rounded text-xs tabular-nums text-fg-subtle hover:text-fg"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isUpdatingProfile}
-                  className="px-4 py-1.5 rounded bg-[#FF6321] text-black text-xs font-black uppercase tracking-wider"
+                  className="px-4 py-1.5 rounded bg-accent text-accent-fg text-xs font-semibold "
                 >
                   {isUpdatingProfile ? "Saving..." : "Save Profile"}
                 </button>
@@ -780,7 +780,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
       {/* Edit Clip Modal */}
       {editingClip && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 "
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) closeClipDialog();
           }}
@@ -791,24 +791,24 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
             aria-modal="true"
             aria-labelledby="edit-clip-dialog-title"
             tabIndex={-1}
-            className="w-full max-w-sm bg-[#111111] border border-white/15 rounded-2xl p-6 shadow-2xl space-y-4 outline-none"
+            className="w-full max-w-sm bg-panel border border-line rounded-2xl p-6 shadow-float space-y-4 outline-none"
           >
-            <div className="flex items-center justify-between pb-2 border-b border-white/10">
-              <h3 id="edit-clip-dialog-title" className="text-sm font-black uppercase text-white">
+            <div className="flex items-center justify-between pb-2 border-b border-line">
+              <h3 id="edit-clip-dialog-title" className="text-sm font-semibold text-fg">
                 Edit Reel
               </h3>
               <button
                 type="button"
                 onClick={closeClipDialog}
                 aria-label="Close edit reel dialog"
-                className="p-2 -m-2 rounded-lg text-white/40 hover:text-white"
+                className="p-2 -m-2 rounded-lg text-fg-subtle hover:text-fg"
               >
                 <X className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
 
             {clipEditError && (
-              <p role="alert" className="text-xs font-mono text-rose-400">
+              <p role="alert" className="text-xs tabular-nums text-danger">
                 {clipEditError}
               </p>
             )}
@@ -817,7 +817,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
               <div>
                 <label
                   htmlFor="clip-title"
-                  className="text-xs font-mono uppercase text-white/50 block mb-1"
+                  className="text-xs tabular-nums text-fg-subtle block mb-1"
                 >
                   Title
                 </label>
@@ -827,14 +827,14 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                   value={clipTitle}
                   onChange={(e) => setClipTitle(e.target.value)}
                   maxLength={255}
-                  className="w-full bg-black border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#FF6321]"
+                  className="w-full bg-black border border-line rounded-lg px-3 py-2 text-xs text-fg focus:outline-none focus:border-link"
                 />
               </div>
 
               <div>
                 <label
                   htmlFor="clip-category"
-                  className="text-xs font-mono uppercase text-white/50 block mb-1"
+                  className="text-xs tabular-nums text-fg-subtle block mb-1"
                 >
                   Category
                 </label>
@@ -851,22 +851,22 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                   value={clipCategory}
                   onChange={(e) => setClipCategory(e.target.value)}
                   maxLength={50}
-                  className="w-full bg-black border border-white/15 rounded-lg px-3 py-2 text-xs text-white uppercase focus:outline-none focus:border-[#FF6321]"
+                  className="w-full bg-black border border-line rounded-lg px-3 py-2 text-xs text-fg focus:outline-none focus:border-link"
                 />
               </div>
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-white/10">
+              <div className="flex justify-end gap-2 pt-2 border-t border-line">
                 <button
                   type="button"
                   onClick={closeClipDialog}
-                  className="px-3 py-1.5 text-xs font-mono uppercase text-white/50 hover:text-white"
+                  className="px-3 py-1.5 text-xs tabular-nums text-fg-subtle hover:text-fg"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveClipEdit}
-                  className="px-4 py-1.5 rounded bg-[#FF6321] text-black text-xs font-black uppercase tracking-wider"
+                  className="px-4 py-1.5 rounded bg-accent text-accent-fg text-xs font-semibold "
                 >
                   Save Changes
                 </button>

@@ -17,9 +17,9 @@ interface HeaderProps {
  * must not claim workers are active. It said "Workers Active" for months while
  * never having asked anything.
  *
- * A note on the opacity floor in this file. The faint text was `text-white/40`
- * (3.77:1) and `text-white/30` (2.61:1) — both under the 4.5:1 of WCAG 1.4.3,
- * at 9-10px. They are now `text-white/50` (5.29:1), the smallest step that
+ * A note on the opacity floor in this file. The faint text was `text-fg-subtle`
+ * (3.77:1) and `text-fg-subtle` (2.61:1) — both under the 4.5:1 of WCAG 1.4.3,
+ * at 9-10px. They are now `text-fg-subtle` (5.29:1), the smallest step that
  * clears AA, because the app-wide decision about whether to move these to
  * `--text-secondary` / `--text-tertiary` belongs to one sweep across all
  * thirteen component files rather than to the four this pass touched. Do not
@@ -36,17 +36,17 @@ const HEALTH_VIEW: Record<
   checking: {
     label: "Checking",
     dot: "bg-white/30",
-    text: "text-white/50",
+    text: "text-fg-subtle",
   },
   healthy: {
     label: "Backend Ready",
-    dot: "bg-green-500",
-    text: "text-green-400",
+    dot: "bg-link",
+    text: "text-link",
   },
   unreachable: {
     label: "Not Reachable",
-    dot: "bg-red-500",
-    text: "text-red-400",
+    dot: "bg-danger",
+    text: "text-danger",
   },
 };
 
@@ -70,7 +70,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
   ];
 
   return (
-    <header className="sticky top-0 z-30 w-full bg-[#0A0A0A]/95 backdrop-blur-xl border-b border-white/10 px-4 md:px-8 py-3.5 transition-all">
+    <header className="sticky top-0 z-30 w-full bg-canvas/95 border-b border-line px-4 md:px-8 py-3.5 transition-all">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
         {/* Brand with Orange Pulse.
             A <button>, not a <div onClick>: this is the shortest route back to
@@ -104,13 +104,13 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
             alt=""
             width={32}
             height={32}
-            className="w-8 h-8 rounded-[17%] shadow-[0_0_20px_rgba(235,163,115,0.35)] transition-transform group-hover:scale-105"
+            className="w-8 h-8 rounded-[17%] transition-transform group-hover:scale-105"
           />
           <div>
-            <span className="text-xl md:text-2xl font-black tracking-tighter uppercase text-[#F5F5F5] leading-none">
+            <span className="text-xl md:text-2xl font-semibold tracking-tight text-fg leading-none">
               EchoFlow
             </span>
-            <p className="text-[10px] uppercase font-mono tracking-wider text-white/50 leading-none mt-0.5">
+            <p className="text-[11px] tabular-nums text-fg-subtle leading-none mt-0.5">
               Audio-First Short-Form
             </p>
           </div>
@@ -124,7 +124,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
             "where am I?" is to name both (RECON-06 §16 Q10). `aria-current` is
             the part that was outright missing: without it a screen-reader user
             on desktop had no indication of the current page. */}
-        <nav aria-label="Primary" className="hidden md:flex items-center gap-6 text-xs font-black uppercase tracking-widest text-white/50">
+        <nav aria-label="Primary" className="hidden md:flex items-center gap-6 text-xs font-semibold text-fg-subtle">
           {navLinks.map((tab) => {
             const isActive = activeTab === tab.id;
             return (
@@ -133,8 +133,8 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
                 aria-current={isActive ? "page" : undefined}
-                className={`relative py-1 transition-colors hover:text-white flex items-center gap-1.5 ${
-                  isActive ? "text-[#FF6321]" : ""
+                className={`relative py-1 transition-colors hover:text-fg flex items-center gap-1.5 ${
+                  isActive ? "text-link" : ""
                 }`}
               >
                 <span>{tab.label}</span>
@@ -142,7 +142,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
                   <>
                     <span
                       aria-hidden="true"
-                      className="px-1.5 py-0.2 rounded-full bg-[#FF6321] text-black text-[9px] font-mono font-black"
+                      className="px-1.5 py-0.2 rounded-full bg-accent text-accent-fg text-[11px] tabular-nums font-semibold"
                     >
                       {tab.badge}
                     </span>
@@ -154,7 +154,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
                   </>
                 ) : null}
                 {isActive && (
-                  <span className="absolute -bottom-1 left-0 right-0 h-0.5 bg-[#FF6321]" />
+                  <span className="absolute -bottom-1 left-0 right-0 h-0.5 bg-accent" />
                 )}
               </button>
             );
@@ -178,14 +178,14 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
               unchanged and must stay that way: `/health/` is liveness and
               `/ready/` is readiness, and neither observes a Celery worker. */}
           <div className="flex flex-col text-right">
-            <span className="hidden sm:block text-[9px] uppercase font-mono font-bold text-white/50 tracking-wider">
+            <span className="hidden sm:block text-[11px] tabular-nums font-bold text-fg-subtle ">
               System Status
             </span>
             <span
               role="status"
               aria-live="polite"
               title={healthTitle(health)}
-              className={`text-[10px] uppercase font-mono font-bold whitespace-nowrap flex items-center justify-end gap-1 ${healthView.text}`}
+              className={`text-[11px] tabular-nums font-bold whitespace-nowrap flex items-center justify-end gap-1 ${healthView.text}`}
             >
               <span
                 aria-hidden="true"
@@ -202,10 +202,10 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
             type="button"
             onClick={() => setHandsFreeMode(!handsFreeMode)}
             aria-pressed={handsFreeMode}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-mono font-bold uppercase tracking-wider transition-all border ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] tabular-nums font-bold transition-all border ${
               handsFreeMode
-                ? "bg-[#FF6321] text-black border-[#FF6321] shadow-[0_0_15px_rgba(255,99,33,0.3)]"
-                : "bg-white/5 text-white/60 hover:text-white border-white/10 hover:bg-white/10"
+                ? "bg-accent text-accent-fg border-accent "
+                : "bg-white/5 text-fg-muted hover:text-fg border-line hover:bg-white/10"
             }`}
             title="Toggle Hands-Free Continuous Playback"
           >
@@ -227,10 +227,10 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
             type="button"
             onClick={() => setActiveTab("profile")}
             aria-label="My Profile"
-            className="flex items-center gap-2 p-1 rounded-full hover:ring-2 hover:ring-[#FF6321]/50 transition-all"
+            className="flex items-center gap-2 p-1 rounded-full hover:ring-2 hover:ring-link/50 transition-all"
             title="My Profile"
           >
-            <div className="w-8 h-8 rounded-full bg-white/10 border border-white/20 overflow-hidden flex items-center justify-center">
+            <div className="w-8 h-8 rounded-full bg-white/10 border border-line-strong overflow-hidden flex items-center justify-center">
               {profile?.profile_picture ? (
                 <img
                   src={profile.profile_picture}
@@ -238,7 +238,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <span className="font-black text-xs text-[#FF6321]">
+                <span className="font-semibold text-xs text-link">
                   {user?.username?.[0]?.toUpperCase() || "E"}
                 </span>
               )}

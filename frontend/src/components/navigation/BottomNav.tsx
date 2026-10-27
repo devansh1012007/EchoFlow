@@ -23,7 +23,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, u
     // are the same navigation at two breakpoints; collapsing them into one
     // landmark means dropping `md:hidden` from this element, which is a layout
     // change and an owner decision (RECON-06 §16 Q10), not an a11y patch.
-    <nav aria-label="Primary" className="fixed bottom-0 left-0 right-0 z-40 bg-[#0A0A0A]/95 backdrop-blur-xl border-t border-white/10 pb-safe md:hidden">
+    <nav aria-label="Primary" className="fixed bottom-0 left-0 right-0 z-40 bg-canvas/95 border-t border-line pb-safe md:hidden">
       <div className="max-w-md mx-auto flex items-center justify-around px-2 py-2">
         {tabs.map((tab) => {
           const Icon = tab.icon;
@@ -47,20 +47,20 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, u
                 // mouse.
                 //
                 // White rather than the brand orange: this tab's fill is
-                // `bg-[#FF6321]` in both its active and inactive states, so an
+                // `bg-accent` in both its active and inactive states, so an
                 // orange ring would be invisible on it. No `ring-offset-*`
                 // colour is used because Tailwind 4.3.3 emits no such utility —
                 // only the width — so the offset colour would have been dead CSS.
-                className="flex flex-col items-center justify-center -mt-5 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                className="flex flex-col items-center justify-center -mt-5 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-link-strong"
               >
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(255,99,33,0.3)] transition-transform active:scale-95 ${
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-transform active:scale-95 ${
                   isActive
-                    ? "bg-[#FF6321] text-black ring-4 ring-[#0A0A0A] scale-105"
-                    : "bg-[#FF6321] text-black hover:bg-[#ff753b]"
+                    ? "bg-accent text-accent-fg ring-4 ring-canvas scale-105"
+                    : "bg-accent text-accent-fg hover:bg-accent-hover"
                 }`}>
                   <Icon className="w-6 h-6 stroke-[3]" />
                 </div>
-                <span className="text-[9px] font-black uppercase tracking-widest text-white/50 mt-1">Create</span>
+                <span className="text-[11px] font-semibold text-fg-subtle mt-1">Create</span>
               </button>
             );
           }
@@ -72,7 +72,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, u
               onClick={() => setActiveTab(tab.id)}
               aria-current={isActive ? "page" : undefined}
               className={`relative flex flex-col items-center justify-center py-1 px-3 transition-colors ${
-                isActive ? "text-[#FF6321]" : "text-white/50 hover:text-white/80"
+                isActive ? "text-link" : "text-fg-subtle hover:text-mist-300"
               }`}
             >
               <div className="relative">
@@ -86,7 +86,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, u
                         and the count is spelled out for assistive technology. */}
                     <span
                       aria-hidden="true"
-                      className="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 rounded-full bg-[#FF6321] text-[9px] font-black text-black flex items-center justify-center font-mono"
+                      className="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 rounded-full bg-accent text-[11px] font-semibold text-accent-fg flex items-center justify-center tabular-nums"
                     >
                       {tab.badge}
                     </span>
@@ -94,9 +94,9 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, u
                   </>
                 ) : null}
               </div>
-              <span className="text-[9px] font-black uppercase tracking-wider mt-1">{tab.label}</span>
+              <span className="text-[11px] font-semibold mt-1">{tab.label}</span>
               {isActive && (
-                <span className="w-1.5 h-1.5 rounded-full bg-[#FF6321] mt-0.5" />
+                <span className="w-1.5 h-1.5 rounded-full bg-accent mt-0.5" />
               )}
             </button>
           );

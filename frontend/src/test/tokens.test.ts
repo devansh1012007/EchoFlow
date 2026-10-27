@@ -64,8 +64,10 @@ function contrast(fg: string, bg: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** The `App.tsx:64` root div. Every surface the feed renders on is this or lighter. */
-const APP_BACKGROUND = "#0A0A0A";
+/** Deep black. Every other surface in the system is lighter than this. */
+const APP_BACKGROUND = tokenHex("--color-canvas");
+/** The four surfaces, darkest to lightest — text and controls must read on all of them. */
+const SURFACES = ["--color-canvas", "--color-panel", "--color-raised", "--color-high"].map(tokenHex);
 
 /** The body of the first `@media (prefers-reduced-motion: reduce)` block. */
 function reducedMotionBlock(): string {
@@ -127,9 +129,14 @@ describe("tokens.css — a global focus-visible indicator", () => {
   it("uses a ring colour that is visible on the app's darkest surface", () => {
     // A focus indicator has to clear 3:1 against what it sits on (WCAG 1.4.11),
     // or it is present in the DOM and invisible to the person using it.
-    const ring = /--focus-ring\s*:\s*(#[0-9a-fA-F]{3,8})/.exec(css);
-    expect(ring).not.toBeNull();
-    expect(contrast(ring?.[1] as string, APP_BACKGROUND)).toBeGreaterThanOrEqual(3);
+    // `--focus-ring` is an alias, so resolve it rather than parse a literal.
+    const ring = tokenHex("--focus-ring");
+    for (const surface of SURFACES) {
+      expect(contrast(ring, surface), `focus ring on ${surface}`).toBeGreaterThanOrEqual(3);
+    }
+    // The brief assigns focus indicators to blue: the ring must be a blue.
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(ring.slice(i, i + 2), 16)) as [number, number, number];
+    expect(b, "focus ring is blue-dominant").toBeGreaterThan(Math.max(r, g));
   });
 });
 
@@ -189,60 +196,97 @@ describe("tokens.css — the category palette is wired", () => {
   });
 });
 
-describe("tokens.css — the terracotta constraint is recorded on the token", () => {
-  it("documents that white on terracotta fails", () => {
-    // Measured: white on #e8a87c is 2.03:1. It is a prohibition, not a
-    // preference, and the migration that would exercise it is deferred.
-    expect(css).toMatch(/never\s+white\s+on\s+terracotta/i);
+describe("tokens.css — the palette is closed", () => {
+  const ALLOWED = [
+    "--color-transparent", "--color-current", "--color-white", "--color-black",
+    "--color-canvas", "--color-panel", "--color-raised", "--color-high",
+    "--color-fg", "--color-mist-300", "--color-fg-muted", "--color-fg-subtle",
+    "--color-line", "--color-line-strong", "--color-control",
+    "--color-accent", "--color-accent-hover", "--color-accent-fg",
+    "--color-link", "--color-link-strong",
+    "--color-danger", "--color-danger-solid", "--color-danger-solid-hover", "--color-danger-fg",
+  ];
+
+  it("switches Tailwind's default palette off", () => {
+    // Without this, `bg-green-500` would still generate CSS and a seventh hue
+    // could return without anyone touching the tokens.
+    expect(css).toMatch(/--color-\*\s*:\s*initial\s*;/);
   });
 
-  it("marks the light theme as unreachable rather than usable", () => {
-    // `data-theme` is set nowhere, and enabling it would put the app's
-    // hardcoded near-black root div on top of it. Terracotta as text on its
-    // `--background` is 1.80:1, so the block cannot be rescued by flipping the
-    // attribute either.
-    const comment = css.slice(0, css.indexOf('[data-theme="light"]'));
-    expect(comment).toMatch(/unreachable|DEAD AND UNSAFE/i);
-    expect(comment).toMatch(/set nowhere/i);
-    expect(comment).toMatch(/1\.80:1/);
+  it("declares exactly the named colour tokens and no others", () => {
+    const declared = declaredTokens().filter((n) => n.startsWith("--color-") && n !== "--color-*");
+    expect([...new Set(declared)].sort()).toEqual([...ALLOWED].sort());
+  });
+
+  it("keeps surfaces strictly ordered from deep black upward", () => {
+    const lum = SURFACES.map(relativeLuminance);
+    expect(SURFACES[0]).toBe("#000000");
+    expect([...lum].sort((a, b) => a - b)).toEqual(lum);
+  });
+
+  it("keeps grays neutral — no tint hiding in a 'gray'", () => {
+    for (const name of ["--color-panel", "--color-raised", "--color-high", "--color-fg-muted", "--color-fg-subtle", "--color-line", "--color-line-strong", "--color-control", "--color-mist-300"]) {
+      const h = tokenHex(name).replace("#", "");
+      expect(h.slice(0, 2), name).toBe(h.slice(2, 4));
+      expect(h.slice(2, 4), name).toBe(h.slice(4, 6));
+    }
   });
 });
 
-describe("tokens.css — token contrast (regression pin, no fix in this pass)", () => {
-  it("every token the app uses as text clears 4.5:1 on the app background", () => {
-    // A pin, not a repair: the token palette was already well-tuned
-    // (RECON-06 §8). The 1.4.3 failures come from components bypassing it with
-    // `text-white/30` and `/40`, which this file cannot fix. This test exists
-    // so a future edit to a token value cannot silently reintroduce a failure.
-    const asText = [
-      "--text-primary",
-      "--text-secondary",
-      "--text-tertiary",
-      "--terracotta",
-      "--accent-hover",
-      "--sage",
-      "--honey-gold",
-      "--error",
-      "--cat-instrumental",
-      "--cat-funny",
-      "--cat-news",
-      "--cat-science",
-      "--cat-music",
-      "--cat-neutral",
-    ];
-    for (const token of asText) {
-      expect(
-        contrast(tokenHex(token), APP_BACKGROUND),
-        `${token} is under 4.5:1 on ${APP_BACKGROUND}`,
-      ).toBeGreaterThanOrEqual(4.5);
+describe("tokens.css — contrast of every role pairing", () => {
+  const textOnSurfaces = [
+    "--color-fg", "--color-mist-300", "--color-fg-muted", "--color-fg-subtle",
+    "--color-link", "--color-link-strong", "--color-danger",
+    "--cat-instrumental", "--cat-funny", "--cat-news", "--cat-science", "--cat-music", "--cat-neutral",
+  ];
+
+  it("every text colour clears 4.5:1 on deep black, dark gray and raised gray", () => {
+    // `high` is the lightest surface and only hosts transient chrome (menus,
+    // pressed states), so it is checked at its own floor below.
+    for (const token of textOnSurfaces) {
+      for (const surface of SURFACES.slice(0, 3)) {
+        expect(contrast(tokenHex(token), surface), `${token} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+      }
     }
   });
 
-  it("declares every token this file's own utilities reference", () => {
+  it("primary, secondary and link text also clear 4.5:1 on the lightest surface", () => {
+    const high = SURFACES[3] as string;
+    for (const token of ["--color-fg", "--color-mist-300", "--color-fg-muted", "--color-fg-subtle", "--color-link", "--color-danger"]) {
+      expect(contrast(tokenHex(token), high), `${token} on ${high}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("white text on every solid fill clears 4.5:1", () => {
+    for (const fill of ["--color-accent", "--color-accent-hover", "--color-danger-solid", "--color-danger-solid-hover"]) {
+      expect(contrast("#ffffff", tokenHex(fill)), `white on ${fill}`).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(tokenHex("--color-accent-fg").toLowerCase()).toBe("#ffffff");
+    expect(tokenHex("--color-danger-fg").toLowerCase()).toBe("#ffffff");
+  });
+
+  it("the hover fills are darker than their resting fills, so white only gains contrast on hover", () => {
+    expect(relativeLuminance(tokenHex("--color-accent-hover"))).toBeLessThan(relativeLuminance(tokenHex("--color-accent")));
+    expect(relativeLuminance(tokenHex("--color-danger-solid-hover"))).toBeLessThan(relativeLuminance(tokenHex("--color-danger-solid")));
+  });
+
+  it("the edge of a control clears the 3:1 non-text floor (WCAG 1.4.11)", () => {
+    // The old `--border` measured 1.97:1 and the old file recorded that as a
+    // known failure. Input and outlined-button borders use `control` now.
+    for (const surface of SURFACES.slice(0, 3)) {
+      expect(contrast(tokenHex("--color-control"), surface), `control on ${surface}`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("the accent fill is distinguishable from the page it sits on (3:1)", () => {
+    expect(contrast(tokenHex("--color-accent"), APP_BACKGROUND)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("declares every token this file references", () => {
     // Guards against a utility referencing a token that was renamed.
     const declared = new Set(declaredTokens());
     const referenced = new Set(
-      [...css.matchAll(/var\(\s*(--[\w-]+)\s*\)/g)].map((m) => m[1] as string),
+      [...css.matchAll(/var\(\s*(--[\w-]+)\s*[,)]/g)].map((m) => m[1] as string),
     );
     for (const name of referenced) {
       expect(declared, `${name} is referenced but never declared`).toContain(name);

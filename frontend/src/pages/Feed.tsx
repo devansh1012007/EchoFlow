@@ -432,11 +432,11 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
   if (phase === "cold") {
     return (
       <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 text-center space-y-4">
-        <div className="w-16 h-16 rounded-2xl bg-[#FF6321]/20 border border-[#FF6321]/40 flex items-center justify-center text-[#FF6321] animate-spin">
+        <div className="w-16 h-16 rounded-2xl bg-accent/20 border border-accent/40 flex items-center justify-center text-link animate-spin">
           <RefreshCw className="w-8 h-8" />
         </div>
         <div className="space-y-1">
-          <h2 className="text-xl font-black uppercase tracking-tight text-white">Preparing your feed…</h2>
+          <h2 className="text-xl font-semibold tracking-tight text-fg">Preparing your feed…</h2>
           {/*
             The old copy here — "Synthesizing Audio Feed / Populating pgvector
             queue with cosine similarity matrix" — described an internal
@@ -444,7 +444,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
             returns one fact: the queue is empty and a refill has been queued.
             What is stated now is that fact, plus the server's own retry hint.
           */}
-          <p className="text-xs font-mono uppercase text-white/50 max-w-sm">
+          <p className="text-xs tabular-nums text-fg-subtle max-w-sm">
             Your recommendations are being built — the server asked us to check back in{" "}
             {retryCountdown}s (attempt {(cold?.attempt ?? 0) + 1} of {COLD_RETRY_LIMIT})
           </p>
@@ -460,11 +460,11 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
         aria-live="polite"
         className="min-h-[70vh] flex flex-col items-center justify-center p-6 text-center space-y-4"
       >
-        <div className="w-12 h-12 rounded-2xl bg-[#FF6321]/20 text-[#FF6321] flex items-center justify-center">
+        <div className="w-12 h-12 rounded-2xl bg-accent/20 text-link flex items-center justify-center">
           <RefreshCw className="w-6 h-6" />
         </div>
         <div className="space-y-1">
-          <h2 className="text-lg font-black uppercase text-white">Still preparing your feed</h2>
+          <h2 className="text-lg font-semibold text-fg">Still preparing your feed</h2>
           {/*
             NOT "Nothing here yet". After five checks the queue is still cold,
             which is a different fact from "there is nothing for you": the refill
@@ -472,7 +472,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
             slow one is exactly what this is. Showing the empty state here told
             a recommender's user that their taste matched nothing.
           */}
-          <p className="text-xs text-white/50 max-w-sm mx-auto">
+          <p className="text-xs text-fg-subtle max-w-sm mx-auto">
             We checked {COLD_RETRY_LIMIT} times and your queue is still warming up. This is not an
             empty feed — nothing has come back yet.
           </p>
@@ -480,7 +480,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
         <button
           type="button"
           onClick={refresh}
-          className="px-6 py-2.5 rounded bg-[#FF6321] text-black text-xs font-black uppercase tracking-wider"
+          className="px-6 py-2.5 rounded bg-accent text-accent-fg text-xs font-semibold "
         >
           Check again
         </button>
@@ -490,8 +490,8 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
 
   if (phase === "loading") {
     return (
-      <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 text-center text-white/50 space-y-3 font-mono text-xs uppercase">
-        <div className="w-10 h-10 border-2 border-[#FF6321] border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 text-center text-fg-subtle space-y-3 tabular-nums text-xs ">
+        <div className="w-10 h-10 border-2 border-accent border-t-transparent rounded-full animate-spin" />
         <p>Loading your feed…</p>
       </div>
     );
@@ -504,17 +504,17 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
         aria-live="polite"
         className="min-h-[70vh] flex flex-col items-center justify-center p-6 text-center space-y-4"
       >
-        <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center">
+        <div className="w-12 h-12 rounded-2xl bg-danger/20 text-danger flex items-center justify-center">
           <AlertTriangle className="w-6 h-6" />
         </div>
         <div className="space-y-1">
-          <h2 className="text-lg font-black uppercase text-white">Couldn't load your feed</h2>
-          <p className="text-xs text-white/50">{loadError}</p>
+          <h2 className="text-lg font-semibold text-fg">Couldn't load your feed</h2>
+          <p className="text-xs text-fg-subtle">{loadError}</p>
         </div>
         <button
           type="button"
           onClick={refresh}
-          className="px-6 py-2.5 rounded bg-[#FF6321] text-black text-xs font-black uppercase tracking-wider"
+          className="px-6 py-2.5 rounded bg-accent text-accent-fg text-xs font-semibold "
         >
           Try again
         </button>
@@ -526,7 +526,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
     <div className="w-full max-w-7xl mx-auto px-4 md:px-8 py-4 pb-28">
       {/* Degraded mode banner */}
       {isDegraded && (
-        <div className="mb-3 p-3 rounded-xl bg-[#FF6321]/15 border border-[#FF6321]/40 text-xs font-mono uppercase text-[#FF6321] flex items-center gap-2">
+        <div className="mb-3 p-3 rounded-xl bg-accent/15 border border-accent/40 text-xs tabular-nums text-link flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
           <span>Cold fallback mode active — Serving trending reels until vector queue warms up</span>
         </div>
@@ -545,7 +545,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
         <div
           role="status"
           aria-live="polite"
-          className="mb-3 p-3 rounded-xl bg-[#111111] border border-rose-500/40 text-xs font-mono uppercase text-rose-400 flex flex-wrap items-center gap-3"
+          className="mb-3 p-3 rounded-xl bg-panel border border-danger/40 text-xs tabular-nums text-danger flex flex-wrap items-center gap-3"
         >
           <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
           <span className="flex-1 min-w-[12rem] normal-case">{notice.text}</span>
@@ -553,7 +553,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
             <button
               type="button"
               onClick={notice.action}
-              className="px-3 py-1.5 rounded border border-rose-500/50 text-rose-400 font-bold uppercase tracking-wider hover:bg-rose-500/10"
+              className="px-3 py-1.5 rounded border border-danger/50 text-danger font-bold hover:bg-danger/10"
             >
               {notice.actionLabel}
             </button>
@@ -563,9 +563,9 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
 
       {/* Top Controls Bar */}
       <div className="flex items-center justify-between gap-3 px-1 mb-3">
-        <div className="flex items-center gap-2 text-xs font-mono uppercase text-white/50">
+        <div className="flex items-center gap-2 text-xs tabular-nums text-fg-subtle">
           <Headphones
-            className={`w-4 h-4 ${handsFreeMode ? "text-[#FF6321]" : "text-white/50"}`}
+            className={`w-4 h-4 ${handsFreeMode ? "text-link" : "text-fg-subtle"}`}
             aria-hidden="true"
           />
           {/*
@@ -596,7 +596,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
           <button
             type="button"
             onClick={refresh}
-            className="flex items-center gap-1.5 px-3 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/15 text-[10px] font-mono font-bold uppercase tracking-wider text-white transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1 rounded bg-white/5 hover:bg-white/10 border border-line text-[11px] tabular-nums font-bold text-fg transition-colors"
           >
             <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
             <span>Refresh</span>
@@ -605,9 +605,9 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
           <button
             type="button"
             onClick={onOpenOnboarding}
-            className="flex items-center gap-1.5 px-3 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/15 text-[10px] font-mono font-bold uppercase tracking-wider text-white transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1 rounded bg-white/5 hover:bg-white/10 border border-line text-[11px] tabular-nums font-bold text-fg transition-colors"
           >
-            <Sparkles className="w-3.5 h-3.5 text-[#FF6321]" aria-hidden="true" />
+            <Sparkles className="w-3.5 h-3.5 text-link" aria-hidden="true" />
             <span>Tune Vector Vibes</span>
           </button>
         </div>

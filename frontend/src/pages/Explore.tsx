@@ -146,10 +146,10 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
   return (
     <div className="w-full max-w-5xl mx-auto px-4 md:px-8 py-6 pb-28 space-y-6">
       {/* Title */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2 border-b border-white/10 pb-4">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2 border-b border-line pb-4">
         <div>
-          <h1 className="text-3xl md:text-4xl font-black uppercase tracking-tighter text-[#F5F5F5] flex items-center gap-3">
-            <Compass className="w-7 h-7 text-[#FF6321]" aria-hidden="true" />
+          <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-fg flex items-center gap-3">
+            <Compass className="w-7 h-7 text-link" aria-hidden="true" />
             Explore Hubs
           </h1>
           {/*
@@ -173,7 +173,7 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
             "Hubs" is the product's own word for these categories (it is
             already every label in CATEGORIES below), so only "Vector" went.
           */}
-          <p className="text-xs font-mono uppercase tracking-wider text-white/60 mt-1">
+          <p className="text-xs tabular-nums text-fg-muted mt-1">
             Ranked for you
           </p>
         </div>
@@ -198,10 +198,10 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
               type="button"
               onClick={() => setSelectedCategory(cat.id)}
               aria-pressed={isSelected}
-              className={`px-4 py-2 rounded-lg text-xs font-black uppercase tracking-wider whitespace-nowrap transition-all border inline-flex items-center gap-1.5 ${
+              className={`px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-all border inline-flex items-center gap-1.5 ${
                 isSelected
-                  ? "bg-[#FF6321] text-black border-[#FF6321] shadow-[0_0_15px_rgba(255,99,33,0.3)]"
-                  : "bg-white/5 text-white/60 hover:text-white border-white/10 hover:bg-white/10"
+                  ? "bg-accent text-accent-fg border-accent "
+                  : "bg-white/5 text-fg-muted hover:text-fg border-line hover:bg-white/10"
               }`}
             >
               {isSelected && <Check className="w-3 h-3" aria-hidden="true" />}
@@ -215,10 +215,10 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
       {isLoading ? (
         <div
           role="status"
-          className="py-24 flex flex-col items-center justify-center text-white/60 font-mono text-xs uppercase gap-2"
+          className="py-24 flex flex-col items-center justify-center text-fg-muted tabular-nums text-xs gap-2"
         >
           <div
-            className="w-8 h-8 border-2 border-[#FF6321] border-t-transparent rounded-full animate-spin"
+            className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin"
             aria-hidden="true"
           />
           <span>Loading hubs...</span>
@@ -226,15 +226,15 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
       ) : failure ? (
         <div
           role="alert"
-          className="p-6 rounded-2xl bg-[#111111] border border-rose-500/40 text-center space-y-3"
+          className="p-6 rounded-2xl bg-panel border border-danger/40 text-center space-y-3"
         >
-          <AlertTriangle className="w-8 h-8 mx-auto text-rose-400" aria-hidden="true" />
-          <p className="text-sm font-black uppercase text-white">
+          <AlertTriangle className="w-8 h-8 mx-auto text-danger" aria-hidden="true" />
+          <p className="text-sm font-semibold text-fg">
             {failure.kind === "offline"
               ? "Can't reach EchoFlow"
               : `EchoFlow returned an error (${failure.status})`}
           </p>
-          <p className="text-xs font-mono text-white/60">
+          <p className="text-xs tabular-nums text-fg-muted">
             {failure.kind === "offline"
               ? "The request never completed. Check your connection, then try again."
               : failure.detail || "The server could not return suggestions."}
@@ -247,14 +247,14 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
           <button
             type="button"
             onClick={() => void loadSuggestions(selectedCategory)}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#FF6321] text-black text-xs font-black uppercase tracking-wider hover:bg-[#ff753b] transition-colors"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-accent-fg text-xs font-semibold hover:bg-accent-hover transition-colors"
           >
             <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
             Retry
           </button>
         </div>
       ) : clips.length === 0 ? (
-        <div className="p-12 rounded-3xl bg-[#111111] border border-white/10 text-center text-white/60 text-xs uppercase font-mono">
+        <div className="p-12 rounded-3xl bg-panel border border-line text-center text-fg-muted text-xs tabular-nums">
           No audio reels in this category.
         </div>
       ) : (
@@ -277,8 +277,8 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
                   key={clip.id}
                   className={`p-5 rounded-2xl border transition-all flex items-center gap-4 group ${
                     isThisSelected
-                      ? "bg-[#111111] border-[#FF6321] shadow-[0_0_20px_rgba(255,99,33,0.15)] ring-1 ring-[#FF6321]"
-                      : "bg-[#111111]/80 hover:bg-[#111111] border-white/10 hover:border-white/25"
+                      ? "bg-panel border-accent ring-1 ring-link"
+                      : "bg-panel/80 hover:bg-panel border-line hover:border-line-strong"
                   }`}
                 >
                   {/* Play Button */}
@@ -288,8 +288,8 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
                     aria-label={`${isThisPlaying ? "Pause" : "Play"} ${clip.title}`}
                     className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 transition-transform ${
                       isThisPlaying
-                        ? "bg-[#FF6321] text-black scale-105 shadow-[0_0_15px_rgba(255,99,33,0.35)]"
-                        : "bg-white/10 text-white group-hover:bg-[#FF6321] group-hover:text-black"
+                        ? "bg-accent text-accent-fg scale-105 "
+                        : "bg-white/10 text-fg group-hover:bg-accent group-hover:text-accent-fg"
                     }`}
                   >
                     {isThisPlaying ? (
@@ -302,10 +302,10 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
                   {/* Info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[9px] uppercase font-black tracking-widest text-[#FF6321] px-1.5 py-0.2 rounded bg-[#FF6321]/15">
+                      <span className="text-[11px] font-semibold text-link px-1.5 py-0.2 rounded bg-accent/15">
                         {clip.category}
                       </span>
-                      <span className="text-[10px] font-mono uppercase text-white/60 truncate">
+                      <span className="text-[11px] tabular-nums text-fg-muted truncate">
                         @{clip.creator_name}
                       </span>
                     </div>
@@ -315,19 +315,19 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
                       are `<h2>` — and the title itself is the second button,
                       which keeps the whole title row clickable as before.
                     */}
-                    <h2 className="text-sm font-black uppercase tracking-tight text-white leading-snug line-clamp-2">
+                    <h2 className="text-sm font-semibold tracking-tight text-fg leading-snug line-clamp-2">
                       <button
                         type="button"
                         onClick={() => handlePlayClip(clip)}
-                        className="inline-block w-full text-left hover:text-[#FF6321] transition-colors"
+                        className="inline-block w-full text-left hover:text-link transition-colors"
                       >
                         {clip.title}
                       </button>
                     </h2>
 
-                    <div className="flex items-center gap-4 text-[10px] font-mono uppercase text-white/60 mt-2">
+                    <div className="flex items-center gap-4 text-[11px] tabular-nums text-fg-muted mt-2">
                       <span className="flex items-center gap-1">
-                        <Heart className="w-3 h-3 text-[#FF6321]" aria-hidden="true" />
+                        <Heart className="w-3 h-3 text-link" aria-hidden="true" />
                         {clip.likes}
                       </span>
                       {/*
@@ -362,7 +362,7 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
             {moreFailure && (
               <div
                 role="alert"
-                className="w-full rounded-xl border border-rose-500/40 bg-[#111111] px-4 py-3 text-center text-xs font-mono text-rose-400"
+                className="w-full rounded-xl border border-danger/40 bg-panel px-4 py-3 text-center text-xs tabular-nums text-danger"
               >
                 {moreFailure.kind === "offline"
                   ? "Couldn't reach EchoFlow to load more."
@@ -374,12 +374,12 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
                 type="button"
                 onClick={() => void loadMore()}
                 disabled={isLoadingMore}
-                className="px-6 py-2.5 rounded-xl border border-white/15 bg-[#111111] text-[#F5F5F5] text-xs font-black uppercase tracking-wider hover:border-[#FF6321] hover:text-[#FF6321] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                className="px-6 py-2.5 rounded-xl border border-line bg-panel text-fg text-xs font-semibold hover:border-accent hover:text-link transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isLoadingMore ? "Loading..." : "Load more"}
               </button>
             ) : (
-              <p className="text-[10px] font-mono uppercase text-white/60">
+              <p className="text-[11px] tabular-nums text-fg-muted">
                 End of results for this category
               </p>
             )}

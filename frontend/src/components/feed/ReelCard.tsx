@@ -216,12 +216,12 @@ export const ReelCard: React.FC<ReelCardProps> = ({
   return (
     <div
       onClick={handlePlayCard}
-      className="relative w-full min-h-[580px] max-h-[720px] rounded-2xl md:rounded-3xl bg-[#0A0A0A] border border-white/10 shadow-2xl overflow-hidden flex flex-col justify-between p-6 md:p-8 select-none cursor-pointer transition-all hover:border-white/20"
+      className="relative w-full min-h-[580px] max-h-[720px] rounded-2xl md:rounded-3xl bg-canvas border border-line shadow-float overflow-hidden flex flex-col justify-between p-6 md:p-8 select-none cursor-pointer transition-all hover:border-line-strong"
     >
       {/* Top Header: Category Tag */}
       <div className="flex items-center justify-between z-10">
         <div className="flex items-center gap-3">
-          <span className="px-3 py-1 bg-[#FF6321] text-black text-[10px] font-black uppercase tracking-wider rounded">
+          <span className="px-3 py-1 bg-accent text-accent-fg text-[11px] font-semibold rounded">
             {clip.category}
           </span>
         </div>
@@ -231,11 +231,11 @@ export const ReelCard: React.FC<ReelCardProps> = ({
           <button
             type="button"
             onClick={cycleSpeed}
-            className="px-2.5 py-1 rounded border border-white/15 bg-white/5 hover:bg-white/10 text-white/80 font-mono text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 transition-colors"
+            className="px-2.5 py-1 rounded border border-line bg-white/5 hover:bg-white/10 text-mist-300 tabular-nums text-[11px] font-bold flex items-center gap-1 transition-colors"
             title="Toggle Playback Speed"
             aria-label={`Playback speed, ${playbackRate}x`}
           >
-            <Gauge className="w-3 h-3 text-[#FF6321]" aria-hidden="true" />
+            <Gauge className="w-3 h-3 text-link" aria-hidden="true" />
             <span aria-hidden="true">{playbackRate}X</span>
           </button>
         </div>
@@ -259,11 +259,11 @@ export const ReelCard: React.FC<ReelCardProps> = ({
         >
           <span
             aria-hidden="true"
-            className="w-8 h-8 rounded-full bg-white/10 border border-white/20 flex items-center justify-center font-black text-xs text-[#FF6321]"
+            className="w-8 h-8 rounded-full bg-white/10 border border-line-strong flex items-center justify-center font-semibold text-xs text-link"
           >
             {clip.creator_name[0]?.toUpperCase()}
           </span>
-          <span className="text-xs font-black uppercase tracking-wider text-white group-hover/creator:text-[#FF6321] transition-colors">
+          <span className="text-xs font-semibold text-fg group-hover/creator:text-link transition-colors">
             @{clip.creator_name}
           </span>
         </button>
@@ -278,15 +278,15 @@ export const ReelCard: React.FC<ReelCardProps> = ({
               type="button"
               onClick={handleFollowToggle}
               disabled={isFollowPending}
-              className={`px-3 py-1 rounded text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1 rounded text-[11px] font-semibold transition-all flex items-center gap-1.5 ${
                 isFollowing
-                  ? "bg-white/10 text-white/50 border border-white/10"
-                  : "bg-white/10 hover:bg-[#FF6321] hover:text-black text-white border border-white/20"
+                  ? "bg-white/10 text-fg-subtle border border-line"
+                  : "bg-white/10 hover:bg-accent hover:text-accent-fg text-fg border border-line-strong"
               } ${isFollowPending ? "opacity-60" : ""}`}
             >
               {isFollowing ? (
                 <>
-                  <UserCheck className="w-3 h-3 text-[#FF6321]" />
+                  <UserCheck className="w-3 h-3 text-link" />
                   Following
                 </>
               ) : (
@@ -302,7 +302,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
             <span
               role="status"
               aria-live="polite"
-              className="text-[9px] font-bold uppercase tracking-wider text-red-400"
+              className="text-[11px] font-bold text-danger"
             >
               {followError ?? ""}
             </span>
@@ -317,9 +317,9 @@ export const ReelCard: React.FC<ReelCardProps> = ({
             `Feed.tsx:85,110` already use h2 for this route's loading and error
             states, so h2 also keeps the card from skipping a level once a
             page-level h1 is added upstream. */}
-        <h2 className="text-3xl sm:text-4xl md:text-5xl font-black uppercase italic tracking-tighter leading-[0.9] text-[#F5F5F5] mb-4">
+        <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold italic tracking-tight leading-[0.9] text-fg mb-4">
           {mainTitle}{" "}
-          <span className="text-[#FF6321] not-italic">{lastWord}</span>
+          <span className="text-link not-italic">{lastWord}</span>
         </h2>
 
         {/* Decorative bars. There is no AnalyserNode in the player store — the
@@ -362,25 +362,25 @@ export const ReelCard: React.FC<ReelCardProps> = ({
             on `likes` and `shares` plus a bitrate claim for a single-variant
             128 kbps encode. `tags` and `duration_ms` are both in
             FeedClipSerializer and both were rendered nowhere. */}
-        <div className="hidden sm:flex flex-wrap items-center gap-x-6 gap-y-1 pt-3 mt-3 border-t border-white/10 text-[10px] font-mono uppercase">
+        <div className="hidden sm:flex flex-wrap items-center gap-x-6 gap-y-1 pt-3 mt-3 border-t border-line text-[11px] tabular-nums ">
           <span className="flex items-baseline gap-1.5">
-            <span className="text-white/40 font-bold">Duration</span>
-            <span className="text-white/80">{formatTime(effectiveDuration)}</span>
+            <span className="text-fg-subtle font-bold">Duration</span>
+            <span className="text-mist-300">{formatTime(effectiveDuration)}</span>
           </span>
           {clip.tags.length > 0 && (
             <span className="flex items-baseline gap-1.5">
-              <span className="text-white/40 font-bold">Tags</span>
-              <span className="text-white/80">{clip.tags.join(" · ")}</span>
+              <span className="text-fg-subtle font-bold">Tags</span>
+              <span className="text-mist-300">{clip.tags.join(" · ")}</span>
             </span>
           )}
         </div>
       </div>
 
       {/* Bottom Stage: Scrubber, Play Controls & Social */}
-      <div className="w-full z-10 pt-2 border-t border-white/10">
+      <div className="w-full z-10 pt-2 border-t border-line">
         {/* Scrubber Bar */}
         <div className="mb-4">
-          <div className="flex items-center justify-between text-[10px] font-mono text-white/40 mb-1">
+          <div className="flex items-center justify-between text-[11px] tabular-nums text-fg-subtle mb-1">
             <span>{formatTime(effectivePosition)}</span>
             <span>{formatTime(effectiveDuration)}</span>
           </div>
@@ -405,7 +405,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
             className="h-1.5 w-full bg-white/10 cursor-pointer overflow-hidden rounded-full"
           >
             <div
-              className="h-full bg-[#FF6321] transition-all duration-150"
+              className="h-full bg-accent transition-all duration-150"
               style={{
                 width: `${
                   isThisClipLoaded
@@ -427,7 +427,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                 e.stopPropagation();
                 skipBackward(10);
               }}
-              className="w-10 h-10 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 text-white/80 flex items-center justify-center transition-colors"
+              className="w-10 h-10 rounded-full border border-line bg-white/5 hover:bg-white/10 text-mist-300 flex items-center justify-center transition-colors"
               title="Skip -10s"
               aria-label="Skip back 10 seconds"
             >
@@ -441,7 +441,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                 e.stopPropagation();
                 handlePlayCard();
               }}
-              className="w-14 h-14 md:w-16 md:h-16 rounded-full bg-[#FF6321] text-black flex items-center justify-center shadow-[0_0_25px_rgba(255,99,33,0.35)] hover:scale-105 active:scale-95 transition-transform"
+              className="w-14 h-14 md:w-16 md:h-16 rounded-full bg-accent text-accent-fg flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
               title={playLabel}
               aria-label={playLabel}
             >
@@ -458,7 +458,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                 e.stopPropagation();
                 skipForward(10);
               }}
-              className="w-10 h-10 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 text-white/80 flex items-center justify-center transition-colors"
+              className="w-10 h-10 rounded-full border border-line bg-white/5 hover:bg-white/10 text-mist-300 flex items-center justify-center transition-colors"
               title="Skip +10s"
               aria-label="Skip forward 10 seconds"
             >
@@ -471,12 +471,12 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                 e.stopPropagation();
                 nextClip("manual");
               }}
-              className="px-3 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 text-white/80 text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition-colors"
+              className="px-3 py-2 rounded-full border border-line bg-white/5 hover:bg-white/10 text-mist-300 text-[11px] font-semibold flex items-center gap-1 transition-colors"
               title="Next Reel"
               aria-label="Next reel"
             >
               <span aria-hidden="true">Next</span>
-              <SkipForward className="w-3.5 h-3.5 text-[#FF6321]" aria-hidden="true" />
+              <SkipForward className="w-3.5 h-3.5 text-link" aria-hidden="true" />
             </button>
           </div>
 
@@ -500,18 +500,18 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                 <span
                   className={`w-9 h-9 rounded-full border flex items-center justify-center transition-all ${
                     isLiked
-                      ? "border-[#FF6321] bg-[#FF6321]/20 text-[#FF6321]"
-                      : "border-white/15 bg-white/5 text-white/40 group-hover/btn:text-[#FF6321] group-hover/btn:border-[#FF6321]/40"
+                      ? "border-accent bg-accent/20 text-link"
+                      : "border-line bg-white/5 text-fg-subtle group-hover/btn:text-link group-hover/btn:border-accent/40"
                   }`}
                 >
                   <Heart
-                    className={`w-4 h-4 ${isLiked ? "fill-[#FF6321]" : ""}`}
+                    className={`w-4 h-4 ${isLiked ? "fill-link" : ""}`}
                     aria-hidden="true"
                   />
                 </span>
                 {/* Hidden from AT because the button's accessible name already
                     carries the count; announcing it twice is worse than not. */}
-                <span className="text-[10px] font-mono font-bold text-white/60 mt-1" aria-hidden="true">
+                <span className="text-[11px] tabular-nums font-bold text-fg-muted mt-1" aria-hidden="true">
                   {likesCount}
                 </span>
               </button>
@@ -523,7 +523,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                 <span
                   role="status"
                   aria-live="polite"
-                  className="text-[9px] font-bold uppercase tracking-wider text-red-400"
+                  className="text-[11px] font-bold text-danger"
                 >
                   {likeError}
                 </span>
@@ -541,10 +541,10 @@ export const ReelCard: React.FC<ReelCardProps> = ({
               title="Comments"
               aria-label={commentLabel}
             >
-              <span className="w-9 h-9 rounded-full border border-white/15 bg-white/5 text-white/40 group-hover/btn:text-[#FF6321] group-hover/btn:border-[#FF6321]/40 flex items-center justify-center transition-all">
+              <span className="w-9 h-9 rounded-full border border-line bg-white/5 text-fg-subtle group-hover/btn:text-link group-hover/btn:border-accent/40 flex items-center justify-center transition-all">
                 <MessageSquare className="w-4 h-4" aria-hidden="true" />
               </span>
-              <span className="text-[10px] font-mono font-bold text-white/60 mt-1">
+              <span className="text-[11px] tabular-nums font-bold text-fg-muted mt-1">
                 {clip.comment_count}
               </span>
             </button>
@@ -560,10 +560,10 @@ export const ReelCard: React.FC<ReelCardProps> = ({
               title="Share Reel"
               aria-label={shareLabel}
             >
-              <span className="w-9 h-9 rounded-full border border-white/15 bg-white/5 text-white/40 group-hover/btn:text-[#FF6321] group-hover/btn:border-[#FF6321]/40 flex items-center justify-center transition-all">
+              <span className="w-9 h-9 rounded-full border border-line bg-white/5 text-fg-subtle group-hover/btn:text-link group-hover/btn:border-accent/40 flex items-center justify-center transition-all">
                 <Share2 className="w-4 h-4" aria-hidden="true" />
               </span>
-              <span className="text-[10px] font-mono font-bold text-white/60 mt-1">
+              <span className="text-[11px] tabular-nums font-bold text-fg-muted mt-1">
                 {clip.shares}
               </span>
             </button>

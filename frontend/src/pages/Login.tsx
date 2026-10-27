@@ -220,11 +220,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   return (
     <main
       aria-labelledby={TITLE_ID}
-      className="min-h-screen bg-[#0A0A0A] flex items-center justify-center p-4 relative overflow-hidden"
+      className="min-h-screen bg-canvas flex items-center justify-center p-4 relative overflow-hidden"
     >
       {/* Background glow effects */}
-      <div className="absolute w-[500px] h-[500px] rounded-full bg-[#FF6321]/5 blur-[120px] -top-40 -right-40 pointer-events-none" />
-      <div className="absolute w-[400px] h-[400px] rounded-full bg-[#FF6321]/5 blur-[100px] -bottom-32 -left-32 pointer-events-none" />
+      <div className="absolute w-[500px] h-[500px] rounded-full bg-accent/5 blur-[120px] -top-40 -right-40 pointer-events-none" />
+      <div className="absolute w-[400px] h-[400px] rounded-full bg-accent/5 blur-[100px] -bottom-32 -left-32 pointer-events-none" />
 
       <div className="w-full max-w-md relative z-10">
         {/* Logo + Brand */}
@@ -238,27 +238,27 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             alt=""
             width={64}
             height={64}
-            className="w-16 h-16 rounded-[17%] mx-auto mb-5 shadow-[0_0_32px_rgba(235,163,115,0.35)]"
+            className="w-16 h-16 rounded-[17%] mx-auto mb-5 "
           />
           <h1
             id={TITLE_ID}
-            className="text-3xl md:text-4xl font-black uppercase tracking-tight text-white"
+            className="text-3xl md:text-4xl font-semibold tracking-tight text-fg"
           >
             EchoFlow
           </h1>
-          <p className="text-xs font-mono uppercase text-white/40 mt-2 tracking-widest">
+          <p className="text-xs tabular-nums text-fg-subtle mt-2 ">
             TikTok for your ears
           </p>
         </div>
 
         {/* Auth Card */}
-        <div className="bg-[#111111] border border-white/10 rounded-3xl p-6 md:p-8 shadow-2xl">
+        <div className="bg-panel border border-line rounded-3xl p-6 md:p-8 shadow-float">
           {/* Login / Register Toggle. RECON-06 #21: the selected state was
               background colour alone, so it is also exposed as pressed state. */}
           <div
             role="group"
             aria-label="Authentication mode"
-            className="flex gap-1 p-1 bg-[#0A0A0A] rounded-xl mb-7"
+            className="flex gap-1 p-1 bg-canvas rounded-xl mb-7"
           >
             {(["login", "register"] as const).map((m) => (
               <button
@@ -269,8 +269,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   setMode(m);
                   setFailure(null);
                 }}
-                className={`flex-1 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all ${
-                  mode === m ? "bg-white/10 text-white" : "text-white/30 hover:text-white/60"
+                className={`flex-1 py-2.5 rounded-lg text-xs font-semibold transition-all ${
+                  mode === m ? "bg-white/10 text-fg" : "text-fg-subtle hover:text-fg-muted"
                 }`}
               >
                 {m}
@@ -287,7 +287,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
               <div
                 id={ERROR_ID}
                 role="alert"
-                className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-mono"
+                className="p-3 rounded-xl bg-danger/15 border border-danger/30 text-danger text-xs tabular-nums"
               >
                 {failure.message}
               </div>
@@ -297,7 +297,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             <div>
               <label
                 htmlFor={USERNAME_ID}
-                className="text-[10px] font-mono uppercase text-white/40 block mb-1.5 tracking-wider"
+                className="text-[11px] tabular-nums text-fg-subtle block mb-1.5 "
               >
                 Username
               </label>
@@ -312,7 +312,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                 required
                 aria-invalid={isInvalid("username")}
                 aria-describedby={describedBy("username")}
-                className="w-full bg-black border border-white/15 rounded-xl px-4 py-3 text-xs font-mono text-white placeholder-white/20 focus:border-[#FF6321] transition-colors"
+                className="w-full bg-black border border-line rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
               />
             </div>
 
@@ -321,7 +321,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
               <div>
                 <label
                   htmlFor={EMAIL_ID}
-                  className="text-[10px] font-mono uppercase text-white/40 block mb-1.5 tracking-wider"
+                  className="text-[11px] tabular-nums text-fg-subtle block mb-1.5 "
                 >
                   Email Address
                 </label>
@@ -336,7 +336,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   required
                   aria-invalid={isInvalid("email")}
                   aria-describedby={describedBy("email")}
-                  className="w-full bg-black border border-white/15 rounded-xl px-4 py-3 text-xs font-mono text-white placeholder-white/20 focus:border-[#FF6321] transition-colors"
+                  className="w-full bg-black border border-line rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
                 />
               </div>
             )}
@@ -346,7 +346,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
               <div>
                 <label
                   htmlFor={DOB_ID}
-                  className="text-[10px] font-mono uppercase text-white/40 block mb-1.5 tracking-wider"
+                  className="text-[11px] tabular-nums text-fg-subtle block mb-1.5 "
                 >
                   Date of Birth
                 </label>
@@ -362,7 +362,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   required
                   aria-invalid={isInvalid("dob")}
                   aria-describedby={describedBy("dob")}
-                  className="w-full bg-black border border-white/15 rounded-xl px-4 py-3 text-xs font-mono text-white placeholder-white/20 focus:border-[#FF6321] transition-colors"
+                  className="w-full bg-black border border-line rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
                 />
               </div>
             )}
@@ -376,7 +376,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
               <div>
                 <label
                   htmlFor={PARENT_EMAIL_ID}
-                  className="text-[10px] font-mono uppercase text-white/40 block mb-1.5 tracking-wider"
+                  className="text-[11px] tabular-nums text-fg-subtle block mb-1.5 "
                 >
                   Parent / Guardian Email
                 </label>
@@ -390,7 +390,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   required
                   aria-invalid={isInvalid("parentEmail")}
                   aria-describedby={describedBy("parentEmail")}
-                  className="w-full bg-black border border-white/15 rounded-xl px-4 py-3 text-xs font-mono text-white placeholder-white/20 focus:border-[#FF6321] transition-colors"
+                  className="w-full bg-black border border-line rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
                 />
               </div>
             )}
@@ -399,7 +399,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             <div>
               <label
                 htmlFor={PASSWORD_ID}
-                className="text-[10px] font-mono uppercase text-white/40 block mb-1.5 tracking-wider"
+                className="text-[11px] tabular-nums text-fg-subtle block mb-1.5 "
               >
                 Password
               </label>
@@ -416,7 +416,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   aria-invalid={isInvalid("password")}
                   aria-describedby={describedBy("password")}
                   onKeyDown={(e) => e.key === "Enter" && handleSubmit(e)}
-                  className="w-full bg-black border border-white/15 rounded-xl px-4 py-3 pr-14 text-xs font-mono text-white placeholder-white/20 focus:border-[#FF6321] transition-colors"
+                  className="w-full bg-black border border-line rounded-xl px-4 py-3 pr-14 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
                 />
                 {/* RECON-06 #10 / #24: was 16x16, unnamed, and stateless.
                     `aria-pressed` carries the state so the name can stay
@@ -428,7 +428,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   aria-pressed={showPassword}
                   aria-controls={PASSWORD_ID}
                   onClick={() => setShowPassword((prev) => !prev)}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 min-w-11 min-h-11 flex items-center justify-center rounded-lg text-white/60 hover:text-white transition-colors"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 min-w-11 min-h-11 flex items-center justify-center rounded-lg text-fg-muted hover:text-fg transition-colors"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -442,7 +442,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             <button
               type="submit"
               aria-disabled={isLoading}
-              className="w-full py-3.5 rounded-xl bg-[#FF6321] text-black font-black text-xs uppercase tracking-widest shadow-[0_0_20px_rgba(255,99,33,0.3)] hover:bg-[#ff753b] active:scale-[0.98] transition-all flex items-center justify-center gap-2 mt-6 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+              className="w-full py-3.5 rounded-xl bg-accent text-accent-fg font-semibold text-xs hover:bg-accent-hover active:scale-[0.98] transition-all flex items-center justify-center gap-2 mt-6 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
             >
               <span>
                 {isLoading
@@ -456,14 +456,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
           </form>
 
           {/* Toggle Link */}
-          <div className="text-center pt-5 mt-5 border-t border-white/10">
+          <div className="text-center pt-5 mt-5 border-t border-line">
             <button
               type="button"
               onClick={() => {
                 setMode(mode === "login" ? "register" : "login");
                 setFailure(null);
               }}
-              className="text-xs font-mono uppercase text-[#FF6321] hover:underline transition-colors"
+              className="text-xs tabular-nums text-link hover:underline transition-colors"
             >
               {mode === "login" ? "Need an account? Sign up here" : "Already have an account? Log in"}
             </button>

@@ -260,7 +260,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
   const isFoundUserPending = foundUser ? pendingShares[foundKey] === true : false;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 ">
       <div
         ref={dialogRef}
         role="dialog"
@@ -268,15 +268,15 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
         aria-labelledby={DIALOG_TITLE_ID}
         tabIndex={-1}
         onKeyDown={handleDialogKeyDown}
-        className="w-full max-w-sm bg-[#111111] border border-white/15 rounded-3xl p-6 shadow-2xl space-y-5 animate-in zoom-in-95 duration-150"
+        className="w-full max-w-sm bg-panel border border-line rounded-3xl p-6 shadow-float space-y-5 animate-in zoom-in-95 duration-150"
       >
         {/* Header */}
-        <div className="flex items-center justify-between pb-3 border-b border-white/10">
+        <div className="flex items-center justify-between pb-3 border-b border-line">
           <div className="flex items-center gap-2">
-            <Radio className="w-4 h-4 text-[#FF6321]" />
+            <Radio className="w-4 h-4 text-link" />
             <h3
               id={DIALOG_TITLE_ID}
-              className="text-sm font-black uppercase tracking-tight text-white"
+              className="text-sm font-semibold tracking-tight text-fg"
             >
               Dispatch to Peer Queue
             </h3>
@@ -285,20 +285,20 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
             type="button"
             aria-label="Close share dialog"
             onClick={onClose}
-            className="p-1 rounded-full text-white/40 hover:text-white"
+            className="p-1 rounded-full text-fg-subtle hover:text-fg"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Clip Summary Preview */}
-        <div className="p-3.5 rounded-xl bg-black/60 border border-white/10 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-[#FF6321] text-black flex items-center justify-center font-black text-xs font-mono">
+        <div className="p-3.5 rounded-xl bg-black/60 border border-line flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-accent text-accent-fg flex items-center justify-center font-semibold text-xs tabular-nums">
             {clip.category.slice(0, 2).toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
-            <h4 className="text-xs font-black uppercase text-white truncate">{clip.title}</h4>
-            <p className="text-[10px] font-mono text-white/40 uppercase truncate">
+            <h4 className="text-xs font-semibold text-fg truncate">{clip.title}</h4>
+            <p className="text-[11px] tabular-nums text-fg-subtle truncate">
               @{clip.creator_name} • {clip.category}
             </p>
           </div>
@@ -309,10 +309,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
           <button
             type="button"
             onClick={() => void handleCopyLink()}
-            className="w-full py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/15 text-xs font-mono font-bold uppercase text-white flex items-center justify-between transition-colors"
+            className="w-full py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-line text-xs tabular-nums font-bold text-fg flex items-center justify-between transition-colors"
           >
             <div className="flex items-center gap-2">
-              <Copy className="w-4 h-4 text-[#FF6321]" />
+              <Copy className="w-4 h-4 text-link" />
               <span>
                 {copyState === "copied"
                   ? "Direct Stream URL Copied"
@@ -321,11 +321,11 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
                     : "Copy Audio Reel Link"}
               </span>
             </div>
-            {copyState === "copied" && <Check className="w-4 h-4 text-green-400" />}
+            {copyState === "copied" && <Check className="w-4 h-4 text-link" />}
           </button>
           {/* The button label alone is not announced when focus is elsewhere,
               and the success case is a swap of text with no live region. */}
-          <p role="status" className="mt-1 text-[10px] font-mono text-white/40">
+          <p role="status" className="mt-1 text-[11px] tabular-nums text-fg-subtle">
             {copyState === "copied" && "Link copied to your clipboard."}
             {copyState === "failed" &&
               "Your browser blocked clipboard access. Copy the address bar instead."}
@@ -336,7 +336,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
         <form onSubmit={handleSearchUser} className="space-y-2">
           <label
             htmlFor={USERNAME_INPUT_ID}
-            className="text-[10px] font-mono uppercase text-white/40 block"
+            className="text-[11px] tabular-nums text-fg-subtle block"
           >
             Find Listener by Username
           </label>
@@ -349,19 +349,19 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
               placeholder="e.g. roastmaster"
               aria-invalid={searchError !== null ? true : undefined}
               aria-describedby={searchError !== null ? USERNAME_ERROR_ID : undefined}
-              className="flex-1 bg-black border border-white/15 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-white/20 focus:outline-none focus:border-[#FF6321]"
+              className="flex-1 bg-black border border-line rounded-xl px-3 py-2 text-xs tabular-nums text-fg placeholder-white/20 focus:outline-none focus:border-link"
             />
             <button
               type="submit"
               aria-label="Search for listener"
               disabled={isSearching}
-              className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"
+              className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-fg transition-colors"
             >
               <Search className="w-4 h-4" />
             </button>
           </div>
           {searchError && (
-            <p id={USERNAME_ERROR_ID} role="alert" className="text-[10px] font-mono text-rose-400">
+            <p id={USERNAME_ERROR_ID} role="alert" className="text-[11px] tabular-nums text-danger">
               {searchError}
             </p>
           )}
@@ -378,16 +378,16 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
         <div className="space-y-2">
           {foundUser ? (
             <>
-              <span className="text-[10px] font-mono uppercase text-white/40 block">
+              <span className="text-[11px] tabular-nums text-fg-subtle block">
                 Discovered Listener
               </span>
               <div className="space-y-2">
-                <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 border border-white/10">
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 border border-line">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center font-black text-xs text-[#FF6321]">
+                    <div className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center font-semibold text-xs text-link">
                       {foundUser.username[0]?.toUpperCase()}
                     </div>
-                    <span className="text-xs font-black uppercase text-white">
+                    <span className="text-xs font-semibold text-fg">
                       @{foundUser.username}
                     </span>
                   </div>
@@ -396,10 +396,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
                     type="button"
                     onClick={() => void handleSendToUser(foundUser.id)}
                     aria-disabled={isFoundUserSent || isFoundUserPending}
-                    className={`px-3 py-1 rounded text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 ${
+                    className={`px-3 py-1 rounded text-[11px] font-semibold transition-all flex items-center gap-1 ${
                       isFoundUserSent
-                        ? "bg-green-500/20 text-green-400 border border-green-500/30"
-                        : "bg-[#FF6321] text-black hover:bg-[#ff753b]"
+                        ? "bg-accent/20 text-link border border-accent/40"
+                        : "bg-accent text-accent-fg hover:bg-accent-hover"
                     }`}
                   >
                     {isFoundUserSent ? (
@@ -418,14 +418,14 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
                   </button>
                 </div>
                 {sendError && (
-                  <p id={SEND_ERROR_ID} role="alert" className="text-[10px] font-mono text-rose-400">
+                  <p id={SEND_ERROR_ID} role="alert" className="text-[11px] tabular-nums text-danger">
                     {sendError}
                   </p>
                 )}
               </div>
             </>
           ) : (
-            <p className="text-[10px] font-mono uppercase text-white/40">
+            <p className="text-[11px] tabular-nums text-fg-subtle">
               Search for a listener by username to send this clip.
             </p>
           )}

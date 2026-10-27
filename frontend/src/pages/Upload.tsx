@@ -546,12 +546,12 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
 
   return (
     <div className="w-full max-w-2xl mx-auto px-4 md:px-8 py-6 pb-28 space-y-6">
-      <div className="border-b border-white/10 pb-4">
-        <h1 className="text-3xl md:text-4xl font-black uppercase tracking-tighter text-[#F5F5F5] flex items-center gap-3">
-          <UploadIcon className="w-7 h-7 text-[#FF6321]" />
+      <div className="border-b border-line pb-4">
+        <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-fg flex items-center gap-3">
+          <UploadIcon className="w-7 h-7 text-link" />
           Creator Studio
         </h1>
-        <p className="text-xs font-mono uppercase text-white/40 mt-1">
+        <p className="text-xs tabular-nums text-fg-subtle mt-1">
           Accepted, then held for moderation approval, then transcoded to HLS in the background
         </p>
       </div>
@@ -560,15 +560,15 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
         <div
           role="status"
           aria-live="polite"
-          className="p-8 rounded-3xl bg-[#111111] border border-white/15 text-center space-y-4 animate-in zoom-in-95 duration-200"
+          className="p-8 rounded-3xl bg-panel border border-line text-center space-y-4 animate-in zoom-in-95 duration-200"
         >
           <div
             className={`w-16 h-16 rounded-2xl border flex items-center justify-center mx-auto ${
               outcome.phase === "ready"
-                ? "bg-[#FF6321]/20 text-[#FF6321] border-[#FF6321]/30"
+                ? "bg-accent/20 text-link border-accent/30"
                 : outcome.phase === "processing"
-                  ? "bg-white/10 text-white/70 border-white/15"
-                  : "bg-rose-500/15 text-rose-300 border-rose-500/30"
+                  ? "bg-white/10 text-fg-muted border-line"
+                  : "bg-danger/15 text-danger border-danger/30"
             }`}
           >
             {outcome.phase === "ready" ? (
@@ -582,17 +582,17 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
 
           <div className="space-y-1">
             {/* Still true: the API really did answer 202. */}
-            <h2 className="text-xl font-black uppercase tracking-tight text-white">
+            <h2 className="text-xl font-semibold tracking-tight text-fg">
               Ingestion Accepted (202)
             </h2>
-            {outcome.message && <p className="text-xs text-white/60">{outcome.message}</p>}
-            <p className="text-[11px] text-[#FF6321] font-mono break-all">
+            {outcome.message && <p className="text-xs text-fg-muted">{outcome.message}</p>}
+            <p className="text-[11px] text-link tabular-nums break-all">
               CLIP_ID: {outcome.clipId}
             </p>
           </div>
 
           {outcome.phase === "processing" && (
-            <p className="text-xs font-mono uppercase text-white/60 leading-relaxed">
+            <p className="text-xs tabular-nums text-fg-muted leading-relaxed">
               {outcome.watching
                 ? "Approved for publishing. Transcoding in progress — this page re-checks the server every few seconds."
                 : inFlight === "approving"
@@ -602,7 +602,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
           )}
 
           {outcome.phase === "ready" && (
-            <p className="text-xs font-mono uppercase text-[#FF6321] font-bold">
+            <p className="text-xs tabular-nums text-link font-bold">
               Transcode complete. This reel is live in the feed.
             </p>
           )}
@@ -610,22 +610,22 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
           {(outcome.phase === "failed" || outcome.phase === "not_approved") && (
             <div
               role="alert"
-              className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono leading-relaxed"
+              className="p-4 rounded-xl bg-danger/10 border border-danger/30 text-danger text-xs tabular-nums leading-relaxed"
             >
-              <p className="font-bold uppercase">
+              <p className="font-bold ">
                 {outcome.phase === "not_approved"
                   ? "Not approved for publishing"
                   : "Processing failed"}
               </p>
               {outcome.detail && <p className="mt-1 normal-case">{outcome.detail}</p>}
-              <p className="mt-1 normal-case text-rose-300/80">
+              <p className="mt-1 normal-case text-danger/80">
                 The clip was stored, but it is not playable and does not appear in your profile.
               </p>
             </div>
           )}
 
           {outcome.phase === "processing" && !outcome.watching && !busy && (
-            <p className="text-[11px] font-mono uppercase text-white/50">
+            <p className="text-[11px] tabular-nums text-fg-subtle">
               This page stopped checking automatically. The server has not reported a result yet.
             </p>
           )}
@@ -642,7 +642,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
                   }
                   void runApproval(outcome.clipId);
                 }}
-                className={`px-5 py-3 rounded-xl bg-[#FF6321] text-black font-black text-xs uppercase tracking-widest ${
+                className={`px-5 py-3 rounded-xl bg-accent text-accent-fg font-semibold text-xs ${
                   busy ? "opacity-40 cursor-not-allowed" : ""
                 }`}
               >
@@ -653,7 +653,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
               <button
                 type="button"
                 onClick={resumeWatching}
-                className="px-5 py-3 rounded-xl bg-white/5 border border-white/15 text-white font-black text-xs uppercase tracking-widest hover:bg-white/10"
+                className="px-5 py-3 rounded-xl bg-white/5 border border-line text-fg font-semibold text-xs hover:bg-white/10"
               >
                 Check again
               </button>
@@ -662,7 +662,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
               <button
                 type="button"
                 onClick={onUploadSuccess}
-                className="px-5 py-3 rounded-xl bg-[#FF6321] text-black font-black text-xs uppercase tracking-widest"
+                className="px-5 py-3 rounded-xl bg-accent text-accent-fg font-semibold text-xs "
               >
                 Go to the feed
               </button>
@@ -670,7 +670,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
             <button
               type="button"
               onClick={resetForm}
-              className="px-5 py-3 rounded-xl bg-white/5 border border-white/15 text-white font-black text-xs uppercase tracking-widest hover:bg-white/10"
+              className="px-5 py-3 rounded-xl bg-white/5 border border-line text-fg font-semibold text-xs hover:bg-white/10"
             >
               Upload another
             </button>
@@ -682,7 +682,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
             <div
               id="upload-error"
               role="alert"
-              className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono flex items-start gap-2.5"
+              className="p-3.5 rounded-xl bg-danger/10 border border-danger/30 text-danger text-xs tabular-nums flex items-start gap-2.5"
             >
               <AlertCircle className="w-4 h-4 flex-shrink-0 mt-px" />
               <span>{errorMessage}</span>
@@ -703,8 +703,8 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
             onDrop={handleDrop}
             className={`relative rounded-2xl border-2 border-dashed transition-all ${
               file
-                ? "bg-[#FF6321]/5 border-[#FF6321]"
-                : "bg-[#111111] hover:bg-[#161616] border-white/15 hover:border-white/30"
+                ? "bg-accent/5 border-accent"
+                : "bg-panel hover:bg-raised border-line hover:border-line-strong"
             }`}
           >
             <input
@@ -720,31 +720,31 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
               type="button"
               onClick={openFilePicker}
               aria-describedby={describedBy}
-              className="w-full p-8 rounded-2xl flex flex-col items-center justify-center text-center space-y-3 cursor-pointer focus-visible:outline-2 focus-visible:outline-[#FF6321] focus-visible:outline-offset-2"
+              className="w-full p-8 rounded-2xl flex flex-col items-center justify-center text-center space-y-3 cursor-pointer focus-visible:outline-2 focus-visible:outline-link focus-visible:outline-offset-2"
             >
-              <span className="w-14 h-14 rounded-xl bg-white/10 flex items-center justify-center text-[#FF6321]">
-                {file ? <FileAudio className="w-7 h-7 text-[#FF6321]" /> : <Music className="w-7 h-7" />}
+              <span className="w-14 h-14 rounded-xl bg-white/10 flex items-center justify-center text-link">
+                {file ? <FileAudio className="w-7 h-7 text-link" /> : <Music className="w-7 h-7" />}
               </span>
 
               {file ? (
                 <span>
-                  <span className="block text-sm font-black uppercase tracking-tight text-white">
+                  <span className="block text-sm font-semibold tracking-tight text-fg">
                     {file.name}
                   </span>
-                  <span className="block text-xs font-mono uppercase text-white/40 mt-1">
+                  <span className="block text-xs tabular-nums text-fg-subtle mt-1">
                     {(file.size / (1024 * 1024)).toFixed(2)} MB{" "}
                     {durationSec !== null ? `• ${durationSec}S DURATION` : ""}
                   </span>
-                  <span className="block text-[10px] font-mono uppercase text-[#FF6321] font-bold mt-2 underline">
+                  <span className="block text-[11px] tabular-nums text-link font-bold mt-2 underline">
                     Activate to choose a different audio file
                   </span>
                 </span>
               ) : (
                 <span>
-                  <span className="block text-sm font-black uppercase tracking-tight text-white">
+                  <span className="block text-sm font-semibold tracking-tight text-fg">
                     Drop Audio File Here, Or Activate To Choose One
                   </span>
-                  <span className="block text-xs font-mono uppercase text-white/40 mt-1">
+                  <span className="block text-xs tabular-nums text-fg-subtle mt-1">
                     {formatHint}
                   </span>
                 </span>
@@ -752,7 +752,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
             </button>
           </div>
 
-          <p id="upload-audio-hint" className="text-[10px] font-mono uppercase text-white/50">
+          <p id="upload-audio-hint" className="text-[11px] tabular-nums text-fg-subtle">
             {dailyHint ? `${formatHint} • ${dailyHint}` : formatHint}
             {limitsUnknown && " • Your account's own limits could not be read; the server will enforce them"}
           </p>
@@ -762,7 +762,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
               <button
                 type="button"
                 onClick={generateSampleClip}
-                className="text-xs font-mono uppercase font-bold text-[#FF6321] hover:text-[#ff783d] flex items-center gap-1.5 p-2 rounded hover:bg-white/5 transition-colors"
+                className="text-xs tabular-nums font-bold text-link hover:text-link-strong flex items-center gap-1.5 p-2 rounded hover:bg-white/5 transition-colors"
               >
                 <Sparkles className="w-3.5 h-3.5" />
                 <span>
@@ -776,7 +776,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
           <div>
             <label
               htmlFor="upload-title"
-              className="text-xs font-black uppercase tracking-wider text-white/60 block mb-1.5 font-mono"
+              className="text-xs font-semibold text-fg-muted block mb-1.5 tabular-nums"
             >
               Reel Title
             </label>
@@ -790,7 +790,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
               required
               aria-invalid={errorField === "title" || undefined}
               aria-describedby={errorField === "title" && errorMessage ? "upload-error" : undefined}
-              className="w-full bg-[#111111] border border-white/15 rounded-xl px-4 py-3 text-sm font-bold text-white placeholder-white/20 focus:border-[#FF6321] focus-visible:outline-2 focus-visible:outline-[#FF6321] focus-visible:outline-offset-2 transition-colors"
+              className="w-full bg-panel border border-line rounded-xl px-4 py-3 text-sm font-bold text-fg placeholder-white/20 focus:border-link focus-visible:outline-2 focus-visible:outline-link focus-visible:outline-offset-2 transition-colors"
             />
           </div>
 
@@ -804,7 +804,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
           <div>
             <label
               htmlFor="upload-category"
-              className="text-xs font-black uppercase tracking-wider text-white/60 block mb-1.5 font-mono"
+              className="text-xs font-semibold text-fg-muted block mb-1.5 tabular-nums"
             >
               Vector Category
             </label>
@@ -815,7 +815,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
               onChange={(e) => setCategory(e.target.value)}
               placeholder="Free text — e.g. comedy, tech, focus"
               maxLength={50}
-              className="w-full bg-[#111111] border border-white/15 rounded-xl px-4 py-3 text-sm font-bold text-white placeholder-white/20 focus:border-[#FF6321] focus-visible:outline-2 focus-visible:outline-[#FF6321] focus-visible:outline-offset-2 transition-colors"
+              className="w-full bg-panel border border-line rounded-xl px-4 py-3 text-sm font-bold text-fg placeholder-white/20 focus:border-link focus-visible:outline-2 focus-visible:outline-link focus-visible:outline-offset-2 transition-colors"
             />
           </div>
 
@@ -829,8 +829,8 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
             "chroma". `HLS_BUCKETS` is a Prometheus histogram of seconds
             (`metrics.py:132`), not a bitrate ladder.
           */}
-          <div className="p-4 rounded-xl bg-[#111111] border border-white/10 text-[10px] font-mono uppercase text-white/40 leading-relaxed">
-            <span className="font-bold text-[#FF6321]">PIPELINE SPEC: </span>
+          <div className="p-4 rounded-xl bg-panel border border-line text-[11px] tabular-nums text-fg-subtle leading-relaxed">
+            <span className="font-bold text-link">PIPELINE SPEC: </span>
             After approval — faster-whisper &quot;base&quot; (CPU, int8) transcription • librosa
             128-dim acoustic vector (MFCC 40 + chroma 12 + mel 76) • FFmpeg HLS, single AAC 128
             kbps variant.
@@ -847,7 +847,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
             onClick={(e) => {
               if (submitBlocked) e.preventDefault();
             }}
-            className={`w-full py-4 rounded-xl bg-[#FF6321] text-black font-black text-sm uppercase tracking-widest shadow-[0_0_25px_rgba(255,99,33,0.3)] hover:bg-[#ff753b] active:scale-[0.99] transition-all focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 ${
+            className={`w-full py-4 rounded-xl bg-accent text-accent-fg font-semibold text-sm hover:bg-accent-hover active:scale-[0.99] transition-all focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-2 ${
               submitBlocked ? "opacity-40 cursor-not-allowed" : ""
             }`}
           >
