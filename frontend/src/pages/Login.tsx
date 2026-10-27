@@ -467,6 +467,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             >
               {mode === "login" ? "Need an account? Sign up here" : "Already have an account? Log in"}
             </button>
+            {mode === "register" && (
+              <p className="mt-3 text-xs leading-relaxed text-fg-subtle">
+                By creating an account you agree to the{" "}
+                <a href="/terms" className="text-link hover:underline">Terms and Conditions</a>.
+              </p>
+            )}
           </div>
         </div>
       </div>
