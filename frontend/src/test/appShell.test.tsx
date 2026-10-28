@@ -737,6 +737,23 @@ describe("tab navigation", () => {
     expect(second).not.toBe(first);
   });
 
+  it("clears the tab pill after a few seconds but keeps the live region mounted", async () => {
+    // The pill used to stay fixed over the app for the whole session after the
+    // first tab switch, covering dialog inputs. It is confirmation for sighted
+    // users only; screen readers get the text when it is set.
+    render(<App />);
+    await screen.findByTestId("reel-list");
+
+    await clickNav(/discover/i);
+    expect(await screen.findByText("Discover loaded")).toBeInTheDocument();
+    const region = screen.getByTestId("tab-announcer");
+
+    await waitFor(() => expect(screen.queryByText("Discover loaded")).not.toBeInTheDocument(), { timeout: 4500 });
+    // Same node, now empty: the region was emptied, not removed and re-inserted.
+    expect(screen.getByTestId("tab-announcer")).toBe(region);
+    expect(region).toBeEmptyDOMElement();
+  }, 8000);
+
   it("changes document.title per tab", async () => {
     render(<App />);
     await screen.findByTestId("reel-list");

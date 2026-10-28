@@ -70,7 +70,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
   ];
 
   return (
-    <header className="sticky top-0 z-30 w-full bg-canvas/95 border-b border-line px-4 md:px-8 py-3.5 transition-all">
+    <header className="sticky top-0 z-30 w-full bg-canvas border-b border-line px-4 md:px-8 py-3.5 transition-all">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
         {/* Brand with Orange Pulse.
             A <button>, not a <div onClick>: this is the shortest route back to

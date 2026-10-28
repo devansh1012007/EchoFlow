@@ -420,8 +420,10 @@ export const ReelCard: React.FC<ReelCardProps> = ({
           </div>
         </div>
 
-        {/* Main Controls Row */}
-        <div className="flex items-center justify-between">
+        {/* Main Controls Row. Wraps: at phone widths the transport controls and the four
+            action buttons together are wider than the card, which clipped Share (and
+            would clip Report) off the right edge where they could not be tapped. */}
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
           {/* Earphone skip buttons */}
           <div className="flex items-center gap-2">
             <button
@@ -484,7 +486,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
           </div>
 
           {/* Social Engagement Actions */}
-          <div className="flex items-center gap-4">
+          <div className="flex w-full items-center justify-around gap-4 sm:w-auto sm:justify-start">
             {/* Like. `aria-label` is required because a button's accessible
                 name is computed from its content *before* `title` — so the old
                 `title="Like Reel"` never applied and this control was
@@ -577,13 +579,14 @@ export const ReelCard: React.FC<ReelCardProps> = ({
                   e.stopPropagation();
                   setIsReportOpen(true);
                 }}
-                className="flex flex-col items-center group/btn tap-target justify-center"
+                className="flex flex-col items-center group/btn"
                 title="Report clip"
                 aria-label={`Report ${clip.title}`}
               >
                 <span className="w-9 h-9 rounded-full border border-line bg-white/5 text-fg-subtle group-hover/btn:text-danger group-hover/btn:border-danger/40 flex items-center justify-center transition-colors">
                   <Flag className="w-4 h-4" aria-hidden="true" />
                 </span>
+                <span className="text-[11px] font-bold text-fg-muted mt-1">Report</span>
               </button>
             )}
           </div>

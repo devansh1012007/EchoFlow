@@ -23,7 +23,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, u
     // are the same navigation at two breakpoints; collapsing them into one
     // landmark means dropping `md:hidden` from this element, which is a layout
     // change and an owner decision (RECON-06 §16 Q10), not an a11y patch.
-    <nav aria-label="Primary" className="fixed bottom-0 left-0 right-0 z-40 bg-canvas/95 border-t border-line pb-safe md:hidden">
+    <nav aria-label="Primary" className="fixed bottom-0 left-0 right-0 z-40 bg-canvas border-t border-line pb-safe md:hidden">
       <div className="max-w-md mx-auto flex items-center justify-around px-2 py-2">
         {tabs.map((tab) => {
           const Icon = tab.icon;

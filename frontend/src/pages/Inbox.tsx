@@ -44,10 +44,20 @@ let relativeTimeFormatter: Intl.RelativeTimeFormat | null = null;
  * lazily and memoised so the locale is read once.
  */
 function formatter(): Intl.RelativeTimeFormat {
-  relativeTimeFormatter ??= new Intl.RelativeTimeFormat(
-    typeof navigator === "undefined" ? undefined : navigator.language,
-    { numeric: "auto" },
-  );
+  if (relativeTimeFormatter) return relativeTimeFormatter;
+  try {
+    relativeTimeFormatter = new Intl.RelativeTimeFormat(
+      typeof navigator === "undefined" ? undefined : navigator.language,
+      { numeric: "auto" },
+    );
+  } catch {
+    // `navigator.language` is not always a valid BCP 47 tag (a POSIX locale such
+    // as "en-US@posix" is reported by some Linux and WebView builds), and the
+    // constructor throws a RangeError for it. That would take the whole Inbox
+    // down through the ErrorBoundary over a timestamp, so fall back to the
+    // runtime default locale.
+    relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  }
   return relativeTimeFormatter;
 }
 

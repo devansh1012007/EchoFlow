@@ -213,7 +213,28 @@ type UnreadState =
  * navigating to the same tab twice has to produce a different subtree. That is
  * the same defect `SessionAnnouncer.tsx:37-39` fixed for its own message.
  */
-function TabAnnouncer({ message }: { message: { id: number; text: string } | null }) {
+/** How long the tab-change pill stays on screen. */
+const TAB_ANNOUNCEMENT_VISIBLE_MS = 2500;
+
+function TabAnnouncer({
+  message,
+  onExpire,
+}: {
+  message: { id: number; text: string } | null;
+  onExpire: (id: number) => void;
+}) {
+  // The pill is confirmation for sighted users, who can already see the tab
+  // change, so it clears itself. Nothing ever cleared it before: after the first
+  // tab switch "Profile loaded" stayed fixed over the app for the whole session
+  // and covered dialog inputs. The region itself stays mounted (see above), so
+  // emptying it is just another change a screen reader can observe.
+  const id = message?.id;
+  useEffect(() => {
+    if (id === undefined) return;
+    const timer = window.setTimeout(() => onExpire(id), TAB_ANNOUNCEMENT_VISIBLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [id, onExpire]);
+
   return (
     <div
       role="status"
@@ -221,7 +242,8 @@ function TabAnnouncer({ message }: { message: { id: number; text: string } | nul
       data-testid="tab-announcer"
       style={{
         position: "fixed",
-        zIndex: 8000,
+        // Above the nav (40) and mini player (30), below dialogs (100).
+        zIndex: 60,
         bottom: 96,
         left: "50%",
         transform: "translateX(-50%)",
@@ -728,6 +750,12 @@ const MainContent: React.FC = () => {
   // Navigation
   // -------------------------------------------------------------------------
 
+  // Stable identity: TabAnnouncer's timer effect depends on it, and a new function
+  // each render would restart the countdown on every re-render.
+  const expireTabAnnouncement = useCallback((expiredId: number) => {
+    setTabAnnouncement((cur) => (cur?.id === expiredId ? null : cur));
+  }, []);
+
   const goToTab = useCallback((tab: string) => {
     // A shared-clip view belongs to the feed tab only. Navigating away
     // releases it, and the parameter is already gone from the URL, so returning
@@ -893,7 +921,7 @@ const MainContent: React.FC = () => {
 
       {/* Tab-change announcement. Mounted always, empty when idle — see
           `TabAnnouncer`. */}
-      <TabAnnouncer message={tabAnnouncement} />
+      <TabAnnouncer message={tabAnnouncement} onExpire={expireTabAnnouncement} />
 
       {/* Unread-count honesty. The badge cannot render "unknown", so the unknown
           state is stated here rather than being drawn as a zero. */}

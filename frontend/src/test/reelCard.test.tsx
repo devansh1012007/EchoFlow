@@ -438,3 +438,37 @@ describe("ReelCard accessibility", () => {
     expect(container.querySelector("h2")).not.toBeNull();
   });
 });
+
+describe("ReelCard report", () => {
+  let fetchMock: FetchMock;
+  beforeEach(() => {
+    fetchMock = installFetchMock();
+  });
+
+  it("offers a Report control on someone else's clip and opens the report dialog", async () => {
+    renderCard(makeClip({ title: "Rain on a tin roof" }));
+    await userEvent.click(screen.getByRole("button", { name: "Report Rain on a tin roof" }));
+    expect(screen.getByRole("dialog", { name: "Report this clip" })).toBeInTheDocument();
+  });
+
+  it("does not offer Report on your own clip", () => {
+    renderCard(makeClip({ creator_id: CURRENT_USER_ID }));
+    expect(screen.queryByRole("button", { name: /^Report / })).not.toBeInTheDocument();
+  });
+
+  it("opening the dialog does not start playback or leak a click to the card", async () => {
+    renderCard(makeClip());
+    await userEvent.click(screen.getByRole("button", { name: /^Report / }));
+    await userEvent.click(screen.getByLabelText("Reason"));
+    expect(fetchMock.callsTo("/playback-token/")).toHaveLength(0);
+  });
+
+  it("closes with Escape and returns focus to the Report control", async () => {
+    renderCard(makeClip({ title: "Focus test" }));
+    const trigger = screen.getByRole("button", { name: "Report Focus test" });
+    await userEvent.click(trigger);
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+});

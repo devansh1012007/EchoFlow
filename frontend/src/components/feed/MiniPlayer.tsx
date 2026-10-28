@@ -30,7 +30,7 @@ export const MiniPlayer: React.FC<MiniPlayerProps> = ({ onOpenFeed }) => {
       aria-label="Now playing"
       className="fixed bottom-16 md:bottom-6 left-0 right-0 z-30 px-4 pb-1"
     >
-      <div className="max-w-2xl mx-auto bg-panel/95 border border-line rounded-2xl p-3 shadow-float flex items-center gap-3 relative overflow-hidden">
+      <div className="max-w-2xl mx-auto bg-panel border border-line rounded-2xl p-3 shadow-float flex items-center gap-3 relative overflow-hidden">
         {/* Progress Bar Top Rim — purely visual. The elapsed/duration text is
             not rendered here at all, so the fill carries no information a
             screen reader could be given; `ReelCard` is where position is
