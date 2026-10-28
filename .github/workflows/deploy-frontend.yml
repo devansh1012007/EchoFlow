@@ -90,6 +90,44 @@ jobs:
         working-directory: frontend
 
     steps:
+      # Fails in seconds, before `npm ci`, the tests and the build, and says which
+      # setting is missing and where to put it. Without it, an unset variable does
+      # not stop anything: `--project-name=` reached wrangler empty, and an unset
+      # VITE_API_BASE_URL would have built a bundle that talks to localhost.
+      #
+      # Values arrive through `env:` and are read as shell variables. They are
+      # never pasted into the script text, so a value cannot alter the script.
+      - name: Check deploy configuration
+        working-directory: .
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          failed=0
+          fail() { echo "::error title=Missing deploy configuration::$1"; failed=1; }
+
+          [ -n "$CLOUDFLARE_API_TOKEN" ]  || fail "Secret CLOUDFLARE_API_TOKEN is empty. Add it under Settings > Secrets and variables > Actions > Secrets."
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || fail "Secret CLOUDFLARE_ACCOUNT_ID is empty. Add it under Settings > Secrets and variables > Actions > Secrets."
+
+          if [ -z "$CLOUDFLARE_PAGES_PROJECT" ]; then
+            fail "Variable CLOUDFLARE_PAGES_PROJECT is empty. Add it under Settings > Secrets and variables > Actions > Variables (the Variables tab, not Secrets: a secret is not readable as vars.*). Use the Pages project name, e.g. echoflow-app."
+          elif ! printf '%s' "$CLOUDFLARE_PAGES_PROJECT" | grep -Eq '^[a-z0-9-]+$'; then
+            fail "Variable CLOUDFLARE_PAGES_PROJECT must be a Pages project name (lowercase letters, digits and hyphens), not a URL."
+          fi
+
+          if [ -z "$VITE_API_BASE_URL" ]; then
+            fail "Variable VITE_API_BASE_URL is empty. Add it under Settings > Secrets and variables > Actions > Variables, e.g. https://api.echoflow.in. Unset, the build falls back to http://localhost:18000 and the deployed app cannot reach the API."
+          else
+            case "$VITE_API_BASE_URL" in
+              https://*) ;;
+              *) fail "Variable VITE_API_BASE_URL must start with https:// (an https page cannot call an http API)." ;;
+            esac
+          fi
+
+          exit "$failed"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -125,6 +163,11 @@ jobs:
         run: npm test
 
       - name: Build
+        # VITE_API_BASE_URL is read at BUILD time (frontend/src/api/client.ts), so it
+        # has to be in this step's environment. It was documented as required but
+        # never passed, which would have shipped a bundle pointing at localhost.
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
         run: npm run build
 
       - name: Upload build output
@@ -139,14 +182,21 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # --commit-dirty=false: `git status` is clean here, and making wrangler
-          # fail on a dirty tree would only add a way for this step to break.
+          # `uses:` steps ignore `defaults.run.working-directory`. Without this the
+          # action ran in the repo root: it could not see the wrangler pinned in
+          # frontend/package.json (so it installed 3.90.0 ad hoc) and `dist` pointed
+          # at a directory that does not exist.
+          workingDirectory: frontend
+          # No --commit-message. It used to be pasted in from
+          # github.event.head_commit.message, which is free text from whoever pushed:
+          # a double quote or a newline in a commit message breaks the argument
+          # parsing, and the value is attacker-influenced input to a command that
+          # holds the Cloudflare token. wrangler reads the message from git itself.
           command: >
             pages deploy dist
             --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }}
             --branch=${{ github.ref_name }}
             --commit-hash=${{ github.sha }}
-            --commit-message="${{ github.event.head_commit.message || 'manual deploy' }}"
 
       - name: Summary
         run: |
