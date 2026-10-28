@@ -70,4 +70,45 @@ describe("design system — no off-palette colour in source", () => {
     );
     expect(offenders).toEqual([]);
   });
+
+  it("draws every text field's edge with the 3:1 control border, not the decorative line", () => {
+    // `border-line` separates; it does not identify a control (WCAG 1.4.11).
+    const offenders: string[] = [];
+    for (const f of files) {
+      const src = code(f);
+      for (const m of src.matchAll(/<(input|textarea|select)\b/g)) {
+        let i = m.index! + m[0].length;
+        let depth = 0;
+        let quote: string | null = null;
+        for (; i < src.length; i++) {
+          const c = src[i] as string;
+          if (quote) {
+            if (c === quote) quote = null;
+          } else if (c === '"' || c === "'" || c === "`") quote = c;
+          else if (c === "{") depth++;
+          else if (c === "}") depth--;
+          else if (c === ">" && depth === 0) break;
+        }
+        const tag = src.slice(m.index!, i + 1);
+        if (/type="(file|checkbox|range|hidden)"/.test(tag) || /sr-only/.test(tag)) continue;
+        if (!/className=/.test(tag)) continue; // a type annotation such as <input>, not an element
+        if (/border-control|inputClass/.test(tag)) continue;
+        offenders.push(`${relative(SRC, f)}: ${tag.slice(0, 70).replace(/\s+/g, " ")}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("references only CSS variables that tokens.css declares", () => {
+    // An undefined var() does not error: the declaration just computes to nothing.
+    // `--accent-glow` sat in two components after its token was deleted.
+    const css = readFileSync(resolve(SRC, "styles/tokens.css"), "utf8");
+    const declared = new Set([...css.matchAll(/^\s*(--[\w-]+)\s*:/gm)].map((m) => m[1] as string));
+    const offenders = files.flatMap((f) =>
+      [...code(f).matchAll(/var\(\s*(--[\w-]+)/g)]
+        .filter((m) => !declared.has(m[1] as string) && !(m[1] as string).startsWith("--tw-"))
+        .map((m) => `${relative(SRC, f)}: ${m[1]}`),
+    );
+    expect(offenders).toEqual([]);
+  });
 });

@@ -9,7 +9,7 @@
  * run against a live server.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { clipsAPI, dataSubjectAPI, legalAPI, subscriptionAPI } from "../api/client";
+import { authAPI, clipsAPI, dataSubjectAPI, legalAPI, subscriptionAPI } from "../api/client";
 import { installFetchMock, json, type FetchMock } from "./fetchMock";
 
 let api: FetchMock;
@@ -127,5 +127,23 @@ describe("subscriptionAPI", () => {
   it("getManageUrl returns a nullable url", async () => {
     api.on("GET", /subscription\/manage/, () => json(200, { url: null }));
     expect((await subscriptionAPI.getManageUrl()).url).toBeNull();
+  });
+});
+
+describe("authAPI.logout", () => {
+  it("revokes the refresh token on the server, then clears local storage", async () => {
+    api.on("POST", /auth\/logout/, () => json(205, {}));
+    await authAPI.logout();
+    expect(api.callsTo("/auth/logout/")[0]?.body).toEqual({ refresh: "ref" });
+    expect(sessionStorage.getItem("ef_access_token")).toBeNull();
+    expect(sessionStorage.getItem("ef_refresh_token")).toBeNull();
+  });
+
+  it("still signs the user out locally when the server call fails", async () => {
+    // A dead connection must never leave someone unable to sign out.
+    api.fail("POST", /auth\/logout/, new TypeError("offline"));
+    await authAPI.logout();
+    expect(sessionStorage.getItem("ef_access_token")).toBeNull();
+    expect(sessionStorage.getItem("ef_refresh_token")).toBeNull();
   });
 });

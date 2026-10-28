@@ -10,6 +10,7 @@ import {
   FeedClip,
   FeedResponse,
   GrievanceReceipt,
+  OwnClipsPage,
   OwnProfile,
   PublicClip,
   PublicProfile,
@@ -631,6 +632,15 @@ export const clipsAPI = {
     return apiRequest<void>(`/clips/${id}/`, {
       method: "DELETE",
     });
+  },
+
+  /**
+   * `GET /clips/` — the signed-in user's own clips in every state. The profile
+   * list only returns clips that are `ready` *and* approved, so this is the only
+   * way to see one that is still processing or failed. Paged 20 at a time.
+   */
+  async listMyClips(page = 1): Promise<OwnClipsPage> {
+    return apiRequest<OwnClipsPage>(`/clips/?page=${page}`);
   },
 
   /** `POST /clips/{id}/report/`. `report_reason` must be one of `REPORT_REASONS`; the backend rejects an empty `content`. */

@@ -790,7 +790,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
               required
               aria-invalid={errorField === "title" || undefined}
               aria-describedby={errorField === "title" && errorMessage ? "upload-error" : undefined}
-              className="w-full bg-panel border border-line rounded-xl px-4 py-3 text-sm font-bold text-fg placeholder-white/20 focus:border-link focus-visible:outline-2 focus-visible:outline-link focus-visible:outline-offset-2 transition-colors"
+              className="w-full bg-panel border border-control rounded-xl px-4 py-3 text-sm font-bold text-fg placeholder-white/20 focus:border-link focus-visible:outline-2 focus-visible:outline-link focus-visible:outline-offset-2 transition-colors"
             />
           </div>
 
@@ -815,7 +815,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
               onChange={(e) => setCategory(e.target.value)}
               placeholder="Free text — e.g. comedy, tech, focus"
               maxLength={50}
-              className="w-full bg-panel border border-line rounded-xl px-4 py-3 text-sm font-bold text-fg placeholder-white/20 focus:border-link focus-visible:outline-2 focus-visible:outline-link focus-visible:outline-offset-2 transition-colors"
+              className="w-full bg-panel border border-control rounded-xl px-4 py-3 text-sm font-bold text-fg placeholder-white/20 focus:border-link focus-visible:outline-2 focus-visible:outline-link focus-visible:outline-offset-2 transition-colors"
             />
           </div>
 

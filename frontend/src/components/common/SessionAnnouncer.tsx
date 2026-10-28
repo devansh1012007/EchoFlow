@@ -121,7 +121,6 @@ export function SessionNotice({
         borderRadius: "var(--radius-sm)",
         background: message ? "var(--surface-container-high)" : "transparent",
         border: message ? "1px solid var(--border-strong)" : "none",
-        boxShadow: message ? "0 0 24px var(--accent-glow)" : "none",
         color: "var(--text-primary)",
         fontSize: 13,
         fontWeight: 600,

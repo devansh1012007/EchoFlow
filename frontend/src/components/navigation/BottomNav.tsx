@@ -46,9 +46,9 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, u
                 // to `focus-visible`, so it follows the keyboard and not the
                 // mouse.
                 //
-                // White rather than the brand orange: this tab's fill is
-                // `bg-accent` in both its active and inactive states, so an
-                // orange ring would be invisible on it. No `ring-offset-*`
+                // The ring is drawn outside the tab, in `link-strong` blue, so
+                // it lands on the page rather than on this tab's own `bg-accent`
+                // fill, where a same-hue ring would be invisible. No `ring-offset-*`
                 // colour is used because Tailwind 4.3.3 emits no such utility —
                 // only the width — so the offset colour would have been dead CSS.
                 className="flex flex-col items-center justify-center -mt-5 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-link-strong"

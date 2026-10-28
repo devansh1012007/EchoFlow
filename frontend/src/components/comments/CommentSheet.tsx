@@ -784,7 +784,7 @@ export const CommentSheet: React.FC<CommentSheetProps> = ({ clip, isOpen, onClos
                 onChange={(e) => setNewComment(e.target.value)}
                 placeholder="Drop an audio comment or reaction..."
                 aria-describedby={postError ? COMPOSER_ERROR_ID : undefined}
-                className="flex-1 bg-panel border border-line rounded-xl px-4 py-2.5 text-xs text-fg placeholder-white/30 focus:outline-none focus:border-link"
+                className="flex-1 bg-panel border border-control rounded-xl px-4 py-2.5 text-xs text-fg placeholder-white/30 focus:outline-none focus:border-link"
               />
               {/* `aria-disabled` rather than `disabled`: a natively disabled
                   button leaves the tab order and drops focus to <body>

@@ -72,21 +72,18 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
   return (
     <header className="sticky top-0 z-30 w-full bg-canvas border-b border-line px-4 md:px-8 py-3.5 transition-all">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
-        {/* Brand with Orange Pulse.
+        {/* Brand mark.
             A <button>, not a <div onClick>: this is the shortest route back to
             the feed from anywhere in the app, and as a div it had no role, no
             tabIndex and no key handler, so it was unreachable by keyboard
             (RECON-06 §10). `type="button"` keeps it from submitting anything.
 
-            The mark was CSS-drawn (an orange disc with a pulsing dot) and is now
-            the real brand image, served from public/logo.png — 512px with
+            The mark was CSS-drawn and is now the real brand image, served from public/logo.png — 512px with
             transparent corners, so no import and no bundler asset entry. `alt`
             is empty because the wordmark beside it already names the brand; a
-            non-empty alt would announce "EchoFlow" twice. The glow keeps the
-            original's 0.35 alpha but in the logo's own terracotta
-            (#EBA373) rather than the UI accent orange: the mark's plate is
-            #0B0C10, only a shade off this header's #0A0A0A, so it is the
-            terracotta that carries the separation. `rounded-[17%]` is the
+            non-empty alt would announce "EchoFlow" twice. The logo is a raster
+            image with its own terracotta colour, which the UI palette does not
+            recolour: replace public/logo.png to change it. `rounded-[17%]` is the
             mark's measured corner radius (0.1695 of its width), so the
             silhouette still reads as a squircle rather than a hard square.
 

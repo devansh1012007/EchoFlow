@@ -328,7 +328,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
         {/* Decorative bars. There is no AnalyserNode in the player store — the
             heights are a deterministic envelope — so this is ornament, and it
             is hidden from assistive tech rather than announced as a spectrum.
-            The orange "peak" bars are gone for the same reason: they implied a
+            The accent "peak" bars are gone for the same reason: they implied a
             measured signal that does not exist. The 60 fps redraw that drives
             them comes from the rAF loop in stores/player.tsx, not from here. */}
         <div
@@ -439,7 +439,7 @@ export const ReelCard: React.FC<ReelCardProps> = ({
               <RotateCcw className="w-4 h-4" aria-hidden="true" />
             </button>
 
-            {/* Huge Orange Play Button from Design Spec */}
+            {/* Primary play button */}
             <button
               type="button"
               onClick={(e) => {

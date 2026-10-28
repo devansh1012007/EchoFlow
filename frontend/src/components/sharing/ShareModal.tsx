@@ -349,7 +349,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ clip, isOpen, onClose })
               placeholder="e.g. roastmaster"
               aria-invalid={searchError !== null ? true : undefined}
               aria-describedby={searchError !== null ? USERNAME_ERROR_ID : undefined}
-              className="flex-1 bg-black border border-line rounded-xl px-3 py-2 text-xs tabular-nums text-fg placeholder-white/20 focus:outline-none focus:border-link"
+              className="flex-1 bg-black border border-control rounded-xl px-3 py-2 text-xs tabular-nums text-fg placeholder-white/20 focus:outline-none focus:border-link"
             />
             <button
               type="submit"

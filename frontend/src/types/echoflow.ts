@@ -189,3 +189,20 @@ export interface ComplianceInfo {
   privacy_version: string;
   physical_address: string;
 }
+
+/** A row of `GET /clips/` (`AudioUploadSerializer`): the signed-in user's own clips, in every state. */
+export interface OwnClip {
+  id: string;
+  title: string;
+  category?: string;
+  /** "processing" | "ready" | "failed" | "rejected" — free text on the server, so never assume the set is closed. */
+  status: string;
+}
+
+/** DRF `PageNumberPagination` (page size 20). */
+export interface OwnClipsPage {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: OwnClip[];
+}

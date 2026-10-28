@@ -19,6 +19,7 @@ import { useAuth } from "../stores/auth";
 import { usePlayer } from "../stores/player";
 import { FeedClip, OwnProfile, PublicProfile } from "../types/echoflow";
 import { AccountPanel } from "../components/profile/AccountPanel";
+import { UploadsPanel } from "../components/profile/UploadsPanel";
 import { ShareLinkDialog } from "../components/sharing/ShareLinkDialog";
 
 interface ProfilePageProps {
@@ -681,7 +682,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
       </div>
 
       {isOwnProfile && !isProfileLoading && (
-        <div className="px-5 pb-28">
+        <div className="px-5 pb-28 space-y-8">
+          <UploadsPanel />
           <AccountPanel onSignedOut={logout} />
         </div>
       )}
@@ -743,7 +745,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                   onChange={(e) => setEditUsername(e.target.value)}
                   aria-invalid={profileUpdateError ? true : undefined}
                   aria-describedby={profileUpdateError ? "profile-update-error" : undefined}
-                  className="w-full bg-black border border-line rounded-lg px-3 py-2 text-xs text-fg focus:outline-none focus:border-link"
+                  className="w-full bg-black border border-control rounded-lg px-3 py-2 text-xs text-fg focus:outline-none focus:border-link"
                   required
                 />
               </div>
@@ -848,7 +850,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                   value={clipTitle}
                   onChange={(e) => setClipTitle(e.target.value)}
                   maxLength={255}
-                  className="w-full bg-black border border-line rounded-lg px-3 py-2 text-xs text-fg focus:outline-none focus:border-link"
+                  className="w-full bg-black border border-control rounded-lg px-3 py-2 text-xs text-fg focus:outline-none focus:border-link"
                 />
               </div>
 
@@ -872,7 +874,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                   value={clipCategory}
                   onChange={(e) => setClipCategory(e.target.value)}
                   maxLength={50}
-                  className="w-full bg-black border border-line rounded-lg px-3 py-2 text-xs text-fg focus:outline-none focus:border-link"
+                  className="w-full bg-black border border-control rounded-lg px-3 py-2 text-xs text-fg focus:outline-none focus:border-link"
                 />
               </div>
 

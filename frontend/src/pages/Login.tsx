@@ -312,7 +312,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                 required
                 aria-invalid={isInvalid("username")}
                 aria-describedby={describedBy("username")}
-                className="w-full bg-black border border-line rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
+                className="w-full bg-black border border-control rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
               />
             </div>
 
@@ -336,7 +336,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   required
                   aria-invalid={isInvalid("email")}
                   aria-describedby={describedBy("email")}
-                  className="w-full bg-black border border-line rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
+                  className="w-full bg-black border border-control rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
                 />
               </div>
             )}
@@ -362,7 +362,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   required
                   aria-invalid={isInvalid("dob")}
                   aria-describedby={describedBy("dob")}
-                  className="w-full bg-black border border-line rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
+                  className="w-full bg-black border border-control rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
                 />
               </div>
             )}
@@ -390,7 +390,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   required
                   aria-invalid={isInvalid("parentEmail")}
                   aria-describedby={describedBy("parentEmail")}
-                  className="w-full bg-black border border-line rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
+                  className="w-full bg-black border border-control rounded-xl px-4 py-3 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
                 />
               </div>
             )}
@@ -416,7 +416,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                   aria-invalid={isInvalid("password")}
                   aria-describedby={describedBy("password")}
                   onKeyDown={(e) => e.key === "Enter" && handleSubmit(e)}
-                  className="w-full bg-black border border-line rounded-xl px-4 py-3 pr-14 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
+                  className="w-full bg-black border border-control rounded-xl px-4 py-3 pr-14 text-xs tabular-nums text-fg placeholder-white/20 focus:border-link transition-colors"
                 />
                 {/* RECON-06 #10 / #24: was 16x16, unnamed, and stateless.
                     `aria-pressed` carries the state so the name can stay

@@ -102,7 +102,6 @@ export function NetworkBanner() {
         letterSpacing: "0.04em",
         color: "var(--text-primary)",
         border: message ? "1px solid var(--border)" : "none",
-        boxShadow: message ? "0 0 24px var(--accent-glow)" : "none",
       }}
     >
       {message ? (
