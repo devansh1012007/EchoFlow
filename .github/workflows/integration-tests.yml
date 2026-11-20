@@ -1,0 +1,187 @@
+# Integration tests — the audit P1 work item's real end-to-end path.
+#
+# Starts the three backing services the suite's integration module needs
+# (Postgres with pgvector, Redis, MinIO), then runs:
+#   1. `pytest -m docker_required` — the integration path only
+#      (backend/app/tests/test_media_pipeline_integration.py drives
+#      upload -> approve-moderation -> process_audio_to_hls -> HLS objects
+#      in the bucket -> GET /feed/ -> POST /media/playback-token/ against
+#      live services with real ffmpeg);
+#   2. the full backend suite, with ECHOFLOW_INTEGRATION_TESTS=1 exported for
+#      the whole job — the integration module's skipif means its tests run in
+#      BOTH steps here and stay skipped in every other invocation (local dev,
+#      other CI) that does not set the env var.
+#
+# One job, no caching theatrics. Service choices mirror docker-compose.test.yml:
+#   * db  -> pgvector/pgvector:pg16 (extension built in; conftest.py installs
+#           it on template1 and creates echoflow_test itself)
+#   * redis -> redis:7 (one instance; settings.py splits broker/cache by
+#           database index, and the suite retargets the cache to its own
+#           index under ECHOFLOW_TESTING=1 — settings.py ~545-546)
+#   * minio -> minio/minio pinned to the same release compose.test.yml pins,
+#           plus a minio-setup step mirroring compose.test.yml's minio-init
+#           (alias set + mc mb --ignore-existing + anonymous download on hls/)
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'docker-compose.test.yml'
+      - '.github/workflows/integration-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+
+    env:
+      # ---- Database (names conftest.py:80-82 and settings.py:205 read) ----
+      DATABASE_URL: postgresql://echoflow:testpassword@127.0.0.1:5432/echoflow_test
+      TEST_DB_HOST: 127.0.0.1
+      TEST_DB_PORT: '5432'
+      TEST_DB_NAME: echoflow_test
+      # ---- Secrets (settings.py:34 / secrets.py; non-placeholder values) --
+      DJANGO_SECRET_KEY: ci-integration-secret-3f8b1c2d4e5f60718293a4b5c6d7e8f0
+      MEDIA_TOKEN_SECRET: ci-integration-hls-hmac-9a1b2c3d4e5f60718293a4b5c6d7e8f1
+      # ---- Test-run declarations (conftest.py:37,44 set them too) ---------
+      ECHOFLOW_TESTING: '1'
+      ECHOFLOW_ALLOW_PLACEHOLDER_SECRETS: '1'
+      # The gate that turns the integration module on. Exported for the whole
+      # job so BOTH pytest steps execute the integration path; without it the
+      # module skipifs itself out and the suite is unchanged.
+      ECHOFLOW_INTEGRATION_TESTS: '1'
+      # ---- Redis. REDIS_BROKER_URL/REDIS_CACHE_URL are the exact variables
+      # settings.py resolve_redis_url() supports (settings.py:456-457). The
+      # *_HOST form is deliberately NOT used: HOST without PASSWORD raises
+      # ImproperlyConfigured (settings.py:368-378), and runner Redis has no
+      # password. Broker db 0; the cache URL's index is replaced by the
+      # suite's TEST_REDIS_CACHE_DB default (13) under testing.
+      REDIS_BROKER_URL: redis://127.0.0.1:6379/0
+      REDIS_CACHE_URL: redis://127.0.0.1:6379/1
+      # ---- Object storage (settings.py STORAGES["default"], lines 748-782) -
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_STORAGE_BUCKET_NAME: test-bucket
+      AWS_S3_ENDPOINT_URL: http://127.0.0.1:9000
+      AWS_S3_REGION_NAME: auto
+      # Browser-facing storage origin for bucket-style HLS URLs
+      # (settings.py:800; compose.test.yml sets the same shape).
+      PUBLIC_MEDIA_ENDPOINT_URL: http://127.0.0.1:9000
+
+    services:
+      # pgvector/pgvector:pg16 — the extension ships in the image; conftest.py
+      # installs it on template1 so the recreated echoflow_test inherits it.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: echoflow
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: echoflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U echoflow -d echoflow_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 5s
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+          --health-start-period 5s
+
+      # Same release pin as docker-compose.test.yml's minio service; its
+      # healthcheck convention ("mc ready local") mirrored here too.
+      minio:
+        image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+        env:
+          MINIO_ROOT_USER: test
+          MINIO_ROOT_PASSWORD: test
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "mc ready local"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 5s
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Python 3.11 matches the Dockerfile base (python:3.11-slim-bookworm)
+      # and docker-image.yml's own setup-python step.
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The Dockerfile base stage installs exactly ffmpeg + libmagic1 +
+      # libsndfile1 for the media path (Dockerfile:66-75): python-magic needs
+      # libmagic (slim images ship it, runners may not), the pydub upload
+      # probe and the HLS task need ffmpeg, soundfile needs libsndfile.
+      - name: Install ffmpeg, libmagic, libsndfile
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libmagic1 libsndfile1
+
+      - name: Install Python dependencies
+        run: |
+          # Mirror the Dockerfile's index usage (py-deps-media stage): the
+          # CPU-only torch build comes from the pytorch extra index (its
+          # local version segment sorts above PyPI's plain 2.8.0), everything
+          # else from PyPI, all pinned by constraints.txt. --prefer-binary
+          # avoids sdist fallback for the cp311 scientific stack.
+          pip install --retries 10 --timeout 120 --prefer-binary \
+            -r requirements.txt \
+            -c constraints.txt \
+            --extra-index-url https://download.pytorch.org/whl/cpu
+
+      # Mirror of docker-compose.test.yml's minio-init service, same mc image
+      # tag and same three commands, run against the service on localhost.
+      - name: Create MinIO bucket (mirrors docker-compose.test.yml minio-init)
+        run: |
+          docker run --rm --network host --entrypoint sh \
+            minio/mc:RELEASE.2025-08-13T08-35-41Z -c "
+              mc alias set local http://127.0.0.1:9000 $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY &&
+              mc mb --ignore-existing local/$AWS_STORAGE_BUCKET_NAME &&
+              mc anonymous set download local/$AWS_STORAGE_BUCKET_NAME/hls
+            "
+
+      # Fast signal first: only the docker-marked integration module. The
+      # heavy deps are already installed, so this is a ~1 minute job.
+      - name: Run integration path (docker_required)
+        run: |
+          pytest backend/app/tests -m docker_required -ra --tb=short \
+            --junitxml=junit-integration.xml
+
+      # Then the whole suite, integration module included (the env var is
+      # already exported). This proves the integration path coexists with the
+      # suite and that nothing regressed underneath it.
+      - name: Run full backend suite
+        run: |
+          pytest backend/app/tests -ra --tb=short \
+            --junitxml=junit-full-suite.xml
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            junit-integration.xml
+            junit-full-suite.xml
+          if-no-files-found: ignore
