@@ -226,7 +226,8 @@ is idempotent). See "Split Redis" section below.
 **Status:** ✅ Implemented. Two services in `docker-compose.yml`:
 - `redis_broker` (image `redis:7-alpine`, `noeviction`, 512MB) — Celery
   broker queues and result backend. Set via `REDIS_BROKER_URL`.
-- `redis_cache` (image `redis:7-alpine`, `allkeys-lru`, 1GB) — Django
+- `redis_cache` (image `redis:7-alpine`, `allkeys-lru`, 1.4GB = ~70% of its
+  2G container limit) — Django
   cache, `user_feed:*` lists, `feed_refill_lock:*` keys, telemetry stream
   + legacy list, DRF throttle counters. Set via `REDIS_CACHE_URL`.
 
@@ -234,7 +235,7 @@ is idempotent). See "Split Redis" section below.
 ┌─────────────────────────────────────────────────────────────┐
 │                     As Deployed (Phase 1.0)                  │
 │                                                              │
-│  redis_broker (512MB, noeviction)   redis_cache (1GB, LRU)  │
+│  redis_broker (512MB, noeviction)  redis_cache (1.4GB, LRU)  │
 │  ├── celery                          ├── Django cache        │
 │  ├── fast_feed                       ├── user_feed:*         │
 │  ├── heavy_media                     ├── feed_refill_lock:*  │

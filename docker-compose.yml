@@ -48,6 +48,11 @@ services:
   # queue) is safe to evict because refill_user_feed and flush_telemetry are
   # idempotent. Single Redis on localhost remains the non-Docker fallback
   # (see REDIS_URL in settings.py).
+  # Headroom rule: maxmemory must stay <= ~70% of the container memory limit.
+  # maxmemory counts only the dataset; the Redis process itself, per-connection
+  # buffers, allocator fragmentation and AOF rewrite (appendonly yes copies the
+  # dataset during BGREWRITEAOF) all live above the maxmemory line. 512mb is
+  # 50% of this service's 1G limit. Keep noeviction: queued tasks must not evict.
   redis_broker:
     image: redis:7-alpine
     container_name: echoflow_redis_broker
@@ -81,14 +86,15 @@ services:
     image: redis:7-alpine
     container_name: echoflow_redis_cache
     restart: unless-stopped
-    # DECISION: 3GB instead of 1GB. P2.2 pre-computed candidate pools
-    # (clip:candidates:exploit + user:{id}:candidates:explore) need
-    # ~1.2GB at 10K active users. The remaining ~1.8GB holds the
-    # existing per-user feed lists (user_feed:*), Django cache, and
-    # telemetry stream. allkeys-lru eviction is safe because the
-    # pools can be rebuilt by Beat; if memory pressure forces
-    # eviction, the refill_user_feed SQL fallback kicks in.
-    command: redis-server --appendonly yes --maxmemory 3gb --maxmemory-policy allkeys-lru
+    # DECISION: maxmemory 1400mb = 70% of the 2G container limit. maxmemory
+    # counts only the dataset; process overhead, connection buffers and AOF
+    # rewrite (appendonly yes) draw on the remainder — a ceiling at or above
+    # the limit OOM-kills the container before Redis evicts. The P2.2 pools
+    # (clip:candidates:exploit + user:{id}:candidates:explore, ~1.2GB at 10K
+    # users) + feed lists/cache/telemetry now exceed that, so allkeys-lru
+    # evicts sooner — safe (Beat rebuilds pools, refill_user_feed SQL fallback).
+    # To scale up, raise BOTH the limit (4G) and maxmemory (2800mb) together.
+    command: redis-server --appendonly yes --maxmemory 1400mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_cache_data:/data
     healthcheck:

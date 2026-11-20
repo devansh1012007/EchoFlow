@@ -37,14 +37,24 @@ services:
       retries: 10
       start_period: 5s
 
-  # Test Redis broker — noeviction, 512MB.
+  # Test Redis broker — noeviction. maxmemory 350mb is ~70% of the 512M
+  # container limit (declared below so the invariant is checkable): maxmemory
+  # counts only the dataset, while process overhead, connection buffers and
+  # AOF rewrite (appendonly yes) draw on the remainder. Queued tasks must not
+  # be evicted, so noeviction stays.
   redis_broker:
     image: redis:7-alpine
     container_name: echoflow_test_redis_broker
     restart: "no"
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
+    command: redis-server --appendonly yes --maxmemory 350mb --maxmemory-policy noeviction
     volumes:
       - test_redis_broker_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 64M
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -52,14 +62,24 @@ services:
       retries: 10
       start_period: 5s
 
-  # Test Redis cache — allkeys-lru, 1GB.
+  # Test Redis cache — allkeys-lru. maxmemory 700mb is 70% of the 1G container
+  # limit (declared below so the invariant is checkable): maxmemory counts only
+  # the dataset, while process overhead, connection buffers and AOF rewrite
+  # (appendonly yes) draw on the remainder. Eviction is safe; tests run Celery
+  # eagerly and use a small cache.
   redis_cache:
     image: redis:7-alpine
     container_name: echoflow_test_redis_cache
     restart: "no"
-    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 700mb --maxmemory-policy allkeys-lru
     volumes:
       - test_redis_cache_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 128M
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

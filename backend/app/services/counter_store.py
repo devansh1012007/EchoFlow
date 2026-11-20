@@ -66,7 +66,8 @@ move introduces is paid back by the TTL instead: it self-expires
 bounded by one key per (user, clip) pair that was active in the last 24h —
 the same cardinality as the completion keys themselves, minus every
 pair that has gone quiet. `redis_cache` runs the LRU eviction policy,
-so even a pathological case is bounded by the 1GB maxmemory.
+so even a pathological case is bounded by its maxmemory ceiling
+(<= ~70% of the cache container's memory limit; see docker-compose.yml).
 
 Public API:
   * `increment(clip_id, counter_type, delta=1) -> int`

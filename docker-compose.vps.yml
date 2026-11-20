@@ -58,11 +58,17 @@ services:
         soft: 65536
         hard: 65536
 
+  # Headroom rule: maxmemory <= ~70% of the container memory limit — maxmemory
+  # counts only the dataset, while process overhead, connection buffers and AOF
+  # rewrite (appendonly yes) draw on the remainder. 175mb is ~68% of the 256M
+  # limit. noeviction stays: queued tasks must not be evicted — with noeviction
+  # the pressure signal is OOM errors on write, so scale limit AND maxmemory
+  # together if this gets tight.
   redis_broker:
     image: redis:7-alpine
     container_name: echoflow_redis_broker
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction --requirepass ${REDIS_BROKER_PASSWORD}
+    command: redis-server --appendonly yes --maxmemory 175mb --maxmemory-policy noeviction --requirepass ${REDIS_BROKER_PASSWORD}
     volumes:
       - redis_broker_data:/data
     networks:
@@ -88,11 +94,17 @@ services:
         soft: 65536
         hard: 65536
 
+  # Headroom rule: maxmemory <= ~70% of the container memory limit — maxmemory
+  # counts only the dataset, while process overhead, connection buffers and AOF
+  # rewrite (appendonly yes) draw on the remainder. 256mb is ~67% of the 384M
+  # limit — far below the base file's 1400mb cache budget, so allkeys-lru evicts
+  # sooner (safe: refill_user_feed is idempotent). Scale limit AND maxmemory
+  # together (512M / 350mb) if the VPS host allows.
   redis_cache:
     image: redis:7-alpine
     container_name: echoflow_redis_cache
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru --requirepass ${REDIS_CACHE_PASSWORD}
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_CACHE_PASSWORD}
     volumes:
       - redis_cache_data:/data
     networks:

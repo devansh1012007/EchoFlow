@@ -64,11 +64,15 @@ services:
         hard: 65536
 
   # ---- Redis Broker (local port 16379) ----
+  # Headroom rule: maxmemory <= ~70% of the container memory limit — maxmemory
+  # counts only the dataset, while process overhead, connection buffers and AOF
+  # rewrite (appendonly yes) draw on the remainder. 350mb is ~68% of the 512M
+  # limit. noeviction stays: queued tasks must not be evicted.
   redis_broker_local:
     image: redis:7-alpine
     container_name: echoflow_redis_broker_local
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction --requirepass ${REDIS_BROKER_PASSWORD}
+    command: redis-server --appendonly yes --maxmemory 350mb --maxmemory-policy noeviction --requirepass ${REDIS_BROKER_PASSWORD}
     volumes:
       - redis_broker_data_local:/data
     ports:
@@ -86,11 +90,15 @@ services:
           memory: 512M
 
   # ---- Redis Cache (local port 16380) ----
+  # Headroom rule: maxmemory <= ~70% of the container memory limit — maxmemory
+  # counts only the dataset, while process overhead, connection buffers and AOF
+  # rewrite (appendonly yes) draw on the remainder. 700mb is ~68% of the 1G
+  # limit. allkeys-lru stays: eviction is safe (refill_user_feed is idempotent).
   redis_cache_local:
     image: redis:7-alpine
     container_name: echoflow_redis_cache_local
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru --requirepass ${REDIS_CACHE_PASSWORD}
+    command: redis-server --appendonly yes --maxmemory 700mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_CACHE_PASSWORD}
     volumes:
       - redis_cache_data_local:/data
     ports:
@@ -157,7 +165,7 @@ services:
 
   # ---- MinIO (local ports 19000/19001) ----
   minio_local:
-    image: quay.io/minio/minio:latest
+    image: elestio/minio:latest
     container_name: echoflow_minio_local
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -197,19 +205,10 @@ services:
       retries: 5
       start_period: 5s
 
-  minio_init_local:
-    image: quay.io/minio/mc:latest
-    depends_on:
-      minio_local:
-        condition: service_healthy
-    networks:
-      - default
-    entrypoint: >
-      sh -c "
-        mc alias set local http://minio-local:9000 ${AWS_ACCESS_KEY_ID} ${AWS_SECRET_ACCESS_KEY} &&
-        mc mb --ignore-existing local/${AWS_STORAGE_BUCKET_NAME:-echoflow-media} &&
-        echo 'minio_init_local: bucket ${AWS_STORAGE_BUCKET_NAME:-echoflow-media} ready (private, no anonymous policy)'
-      "
+  # NOTE: the old `minio_init_local` one-shot (quay.io/minio/mc:latest creating
+  # the bucket via `mc mb`) was removed — quay.io requires auth for that repo
+  # and Docker Hub no longer publishes minio/mc. The bucket is created after
+  # the stack is up, via the web container's boto3.
 
   # ---- Django Web (local port 18000) ----
   web_local:

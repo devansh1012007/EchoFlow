@@ -189,7 +189,8 @@ healthcheck:
 | Service | CPU Limit | Memory Limit | PIDs | Key Config |
 |---------|-----------|--------------|------|------------|
 | `db` | 2 | 2G | 500 | pgvector, conn_max_age=600 |
-| `redis` | 1 | 1G | 300 | maxmemory 512mb, allkeys-lru |
+| `redis_broker` | 1 | 1G | 300 | maxmemory 512mb (50% of limit), noeviction |
+| `redis_cache` | 1 | 2G | 300 | maxmemory 1400mb (70% of limit), allkeys-lru |
 | `minio` | (default) | (default) | — | CORS for HLS |
 | `web` | 2 | 1G | 500 | 4 workers × 4 threads |
 | `celery` | 1 | 1G | 300 | default queue |
