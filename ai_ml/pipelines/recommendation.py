@@ -7,11 +7,12 @@ writes, no side effects beyond DB reads. The Celery task bodies in
 helpers and handle the queue/IO concerns.
 
 Functions:
-    calculate_time_decayed_vectors(user, limit=50)
+    calculate_time_decayed_vectors(user, limit=50, *, now=None, created_before=None)
         Blended short-term + long-term user preference vectors.
         Moved verbatim from backend.app.tasks.calculate_time_decayed_vectors.
 
-    build_feed_candidates(user_id, count=50, *, pool_first=True)
+    build_feed_candidates(user_id, count=50, *, pool_first=True,
+                          now=None, created_before=None)
         Returns an ordered list of clip UUIDs for a user's feed.
         Pool-first (Redis ZSET) when pool_first=True; falls back to
         SQL composite ranking or cold-start ordering on pool miss.
@@ -116,7 +117,13 @@ def _composite_score(vector_similarity, avg_completion_rate, engagement_velocity
 # calculate_time_decayed_vectors (moved verbatim from backend.app.tasks)
 # ---------------------------------------------------------------------------
 
-def calculate_time_decayed_vectors(user, limit: int = 50):
+def calculate_time_decayed_vectors(
+    user,
+    limit: int = 50,
+    *,
+    now=None,
+    created_before=None,
+):
     """Compute the user's blended semantic + acoustic preference vectors.
 
     The formula blends three signals per recent interaction:
@@ -131,20 +138,37 @@ def calculate_time_decayed_vectors(user, limit: int = 50):
     (user.long_term_semantic, user.long_term_acoustic) on cold start.
 
     Moved from backend.app.tasks.calculate_time_decayed_vectors; logic
-    is byte-identical (the audit verified the formula). Imports of
-    backend.app.models happen lazily at call time to avoid circular
-    imports during Django app loading.
+    is byte-identical when the optional parameters are left at their
+    defaults. Imports of backend.app.models happen lazily at call time
+    to avoid circular imports during Django app loading.
+
+    Temporal-simulation parameters (offline evaluation; both default
+    to the production behavior, so existing callers are unaffected):
+      now            — the "current" instant for the time-decay
+                       weights (defaults to timezone.now()).
+      created_before — if given, only interactions created at or
+                       before this instant are blended. An offline
+                       eval serving a user AS OF a past moment passes
+                       the holdout boundary here, so held-out (test)
+                       interactions can never leak into the preference
+                       vector that then ranks them.
     """
     from backend.app.models import UserInteraction
 
-    recent_interactions = UserInteraction.objects.filter(
-        user=user
-    ).select_related('clip').order_by('-created_at')[:limit]
+    recent_interactions = UserInteraction.objects.filter(user=user)
+    if created_before is not None:
+        recent_interactions = recent_interactions.filter(
+            created_at__lte=created_before
+        )
+    recent_interactions = (
+        recent_interactions.select_related('clip')
+        .order_by('-created_at')[:limit]
+    )
 
     if recent_interactions is None or len(recent_interactions) == 0:
         return user.long_term_semantic, user.long_term_acoustic
 
-    now = timezone.now()
+    now = now if now is not None else timezone.now()
     sem_vectors, ac_vectors, weights = [], [], []
 
     for interaction in recent_interactions:
@@ -210,7 +234,14 @@ def calculate_time_decayed_vectors(user, limit: int = 50):
 # build_feed_candidates — pool-first / SQL-fallback / cold-start ranking
 # ---------------------------------------------------------------------------
 
-def build_feed_candidates(user_id, count: int = 50, *, pool_first: bool = True) -> list[str]:
+def build_feed_candidates(
+    user_id,
+    count: int = 50,
+    *,
+    pool_first: bool = True,
+    now=None,
+    created_before=None,
+) -> list[str]:
     """Return up to `count` clip UUIDs for a user's feed, deduped.
 
     Order of preference:
@@ -226,15 +257,32 @@ def build_feed_candidates(user_id, count: int = 50, *, pool_first: bool = True) 
     The 80/20 exploit/explore split lives in the caller
     (feed_tasks.refill_user_feed) by reading both pools from Redis;
     this builder handles the SQL fallback's mix.
+
+    Temporal-simulation parameters (offline evaluation; both default
+    to the production behavior, so existing callers are unaffected):
+      now            — the "current" instant for the 30-day seen
+                       window and the vector decay (defaults to
+                       timezone.now()).
+      created_before — if given, the user's interaction view (both
+                       the seen-exclusion and the preference vectors
+                       fed to the SQL composite path) stops at this
+                       instant. An offline eval serving a user AS OF
+                       a past moment passes the holdout boundary so
+                       held-out interactions cannot leak into the
+                       ranking inputs.
     """
     from backend.app.models import AudioClip, UserInteraction, User
 
     user = User.objects.get(id=user_id)
-    seen_ids = list(
-        UserInteraction.objects
-        .filter(user=user, created_at__gte=timezone.now() - timedelta(days=30))
-        .values_list('clip_id', flat=True)
+    seen_window_start = (
+        (now if now is not None else timezone.now()) - timedelta(days=30)
     )
+    seen_queryset = UserInteraction.objects.filter(
+        user=user, created_at__gte=seen_window_start
+    )
+    if created_before is not None:
+        seen_queryset = seen_queryset.filter(created_at__lte=created_before)
+    seen_ids = list(seen_queryset.values_list('clip_id', flat=True))
 
     clip_ids_to_push: list[str] = []
 
@@ -261,7 +309,9 @@ def build_feed_candidates(user_id, count: int = 50, *, pool_first: bool = True) 
 
     # SQL composite fallback (also the path used when pool_first=False
     # or the pool returned None meaning "neither pool is populated").
-    sem_query, ac_query = calculate_time_decayed_vectors(user)
+    sem_query, ac_query = calculate_time_decayed_vectors(
+        user, now=now, created_before=created_before
+    )
     if sem_query and ac_query:
         base_queryset = AudioClip.objects.filter(status='ready').exclude(id__in=seen_ids)
         composite_query = base_queryset.annotate(
