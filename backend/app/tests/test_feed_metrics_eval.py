@@ -39,6 +39,9 @@ from io import StringIO
 import pytest
 
 from ai_ml.eval import feed_metrics as fm
+# django's timezone (aware utcnow) — the module-level stdlib `timezone` import
+# above is the tzinfo class, a different thing; both are needed in this file.
+from django.utils import timezone as dj_timezone
 
 T0 = datetime(2026, 1, 10, 12, 0, tzinfo=timezone.utc)
 
@@ -472,7 +475,7 @@ def _seed_command_fixtures():
     """
     from backend.app.models import AudioClip, UserInteraction, User
 
-    now = timezone.now()
+    now = dj_timezone.now()
     creator = User.objects.create_user(
         username='eval-creator', email='eval-creator@example.com',
         password='pw-12345',
@@ -590,7 +593,7 @@ class TestEvalFeedCommand:
         from backend.app.models import AudioClip, UserInteraction, User
         from django.utils import timezone
 
-        now = timezone.now()
+        now = dj_timezone.now()
         creator = User.objects.create_user(
             username='leak-creator', email='leak-creator@example.com',
             password='pw-12345',
