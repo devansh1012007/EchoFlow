@@ -1,10 +1,12 @@
 import os
+import posixpath
 import shutil
 import subprocess
 import tempfile
 import re
 import threading
 import uuid
+from urllib.parse import unquote
 import numpy as np
 import logging
 import librosa
@@ -227,7 +229,14 @@ RETRYABLE_ERRORS = (
 # when transient errors occur (DB connection timeout, FFmpeg crash, network
 # failure). Tradeoff: Slightly more overhead per task (retry tracking) vs.
 # guaranteed resilience.
-@shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600, retry_jitter=False)
+# P2 fix: retry_jitter=True. With jitter disabled, every worker that hits the
+# SAME unhealthy shared dependency (S3, Postgres) schedules its retry for the
+# SAME instant — the thundering herd the exponential backoff was meant to
+# prevent, reassembled. retry_backoff=True alone produces a fixed
+# backoff-then-retry lattice across workers; jitter desynchronises it. Retry
+# timing is not a correctness input anywhere in this task, so the only
+# observable effect is a calmer dependency curve under partial outage.
+@shared_task(bind=True, max_retries=3, default_retry_delay=60, autoretry_for=RETRYABLE_ERRORS, retry_backoff=True, retry_backoff_max=600, retry_jitter=True)
 def process_audio_to_hls(self, clip_id):
 
     # DECISION: Time the entire task with the hls_processing histogram.
@@ -237,6 +246,235 @@ def process_audio_to_hls(self, clip_id):
     from . import metrics
     with metrics.time_hls_processing() as timer:
         return _process_audio_to_hls_impl(self, clip_id, timer)
+
+
+# ---------------------------------------------------------------------------
+# HLS publication safety (P1 audit fix): versioned staging prefix + verify +
+# atomic publish.
+#
+# OLD BEHAVIOUR (the bug): every attempt uploaded into the FIXED prefix
+# ``hls/<clip_id>/`` and ignored the name save() returned. With
+# STORAGES["default"]["OPTIONS"]["file_overwrite"] = False
+# (EchoFlow/settings.py), django-storages returns a DIFFERENT key with a
+# random suffix when an object already exists at the requested key — and
+# Django's FileSystemStorage does the same via get_available_name(). So a
+# retry after a mid-upload failure (OSError is in RETRYABLE_ERRORS, so the
+# task autoretries) wrote some objects under renamed keys while the freshly
+# generated manifest still referenced the original deterministic names — and
+# the task then marked the clip 'ready' against a manifest whose references
+# were not available at the expected keys. Broken playback, published
+# atomically, once per unlucky retry.
+#
+# NEW POLICY:
+#   1. Each attempt uploads into ``hls/<clip_id>/<build_id>/`` with
+#      build_id = uuid4().hex[:12]. Every key in an attempt is unique, so
+#      save() can never collide and can never rename — even across infinite
+#      retries. The save() return value is still checked, and a mismatch
+#      fails the attempt loudly (OSError -> autoretry).
+#   2. Playlists are re-read FROM STORAGE and every object they reference
+#      is checked with default_storage.exists() BEFORE the pointer moves
+#      (verify_hls_build_objects). Any miss -> OSError -> autoretry; the
+#      pointer is untouched, so a previous good build stays live.
+#   3. Publish is ONE narrow save(update_fields=['hls_playlist_url',
+#      'status']) reached only after verification passed.
+#   4. The superseded build is deleted LATER (purge_superseded_hls_build,
+#      countdown 900s > MEDIA_TOKEN_TTL_SECONDS=600) so clients that cached
+#      the old manifest finish playback. Failed attempts clean up their OWN
+#      build prefix best-effort — nothing else ever would:
+#      cleanup_orphan_hls only scans prefixes of DELETED clips, and the
+#      purge task only fires for builds the pointer has moved AWAY from.
+# ---------------------------------------------------------------------------
+_HLS_VERSIONED_URL_RE = re.compile(r'^hls/(?P<clip_id>[^/]+)/(?P<build_id>[^/]+)/master\.m3u8$')
+_HLS_LEGACY_URL_RE = re.compile(r'^hls/(?P<clip_id>[^/]+)/master\.m3u8$')
+# ffmpeg emits ``#EXT-X-MAP:URI="init.mp4"`` for fMP4 output only. The encode
+# below pins mpegts today, but the parser must not depend on the segment
+# format: a future codec switch would otherwise silently bypass verification
+# of the init segment the manifest references.
+_EXTX_MAP_URI_RE = re.compile(r'#EXT-X-MAP:[^\r\n]*?URI="([^"]+)"')
+
+#: Grace window before a superseded build is deleted. One MEDIA_TOKEN_TTL
+#: (600s) barely covers a token issued just before the pointer moved plus a
+#: short listen; 900s > TTL with margin, while still short enough that a
+#: retry storm cannot pile up many stale builds per clip.
+_PUBLISH_PURGE_COUNTDOWN_SECONDS = 900
+
+
+def parse_hls_pointer(url):
+    """Classify an ``hls_playlist_url`` value without guessing.
+
+    Returns ``(shape, clip_id, build_id)`` where shape is 'versioned'
+    (``hls/<clip_id>/<build_id>/master.m3u8``), 'legacy'
+    (``hls/<clip_id>/master.m3u8``) or None for anything else (null/blank,
+    a bare filename, an unexpected layout). ``build_id`` is None for the
+    legacy shape. Callers must treat None/legacy as "do not delete
+    anything" — both purge_superseded_hls_build and the publish step refuse
+    to act on a pointer they cannot positively identify as a versioned
+    build of this clip.
+    """
+    url = (url or '').strip()
+    m = _HLS_VERSIONED_URL_RE.match(url)
+    if m:
+        return 'versioned', m.group('clip_id'), m.group('build_id')
+    m = _HLS_LEGACY_URL_RE.match(url)
+    if m:
+        return 'legacy', m.group('clip_id'), None
+    return None, None, None
+
+
+def _read_storage_playlist(key):
+    """Read a playlist FROM OBJECT STORAGE, not from the local scratch dir.
+
+    Verification must see exactly what a client would fetch. The local
+    ffmpeg output was already proven by subprocess.run(check=True); what is
+    NOT yet proven is that every byte made it through default_storage —
+    which is the only thing the published manifest can promise.
+    """
+    with default_storage.open(key, 'rb') as fh:
+        return fh.read().decode('utf-8', errors='replace')
+
+
+def _playlist_uris(text):
+    """Every URI one HLS playlist body references.
+
+    Non-comment lines ARE the URIs (variant playlists in a master, segments
+    in a variant). ``#EXT-X-MAP:URI="..."`` attributes name the init
+    segment on fMP4 output. Plain comment lines are skipped.
+    """
+    uris = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith('#'):
+            m = _EXTX_MAP_URI_RE.search(line)
+            if m:
+                uris.append(m.group(1))
+            continue
+        uris.append(line)
+    return uris
+
+
+def _resolve_playlist_uri(base_dir, uri):
+    """Resolve a playlist URI against the playlist's own directory.
+
+    ffmpeg writes flat relative names, but resolving properly costs nothing
+    and keeps the check correct if a future encode layout nests variants in
+    subdirectories. Object keys are always '/'-separated regardless of the
+    worker's OS, so posixpath (not os.path) is the right algebra here, and
+    URIs are percent-encoded per the HLS spec, so unquote before mapping
+    onto a key.
+    """
+    uri = unquote(uri)
+    if uri.startswith('/'):
+        # Absolute reference — not emitted by ffmpeg. Interpret as a
+        # bucket-rooted key rather than silently passing verification.
+        return uri.lstrip('/')
+    return posixpath.normpath(posixpath.join(base_dir, uri))
+
+
+def verify_hls_build_objects(master_key):
+    """Verify every object the uploaded manifests reference actually exists.
+
+    Walks master.m3u8 -> variant playlists -> segment/init URIs, resolving
+    each URI relative to the playlist that names it, and requires
+    default_storage.exists() for every referenced object. Returns the list
+    of keys checked (observability/tests).
+
+    Raises OSError naming the missing keys on ANY miss. OSError is in
+    RETRYABLE_ERRORS, so a transient gap autoretries the whole attempt
+    (fresh build id) instead of publishing a manifest whose references 404.
+    Runs BEFORE the pointer moves, so a failing verification can never
+    clobber a good build.
+    """
+    master_text = _read_storage_playlist(master_key)
+    master_dir = posixpath.dirname(master_key)
+    missing = []
+    checked = []
+
+    variant_keys = [
+        _resolve_playlist_uri(master_dir, uri)
+        for uri in _playlist_uris(master_text)
+    ]
+    if not variant_keys:
+        # A master that references nothing is not a playable manifest.
+        # Refuse it loudly rather than publish an empty playlist.
+        logger.error(
+            "HLS verification failed for %s: master playlist references no variant playlists",
+            master_key,
+        )
+        raise OSError(
+            f"HLS build verification failed for {master_key}: "
+            "master playlist references no variant playlists"
+        )
+
+    for variant_key in variant_keys:
+        if not default_storage.exists(variant_key):
+            missing.append(variant_key)
+            continue
+        try:
+            variant_text = _read_storage_playlist(variant_key)
+        except OSError as exc:
+            logger.warning("HLS verification: variant %s unreadable (%s)", variant_key, exc)
+            missing.append(variant_key)
+            continue
+        variant_dir = posixpath.dirname(variant_key)
+        for uri in _playlist_uris(variant_text):
+            object_key = _resolve_playlist_uri(variant_dir, uri)
+            checked.append(object_key)
+            if not default_storage.exists(object_key):
+                missing.append(object_key)
+
+    if missing:
+        unique = sorted(set(missing))
+        logger.error(
+            "HLS verification failed for %s: %d referenced object(s) missing from storage: %s",
+            master_key, len(unique), ", ".join(unique),
+        )
+        raise OSError(
+            f"HLS build verification failed for {master_key}; missing objects: {unique!r}"
+        )
+    return [master_key] + variant_keys + checked
+
+
+def _schedule_superseded_hls_purge(clip_id, previous_url):
+    """Schedule deletion of the build the pointer has just moved AWAY from.
+
+    Called AFTER the pointer save: a crash between the two leaks an old
+    build (cosmetic), while a crash in the other order would delete the
+    still-live build the old clients are playing (outage). Legacy in-place
+    builds (``hls/<clip_id>/master.m3u8``) are left alone by design:
+    deleting one would break clients mid-migration, and clip-level cleanup
+    (the post_delete signal + cleanup_orphan_hls) already owns that layout.
+    Scheduling must never fail the publish it serves.
+    """
+    shape, _prev_clip_id, prev_build_id = parse_hls_pointer(previous_url)
+    if shape == 'versioned':
+        logger.info(
+            "HLS publish for clip %s: superseding build %s; purge scheduled in %ss",
+            clip_id, prev_build_id, _PUBLISH_PURGE_COUNTDOWN_SECONDS,
+        )
+        try:
+            purge_superseded_hls_build.apply_async(
+                args=[str(clip_id), prev_build_id],
+                countdown=_PUBLISH_PURGE_COUNTDOWN_SECONDS,
+            )
+        except Exception as exc:
+            # A leaked superseded build is cosmetic; a failed publish is not.
+            logger.warning(
+                "could not schedule purge of superseded build %s for clip %s: %s",
+                prev_build_id, clip_id, exc,
+            )
+    elif shape == 'legacy':
+        logger.info(
+            "HLS publish for clip %s: previous pointer is a legacy in-place "
+            "build; leaving it alone (clip-level cleanup owns that layout)",
+            clip_id,
+        )
+    else:
+        logger.info(
+            "HLS publish for clip %s: no previous versioned pointer to supersede (%r)",
+            clip_id, previous_url,
+        )
 
 
 def _process_audio_to_hls_impl(self, clip_id, timer):
@@ -427,6 +665,20 @@ def _process_audio_to_hls_impl(self, clip_id, timer):
             clip.save()
             return
 
+        # P1-fix companion: the OLD code relied on the final clip.save() (the
+        # publish, formerly a full save) to flush the transcript, semantic
+        # vector, tags and moderation evidence set above. The publish save is
+        # now deliberately narrow (update_fields=['hls_playlist_url',
+        # 'status']) so a failed attempt can never touch the pointer — which
+        # would otherwise silently strand all of that evidence as memory-only.
+        # Persist it here, right where it became final. The moderation-reject
+        # paths above save their own copies and return, so this only runs on
+        # the approved path.
+        clip.save(update_fields=[
+            'transcript_text', 'semantic_vector', 'tags',
+            'moderation_approved', 'moderation_reason', 'moderated_at',
+        ])
+
         # Encode HLS from the same normalized WAV, not the raw upload — one
         # authoritative decode instead of ffmpeg re-decoding the original
         # container a second time. Written to LOCAL scratch space, then
@@ -460,7 +712,15 @@ def _process_audio_to_hls_impl(self, clip_id, timer):
 
         # Upload to object storage. OSError / ConnectionError are
         # transient (S3 blip, network blip) — re-raise.
-        storage_prefix = f"hls/{clip.id}"
+        #
+        # P1 fix: upload into a per-attempt VERSIONED prefix. The old fixed
+        # prefix hls/<clip.id>/ made save() collide on retry, and with
+        # file_overwrite=False (settings.py STORAGES) a collision makes the
+        # backend RENAME the object — the manifest would then reference keys
+        # that were never written. A unique build dir makes renaming
+        # unreachable; see the policy block above verify_hls_build_objects.
+        build_id = uuid.uuid4().hex[:12]
+        storage_prefix = f"hls/{clip.id}/{build_id}"
         try:
             for root, _dirs, files in os.walk(local_hls_dir):
                 for fname in files:
@@ -468,9 +728,35 @@ def _process_audio_to_hls_impl(self, clip_id, timer):
                     rel_path = os.path.relpath(local_path, local_hls_dir)
                     storage_key = f"{storage_prefix}/{rel_path}".replace(os.sep, '/')
                     with open(local_path, 'rb') as fh:
-                        default_storage.save(storage_key, fh)
+                        written_key = default_storage.save(storage_key, fh)
+                    # With a unique per-attempt prefix a collision is
+                    # impossible, so a file_overwrite=False backend can never
+                    # reach its rename path. If the returned name ever
+                    # differs, the backend has changed under us and the
+                    # manifest would reference keys that were never written:
+                    # fail the attempt loudly (OSError autoretries) rather
+                    # than publish a broken manifest.
+                    if written_key != storage_key:
+                        logger.error(
+                            "default_storage renamed %s -> %s for clip %s; failing attempt (build %s)",
+                            storage_key, written_key, clip_id, build_id,
+                        )
+                        raise OSError(
+                            f"default_storage.save renamed {storage_key!r} to "
+                            f"{written_key!r}; refusing to publish"
+                        )
+            # P1 fix: verify the build FROM STORAGE before the pointer moves.
+            # Raises OSError naming any missing referenced object.
+            verify_hls_build_objects(f"{storage_prefix}/master.m3u8")
         except (OSError, ConnectionError):
-            logger.exception("S3 upload transient error for clip %s; re-raising for retry", clip_id)
+            logger.exception("S3 upload/verify transient error for clip %s; re-raising for retry", clip_id)
+            # Best-effort cleanup of THIS attempt's own prefix. The pointer
+            # has never named it, so deletion cannot break playback, and
+            # nothing else would ever reclaim it: cleanup_orphan_hls only
+            # scans prefixes of deleted clips and the purge task only fires
+            # for builds the pointer has moved away from.
+            from .signals import _delete_s3_prefix
+            _delete_s3_prefix(storage_prefix)
             raise
 
         # DECISION: store the relative object KEY, not a full URL. A
@@ -479,9 +765,23 @@ def _process_audio_to_hls_impl(self, clip_id, timer):
         # hour after processing regardless of whether the clip is still
         # valid. The serializer generates a fresh signed URL from this
         # key on every read instead (see FeedClipSerializer).
+        #
+        # ATOMIC PUBLISH (P1 fix): pointer + status in ONE narrow save,
+        # reached only after verification passed. A failed attempt never
+        # executes this, so a previously good build keeps serving playback
+        # and the retry gets a fresh build dir. Narrow update_fields on
+        # purpose — the transcript/vector/tags/moderation evidence was
+        # persisted by its own save above and must not depend on this one.
+        previous_url = clip.hls_playlist_url
         clip.hls_playlist_url = f"{storage_prefix}/master.m3u8"
         clip.status = 'ready'
-        clip.save()
+        clip.save(update_fields=['hls_playlist_url', 'status'])
+
+        # Superseded-build cleanup, AFTER the pointer save (see
+        # _schedule_superseded_hls_purge for the crash-ordering argument).
+        # The 900s grace window exceeds one token TTL so clients that cached
+        # the old manifest finish playback before its objects disappear.
+        _schedule_superseded_hls_purge(clip.id, previous_url)
     finally:
         # Always clean up both local scratch areas, success or failure.
         try:
@@ -1281,11 +1581,19 @@ def cleanup_orphan_hls(max_keys: int = 1000) -> dict:
     # inline keeps the storage reference dynamic. 6 lines of
     # duplication, but they live next to the code that calls them.
     def _delete_prefix(prefix: str) -> bool:
-        """Delete all files under prefix. Returns True if any file
-        was actually deleted; False if the prefix was empty or missing.
+        """Delete every object under prefix, recursing into subdirectories.
+
+        Returns True if any object was actually deleted; False if the
+        prefix was empty, missing, or unreachable. The versioned HLS
+        layout (hls/<clip_id>/<build_id>/...) puts build DIRECTORIES
+        below the clip prefix, so a one-level listing would delete
+        nothing for an orphaned versioned clip and leak every object in
+        it. Legacy flat clips (hls/<clip_id>/seg-N.ts) are unaffected:
+        for them this is exactly the one-level delete it always was.
         """
+        deleted_any = False
         try:
-            _dirs, files = default_storage.listdir(prefix)
+            dirs, files = default_storage.listdir(prefix)
         except FileNotFoundError:
             # Already deleted (or never existed); nothing to do.
             return False
@@ -1294,17 +1602,21 @@ def cleanup_orphan_hls(max_keys: int = 1000) -> dict:
                 "cleanup_orphan_hls: listdir(%s) failed: %s", prefix, exc,
             )
             return False
-        if not files:
-            return False
         for fname in files:
             key = f"{prefix}/{fname}".replace(os.sep, '/')
             try:
                 default_storage.delete(key)
+                deleted_any = True
             except Exception as exc:
                 logger.warning(
                     "cleanup_orphan_hls: delete(%s) failed: %s", key, exc,
                 )
-        return True
+        # Build directories under an orphaned versioned clip hold the
+        # actual objects; recurse (leaf-first via the files pass above).
+        for dname in dirs:
+            if _delete_prefix(f"{prefix}/{dname}".replace(os.sep, '/')):
+                deleted_any = True
+        return deleted_any
 
     deleted = 0
     for orphan_id in bounded:
@@ -1325,6 +1637,105 @@ def cleanup_orphan_hls(max_keys: int = 1000) -> dict:
         len(bounded), deleted, max_keys,
     )
     return {'scanned': len(bounded), 'deleted': deleted}
+
+
+# ---------------------------------------------------------------------------
+# P1 retry-safety follow-up: deletion of SUPERSEDED HLS builds.
+#
+# The publish step moves the pointer to a fresh build id and schedules THIS
+# task with countdown=_PUBLISH_PURGE_COUNTDOWN_SECONDS (900s > the 600s
+# MEDIA_TOKEN_TTL_SECONDS), so clients that cached the previous manifest can
+# finish playback before its objects disappear.
+#
+# Everything is guarded, because the world may have changed between
+# scheduling and firing: the pointer moved BACK (operator action, a concurrent
+# older attempt finishing last), the clip was deleted (post_delete signal
+# owns cleanup then), or the pointer was hand-edited into an unknown shape.
+# Deletion is irreversible, so the task aborts on anything that is not a
+# positive confirmation that the stale build is exactly that.
+#
+# MUST NEVER FAIL: it is scheduled from inside a successful publish, and in
+# eager/test mode apply_async even runs it INLINE — an exception here would
+# fail a publish that already succeeded. Every failure mode is
+# swallow-and-log-WARNING; a leaked build directory is cosmetic.
+# ---------------------------------------------------------------------------
+
+
+@shared_task(name='backend.app.tasks.purge_superseded_hls_build')
+def purge_superseded_hls_build(clip_id, stale_build_id):
+    """Delete ONE superseded HLS build dir, guarded by the live pointer.
+
+    Guards, in order — any miss aborts WITHOUT deleting:
+      1. clip gone                -> the post_delete signal owns cleanup;
+      2. pointer not versioned    -> legacy/unknown shape: never delete on a
+                                     guess (legacy in-place builds are left
+                                     alone by design; see the publish step);
+      3. pointer build == stale   -> the pointer moved BACK to the stale
+                                     build: it is live again;
+      4. pointer clip mismatch    -> paranoia: never delete cross-clip.
+
+    Reuses signals._delete_s3_prefix (listdir + per-key delete, all errors
+    swallowed at WARNING) — the same helper the post_delete signal uses, so
+    "delete a prefix, never raise" has exactly one implementation. Builds
+    are flat (master.m3u8 / index.m3u8 / segments), so the one-level listdir
+    walk is sufficient; a nested future layout would leak, not break.
+    """
+    stale_build_id = str(stale_build_id or '')
+    if not stale_build_id or '/' in stale_build_id:
+        # Defense-in-depth: a hand-built prefix must not escape its slot
+        # (e.g. '../<other-clip>' or '' -> 'hls/<clip>/'). Refuse, never
+        # guess.
+        logger.warning(
+            "purge_superseded_hls_build: refusing unsafe build id %r for clip %s",
+            stale_build_id, clip_id,
+        )
+        return {'aborted': 'unsafe_build_id'}
+    try:
+        try:
+            clip = AudioClip.objects.get(id=clip_id)
+        except AudioClip.DoesNotExist:
+            logger.warning(
+                "purge_superseded_hls_build: clip %s no longer exists; "
+                "post_delete signal owns cleanup; aborting", clip_id,
+            )
+            return {'aborted': 'clip_missing'}
+
+        shape, pointer_clip_id, pointer_build_id = parse_hls_pointer(clip.hls_playlist_url)
+        if shape != 'versioned':
+            logger.warning(
+                "purge_superseded_hls_build: clip %s pointer %r is not a "
+                "versioned build; aborting without deleting",
+                clip.id, clip.hls_playlist_url,
+            )
+            return {'aborted': 'pointer_not_versioned'}
+        if pointer_build_id == stale_build_id:
+            logger.warning(
+                "purge_superseded_hls_build: clip %s pointer is still on build "
+                "%s (pointer moved back?); aborting without deleting",
+                clip.id, stale_build_id,
+            )
+            return {'aborted': 'pointer_unchanged'}
+        if pointer_clip_id != str(clip.id):
+            logger.warning(
+                "purge_superseded_hls_build: clip %s pointer names clip %s; "
+                "aborting without deleting", clip.id, pointer_clip_id,
+            )
+            return {'aborted': 'clip_id_mismatch'}
+
+        stale_prefix = f"hls/{clip.id}/{stale_build_id}"
+        from .signals import _delete_s3_prefix
+        _delete_s3_prefix(stale_prefix)
+        logger.info(
+            "purge_superseded_hls_build: removed %s (pointer now on build %s)",
+            stale_prefix, pointer_build_id,
+        )
+        return {'purged': stale_prefix}
+    except Exception as exc:
+        logger.warning(
+            "purge_superseded_hls_build: cleanup of build %s for clip %s "
+            "failed (leaving objects in place): %s", stale_build_id, clip_id, exc,
+        )
+        return {'aborted': 'error', 'error': str(exc)}
 
 
 # ---------------------------------------------------------------------------

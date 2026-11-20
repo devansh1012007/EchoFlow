@@ -161,11 +161,14 @@ def make_clip(creator, **overrides):
     }
     fields.update(overrides)
     clip = AudioClip.objects.create(**fields)
-    # tasks.py:376 writes f"hls/{clip.id}/master.m3u8". `clip_storage_key`
-    # (services/uploads.py:53-71) then strips the filename, so the value a
-    # playback token must be scoped to is f"hls/{clip.id}" — not the playlist
-    # path. A token scoped to the playlist fails the `c` comparison with a
-    # message that reads like a security bug.
+    # The HLS task writes a versioned pointer
+    # f"hls/{clip.id}/<build_id>/master.m3u8"; these tests pin the LEGACY flat
+    # shape on purpose. `clip_storage_key` (services/uploads.py:53-71) strips
+    # the filename in both cases (for a versioned pointer the scope becomes
+    # the build dir, which the worker's prefix check accepts), so the value a
+    # playback token must be scoped to is the directory prefix — not the
+    # playlist path. A token scoped to the playlist fails the `c` comparison
+    # with a message that reads like a security bug.
     clip.hls_playlist_url = f"hls/{clip.id}/master.m3u8"
     clip.save(update_fields=["hls_playlist_url"])
     return clip

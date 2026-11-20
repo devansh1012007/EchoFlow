@@ -32,6 +32,8 @@ only the first is what "B2a" originally meant:
 A note on why the "csam" entry is still here despite being a bare
 acronym: see ``test_csam_is_the_one_entry_that_can_false_positive``.
 """
+import os
+import re
 import subprocess
 
 import pytest
@@ -381,6 +383,14 @@ class _FakeSubprocess:
     stdlib module process-wide; replacing the name on `tasks` keeps the patch
     scoped to the code under test. `CalledProcessError` is carried over because
     the task's `except` clauses resolve it at raise time off the same name.
+
+    `run` also models the encode's FILESYSTEM EFFECT (not its codec work): the
+    real pipeline uploads the local output and verifies it FROM OBJECT STORAGE
+    before publishing (tasks.verify_hls_build_objects), so a stub that wrote
+    nothing would fail the storage step it is standing in for, not the
+    moderation behaviour this file tests. It writes the minimal manifest set
+    ffmpeg's HLS muxer produces for the command the task builds:
+    master.m3u8 -> index.m3u8 (variant) -> one segment.
     """
 
     CalledProcessError = subprocess.CalledProcessError
@@ -392,7 +402,30 @@ class _FakeSubprocess:
 
     def run(self, command, **kwargs):
         self._sink.append(command)
+        self._write_hls_output(command[-1])
         return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    def _write_hls_output(self, out_path):
+        out_dir = os.path.dirname(out_path)
+        with open(os.path.join(out_dir, "seg0.ts"), "wb") as seg:
+            seg.write(b"\x47\x40\x00\x10" * 8)
+        with open(os.path.join(out_dir, "index.m3u8"), "w") as variant:
+            variant.write(
+                "#EXTM3U\n"
+                "#EXT-X-VERSION:3\n"
+                "#EXT-X-TARGETDURATION:4\n"
+                "#EXT-X-MEDIA-SEQUENCE:0\n"
+                "#EXTINF:1.000000,\n"
+                "seg0.ts\n"
+                "#EXT-X-ENDLIST\n"
+            )
+        with open(os.path.join(out_dir, "master.m3u8"), "w") as master:
+            master.write(
+                "#EXTM3U\n"
+                "#EXT-X-VERSION:3\n"
+                "#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS=\"mp4a.40.2\"\n"
+                "index.m3u8\n"
+            )
 
 
 class TestWorkerSideModerationGate:
@@ -496,8 +529,9 @@ class TestWorkerSideModerationGate:
         clip.refresh_from_db()
         # Not "hls_playlist_url is None": the fixture's clip has whatever the
         # column defaults to, and the encode's real marker is the master
-        # playlist path written at tasks.py:471. Asserting the absence of *that*
-        # cannot be satisfied by an accident of the default.
+        # playlist path written at the publish step of the HLS task. Asserting
+        # the absence of *that* cannot be satisfied by an accident of the
+        # default.
         assert not (clip.hls_playlist_url or "").endswith("master.m3u8"), (
             "the pipeline recorded a playable HLS location for a clip it "
             "rejected"
@@ -588,7 +622,18 @@ class TestWorkerSideModerationGate:
         clip.refresh_from_db()
         assert clip.moderation_approved is True
         assert clip.status == "ready"
-        assert clip.hls_playlist_url == f"hls/{clip.id}/master.m3u8"
+        # The task now publishes into a per-attempt build directory
+        # hls/<clip_id>/<build_id>/master.m3u8 (versioned staging prefix,
+        # see tasks.py). Pin the versioned SHAPE, not the legacy flat path —
+        # the build id is a fresh 12-hex uuid per run, so only its structure
+        # is deterministic.
+        assert re.fullmatch(
+            rf"hls/{clip.id}/[0-9a-f]{{12}}/master\.m3u8",
+            clip.hls_playlist_url or "",
+        ), (
+            "pointer must name a per-attempt build directory, got "
+            f"{clip.hls_playlist_url!r}"
+        )
         assert len(pipeline["ffmpeg_runs"]) == 1, "the HLS encode did not run"
         assert pipeline["timer"].calls == [], (
             "a clean clip must not set an outcome override; the default "
