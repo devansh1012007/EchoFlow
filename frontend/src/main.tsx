@@ -1,7 +1,13 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
+import { VizPreferenceProvider } from './stores/viz.tsx';
 import { resolvePublicRoute } from './lib/publicRoutes.tsx';
+import "@fontsource-variable/archivo/wdth.css";
+import "@fontsource/ibm-plex-sans-condensed/400.css";
+import "@fontsource/ibm-plex-sans-condensed/500.css";
+import "@fontsource/ibm-plex-sans-condensed/600.css";
+import "@fontsource/ibm-plex-sans-condensed/700.css";
 import './index.css';
 
 // Path-based routing without a router: a few public pages (/terms, /support,
@@ -11,6 +17,10 @@ const publicPage = resolvePublicRoute(window.location.pathname, window.location.
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {publicPage ?? <App />}
+    {publicPage ?? (
+      <VizPreferenceProvider>
+        <App />
+      </VizPreferenceProvider>
+    )}
   </StrictMode>,
 );

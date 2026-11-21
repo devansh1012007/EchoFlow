@@ -112,6 +112,11 @@ globalThis.ResizeObserver ??= class {
   disconnect() {}
 } as unknown as typeof ResizeObserver;
 
+// jsdom's canvas getContext throws "not implemented". Canvas components must
+// tolerate a null context in production too (very old browsers), so tests
+// exercise exactly that path: getContext returns null and nothing may throw.
+HTMLCanvasElement.prototype.getContext = (() => null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+
 Element.prototype.scrollIntoView ??= function scrollIntoView() {};
 Element.prototype.hasPointerCapture ??= function hasPointerCapture() {
   return false;
@@ -121,6 +126,14 @@ Element.prototype.releasePointerCapture ??= function releasePointerCapture() {};
 
 // jsdom implements neither, and both throw "not implemented" when called.
 HTMLElement.prototype.scrollTo ??= function scrollTo() {};
+
+// jsdom has no blob URL support at all. The Voices player mints object URLs
+// for recorded audio; a deterministic stub keeps that path testable.
+if (typeof URL.createObjectURL !== "function") {
+  URL.createObjectURL = ((obj: unknown) =>
+    `blob:mock-${(obj as { size?: number } | null)?.size ?? 0}-${Math.random().toString(36).slice(2)}`) as typeof URL.createObjectURL;
+  URL.revokeObjectURL = (() => undefined) as typeof URL.revokeObjectURL;
+}
 
 // ---------------------------------------------------------------------------
 // Per-test isolation

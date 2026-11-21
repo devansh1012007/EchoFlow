@@ -316,7 +316,7 @@ export const InboxPage: React.FC<InboxPageProps> = ({ onRefreshUnread }) => {
             unused. Deliberately not built into a player here: it is an HLS
             URL behind the playback-token contract, and `player.tsx` owns that.
           */}
-          <ul role="list" className="space-y-3">
+          <ul role="list" className="space-y-1.5">
             {shares.map((item) => {
               const isThisPlaying = currentClip?.id === item.clip.id && isPlaying;
               const relativeTime = formatRelativeTime(item.created_at, nowMs);
@@ -324,7 +324,7 @@ export const InboxPage: React.FC<InboxPageProps> = ({ onRefreshUnread }) => {
               return (
                 <li
                   key={item.id}
-                  className={`p-4 rounded-2xl border transition-all flex items-center justify-between gap-4 group ${
+                  className={`py-2.5 px-3 rounded-lg border transition-colors flex items-center justify-between gap-3 group ${
                     !item.is_read
                       ? "bg-panel border-accent ring-1 ring-link"
                       : "bg-panel/80 hover:bg-panel border-line"

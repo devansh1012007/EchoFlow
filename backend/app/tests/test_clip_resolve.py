@@ -739,7 +739,10 @@ class TestNoCredentialIsGranted:
         name = default_storage.save("covers/resolve-probe.png", io.BytesIO(b"\x89PNG\r\n\x1a\n"))
         clip = make_clip(owner)
         clip.cover_image.name = name
-        clip.save(update_fields=["cover_image"])
+        # Covers are served only once a reviewer approved them
+        # (services/cover_images.py::cover_is_servable).
+        clip.cover_status = "approved"
+        clip.save(update_fields=["cover_image", "cover_status"])
 
         body = resolve(viewer, clip.id).json()
         assert body["cover_image"] is not None

@@ -2,8 +2,11 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Headphones, AlertTriangle, RefreshCw, Sparkles } from "lucide-react";
 import { apiRequest, feedAPI } from "../api/client";
 import { usePlayer } from "../stores/player";
+import { useMediaQuery } from "../lib/useMediaQuery";
 import { FeedClip, FeedResponse } from "../types/echoflow";
 import { ReelList } from "../components/feed/ReelList";
+import { InfoRail } from "../components/feed/InfoRail";
+import { DiscussionRail } from "../components/feed/DiscussionRail";
 import { CommentSheet } from "../components/comments/CommentSheet";
 import { ShareModal } from "../components/sharing/ShareModal";
 
@@ -191,6 +194,25 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
   // Modals state
   const [selectedClipForComments, setSelectedClipForComments] = useState<FeedClip | null>(null);
   const [selectedClipForShare, setSelectedClipForShare] = useState<FeedClip | null>(null);
+
+  /**
+   * The reel the stage is centered on — what the rails describe. Reported by
+   * `ReelList` as the person scrolls; until the first report, the top reel is
+   * the honest answer (it is what the stage shows on load).
+   */
+  const [centered, setCentered] = useState<{ index: number; clip: FeedClip } | null>(null);
+  const onCenteredChange = useCallback((index: number, clip: FeedClip) => {
+    setCentered({ index, clip });
+  }, []);
+
+  /**
+   * The rails exist only where there is room for them. A conditional render,
+   * not a CSS hide: `hidden xl:block` leaves the element in the accessibility
+   * tree under jsdom (where Tailwind is not applied), and a rail that
+   * duplicates a card's accessible name must be *absent*, not invisible
+   * (REPO-FACTS §3).
+   */
+  const wide = useMediaQuery("(min-width: 1100px)");
 
   const { currentClip, playClip, setQueue, handsFreeMode } = usePlayer();
 
@@ -522,8 +544,35 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
     );
   }
 
+  // The reel the rails describe: the reported one, or the top of the page
+  // before any scroll report arrives.
+  const railClip = centered?.clip ?? clipsRef.current[0] ?? null;
+  const railPosition = (centered?.index ?? 0) + 1;
+
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 md:px-8 py-4 pb-28">
+    <div
+      className={
+        wide
+          ? // Three columns: information | the stage | the conversation. The
+            // stage keeps its phone-first 470px column; the rails fill the
+            // sides with the brief's "info on reels".
+            "mx-auto grid w-full items-start gap-6 px-6 py-4 pb-28"
+          : "w-full max-w-7xl mx-auto px-4 md:px-8 py-4 pb-28"
+      }
+      style={wide ? { gridTemplateColumns: "280px minmax(0, 470px) 280px", maxWidth: 1150 } : undefined}
+    >
+      {wide && railClip && (
+        <div className="sticky top-24">
+          <InfoRail
+            clip={railClip}
+            position={railPosition}
+            total={clips.length}
+            onOpenCreatorProfile={onOpenCreatorProfile}
+          />
+        </div>
+      )}
+
+      <div>
       {/* Degraded mode banner */}
       {isDegraded && (
         <div className="mb-3 p-3 rounded-xl bg-accent/15 border border-accent/40 text-xs tabular-nums text-link flex items-center gap-2">
@@ -630,7 +679,19 @@ export const FeedPage: React.FC<FeedPageProps> = ({ onOpenCreatorProfile, onOpen
         onOpenCreatorProfile={onOpenCreatorProfile}
         onOpenComments={setSelectedClipForComments}
         onOpenShare={setSelectedClipForShare}
+        onCenteredChange={onCenteredChange}
       />
+      </div>
+
+      {wide && railClip && (
+        <div className="sticky top-24">
+          <DiscussionRail
+            clip={railClip}
+            onOpenComments={setSelectedClipForComments}
+            onOpenShare={setSelectedClipForShare}
+          />
+        </div>
+      )}
 
       {/* Comment Sheet Drawer */}
       <CommentSheet

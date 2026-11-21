@@ -51,12 +51,23 @@ def finalize_upload(clip: AudioClip) -> None:
 
 
 def clip_storage_key(clip: AudioClip) -> str | None:
-    """Return the ``hls/<clip_id>`` object-storage prefix for a clip.
+    """Return the object-storage prefix the token's ``c`` field binds to.
+
+    That is the stored pointer's parent directory — the value the scope
+    checks accept (``hls_token.validate_playback_token``: the request path
+    must start with ``"/" + c + "/"``; the Worker and the nginx edge make
+    the same check): ``hls/<clip_id>`` for the legacy flat shape
+    ``hls/<clip_id>/master.m3u8``, and ``hls/<clip_id>/<build_id>`` for the
+    versioned shape ``hls/<clip_id>/<build_id>/master.m3u8`` written by the
+    HLS publish step. Deletion is a separate derivation:
+    ``signals.hls_clip_prefix`` returns the whole clip-level prefix
+    ``hls/<clip_id>`` for versioned pointers so clip removal takes every
+    build of the clip.
 
     Returns None when HLS output has not been produced (not transcoded yet, or
     pruned by ``cleanup_orphan_hls``) — in which case there is no media to
-    grant a token for, and callers should answer 409 rather than minting a
-    token for a key that resolves to nothing.
+    grant a token for, and callers should answer 409 rather than minting
+    a token for a key that resolves to nothing.
 
     Shared by the playback-token and share endpoints so "the storage key for
     this clip" has exactly one definition. ``media.views._extract_clip_key``
@@ -66,8 +77,9 @@ def clip_storage_key(clip: AudioClip) -> str | None:
     key = (clip.hls_playlist_url or "").strip()
     if not key:
         return None
-    # Stored value is the object key, e.g. "hls/<uuid>/master.m3u8". Strip the
-    # filename to get the prefix the token's `c` field binds to.
+    # Pointer shapes: "hls/<clip_id>/master.m3u8" (legacy flat) or
+    # "hls/<clip_id>/<build_id>/master.m3u8" (versioned). Stripping the
+    # trailing filename yields the directory prefix the token binds to.
     return key.rsplit("/", 1)[0] if "/" in key else None
 
 

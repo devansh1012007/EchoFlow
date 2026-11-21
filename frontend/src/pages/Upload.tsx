@@ -8,12 +8,28 @@ import {
   FileAudio,
   Loader2,
   XCircle,
+  Image as ImageIcon,
 } from "lucide-react";
 import { apiRequest, clipsAPI } from "../api/client";
 
 interface UploadPageProps {
   onUploadSuccess: () => void;
 }
+
+// ---------------------------------------------------------------------------
+// Cover image (the rules the backend enforces, mirrored client-side)
+// ---------------------------------------------------------------------------
+
+/**
+ * `backend/app/services/cover_images.py`: 5 MB, JPEG/PNG/WebP, still images.
+ * The dimension floor (200px both sides) and the animation check decode the
+ * image, which the server does authoritatively — the client catches what it
+ * can check synchronously (type, size) and maps the server's own words for
+ * the rest, so there is exactly one place that invents copy: nowhere.
+ */
+const COVER_MAX_BYTES = 5 * 1024 * 1024;
+const COVER_TYPES: ReadonlySet<string> = new Set(["image/jpeg", "image/png", "image/webp"]);
+const COVER_HINT = "JPEG, PNG or WebP · up to 5 MB · both sides at least 200px";
 
 // ---------------------------------------------------------------------------
 // Server-reported limits
@@ -155,6 +171,8 @@ interface UploadOutcome {
   detail: string | null;
   /** True while the status poll is in flight. */
   watching: boolean;
+  /** The server's cover review verdict for the cover uploaded with this clip. */
+  coverStatus: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,16 +212,18 @@ function describeUploadError(err: unknown): string {
   return (
     firstString(data.original_file) ||
     firstString(data.title) ||
+    firstString(data.cover_image) ||
     error.message ||
     "Upload failed. Please check the file format."
   );
 }
 
-function errorFieldOf(err: unknown): "file" | "title" | null {
+function errorFieldOf(err: unknown): "file" | "title" | "cover" | null {
   const data = asApiError(err).data;
   if (!data || typeof data !== "object") return null;
   if ("original_file" in data) return "file";
   if ("title" in data) return "title";
+  if ("cover_image" in data) return "cover";
   return null;
 }
 
@@ -227,12 +247,16 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
   const [inFlight, setInFlight] = useState<"uploading" | "approving" | null>(null);
   const [durationSec, setDurationSec] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [errorField, setErrorField] = useState<"file" | "title" | null>(null);
+  const [errorField, setErrorField] = useState<"file" | "title" | "cover" | null>(null);
   const [limits, setLimits] = useState<UploadLimits | null>(null);
   const [limitsUnknown, setLimitsUnknown] = useState<boolean>(false);
   const [outcome, setOutcome] = useState<UploadOutcome | null>(null);
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
+  const [coverError, setCoverError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const coverInputRef = useRef<HTMLInputElement | null>(null);
   const pollAttemptsRef = useRef<number>(0);
 
   // The displayed and enforced limits are the server's. Until (or unless)
@@ -326,6 +350,35 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
   const openFilePicker = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
+
+  /**
+   * Accept or refuse a cover image, client-side, using the backend's own
+   * rules. Everything decodable — dimensions, animation — is the server's
+   * call; refusing a 4 MB PNG here because jsdom cannot decode it would be
+   * the client guessing wrong on the user's behalf.
+   */
+  const applyCover = useCallback((selected: File) => {
+    setCoverError(null);
+    if (!COVER_TYPES.has(selected.type)) {
+      setCoverError("Covers must be a JPEG, PNG or WebP image.");
+      return;
+    }
+    if (selected.size > COVER_MAX_BYTES) {
+      setCoverError(`Cover image is ${(selected.size / (1024 * 1024)).toFixed(1)} MB. The limit is 5 MB.`);
+      return;
+    }
+    if (coverPreviewUrl !== null) URL.revokeObjectURL(coverPreviewUrl);
+    setCoverFile(selected);
+    setCoverPreviewUrl(URL.createObjectURL(selected));
+  }, [coverPreviewUrl]);
+
+  const removeCover = useCallback(() => {
+    if (coverPreviewUrl !== null) URL.revokeObjectURL(coverPreviewUrl);
+    setCoverFile(null);
+    setCoverPreviewUrl(null);
+    setCoverError(null);
+    if (coverInputRef.current) coverInputRef.current.value = "";
+  }, [coverPreviewUrl]);
 
   const applyFile = useCallback(
     (selected: File) => {
@@ -489,6 +542,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
     formData.append("title", title.trim());
     formData.append("category", category.trim());
     formData.append("copyright_acknowledgement", "true");
+    if (coverFile) formData.append("cover_image", coverFile);
 
     try {
       const res = await clipsAPI.uploadClip(formData);
@@ -502,6 +556,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
         phase: "processing",
         detail: null,
         watching: false,
+        coverStatus: typeof res.cover_status === "string" ? res.cover_status : null,
       });
       await runApproval(res.clip_id);
     } catch (err) {
@@ -519,6 +574,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
     setDurationSec(null);
     setErrorMessage(null);
     setErrorField(null);
+    removeCover();
     pollAttemptsRef.current = 0;
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -604,6 +660,30 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
           {outcome.phase === "ready" && (
             <p className="text-xs tabular-nums text-link font-bold">
               Transcode complete. This reel is live in the feed.
+            </p>
+          )}
+
+          {/*
+            The cover verdict, in the server's own terms. "pending" is the
+            normal state for a cover that was just uploaded: a reviewer has to
+            approve it before anyone sees it (the same fails-closed rule as
+            the rest of the pipeline), and the reel shows its sound wave until
+            then. No cover uploaded → no claim about covers at all.
+          */}
+          {outcome.coverStatus === "pending" && (
+            <p className="text-xs tabular-nums text-fg-muted">
+              Your cover image is held for review. The reel shows its sound wave until a reviewer
+              approves the cover.
+            </p>
+          )}
+          {outcome.coverStatus === "rejected" && (
+            <p className="text-xs tabular-nums text-danger font-bold">
+              The cover image was declined in review. The reel keeps its sound wave.
+            </p>
+          )}
+          {outcome.coverStatus === "approved" && (
+            <p className="text-xs tabular-nums text-link font-bold">
+              Cover approved — it is what listeners see on this reel.
             </p>
           )}
 
@@ -772,6 +852,86 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadSuccess }) => {
               </button>
             </div>
           )}
+
+          {/*
+            The cover picker, optional by design: without one the reel shows
+            its sound wave, which is the brief's own fallback imagery. Same
+            hidden-input/visible-button shape as the audio field above it.
+          */}
+          <div className="rounded-2xl border border-line bg-panel p-4 space-y-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-xs font-bold tracking-wide text-fg-subtle uppercase">
+                Cover image <span className="normal-case">(optional)</span>
+              </h2>
+              <span className="text-[11px] tabular-nums text-fg-subtle">{COVER_HINT}</span>
+            </div>
+
+            <input
+              ref={coverInputRef}
+              id="upload-cover-file"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={(e) => {
+                const selected = e.target.files?.[0];
+                if (selected) applyCover(selected);
+              }}
+              className="hidden"
+            />
+
+            {coverFile && coverPreviewUrl !== null ? (
+              <div className="flex items-center gap-4">
+                {/* The live preview: the actual pixels, decoded by the
+                    browser, before anything is sent. */}
+                <img
+                  src={coverPreviewUrl}
+                  alt=""
+                  className="w-20 h-20 rounded-xl object-cover border border-line-strong"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-fg truncate">{coverFile.name}</p>
+                  <p className="text-[11px] tabular-nums text-fg-subtle mt-0.5">
+                    {(coverFile.size / (1024 * 1024)).toFixed(2)} MB · held for review after upload
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => coverInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-lg border border-line-strong text-fg text-[11px] font-bold hover:border-accent hover:text-link transition-colors"
+                  >
+                    Change cover
+                  </button>
+                  <button
+                    type="button"
+                    onClick={removeCover}
+                    className="px-3 py-1.5 rounded-lg border border-line text-fg-muted text-[11px] font-bold hover:text-danger hover:border-danger/40 transition-colors"
+                  >
+                    Remove cover
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => coverInputRef.current?.click()}
+                aria-describedby="upload-cover-hint"
+                className="w-full py-5 rounded-xl border-2 border-dashed border-line hover:border-line-strong hover:bg-raised transition-colors text-sm font-bold text-fg-muted flex items-center justify-center gap-2"
+              >
+                <ImageIcon className="w-4 h-4 text-link" aria-hidden="true" />
+                Add a cover image
+              </button>
+            )}
+
+            {coverError && (
+              <p role="alert" className="text-[11px] font-bold text-danger">
+                {coverError}
+              </p>
+            )}
+            <p id="upload-cover-hint" className="sr-only">
+              A cover shows instead of the sound wave once a reviewer approves it. Without one,
+              your reel keeps the wave.
+            </p>
+          </div>
 
           <div>
             <label

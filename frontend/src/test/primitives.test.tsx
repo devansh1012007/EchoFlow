@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { Header } from "../components/common/Header";
+import { VizPreferenceProvider } from "../stores/viz";
 import { BottomNav } from "../components/navigation/BottomNav";
 import { ErrorBoundary } from "../components/common/ErrorBoundary";
 
@@ -13,21 +14,15 @@ import { ErrorBoundary } from "../components/common/ErrorBoundary";
  * Header: the avatar button was announced as the user's own username (button
  * content outranks `title` in name computation), the desktop destinations were a
  * bare `<div>` with no navigation landmark and no `aria-current`, and the
- * backend-health signal — the only honest backend signal in the app — sat
- * inside `hidden lg:flex` on a mobile-first app, so it did not exist in the
- * accessibility tree on the primary device.
+ * backend-health signal was removed from the Header on the owner's
+ * instruction, so the header now carries navigation, the two playback
+ * switches and the profile route.
  *
  * ErrorBoundary: its docstring claimed it sits *inside* the providers so
  * provider throws are not caught. `App.tsx:151-160` shows the opposite — it is
  * the outermost element. A comment that makes correct code look broken costs
  * the next reader a debugging cycle.
  *
- * Note on the health region assertion: jsdom has no layout and Tailwind is not
- * processed under vitest, so `hidden lg:flex` has no effect here and the
- * element is present in the DOM either way. The test therefore asserts the
- * *structure* — that no ancestor of the live region carries a `hidden` class —
- * which is the property that decides whether a real browser exposes it to
- * assistive technology. It is not a measurement of what is painted.
  */
 
 const MOCK_USER = { id: 7, username: "alice", email: "alice@example.com" };
@@ -46,22 +41,11 @@ vi.mock("../stores/player", () => ({
   usePlayer: () => ({ handsFreeMode: false, setHandsFreeMode: vi.fn() }),
 }));
 
-/**
- * The probe itself is `backendHealth.test.tsx`'s subject, eleven tests deep. Here
- * it is stubbed so these assertions are about Header's markup rather than about
- * polling: what matters is whether the verdict has anywhere to be exposed.
- */
-vi.mock("../components/common/useBackendHealth", () => ({
-  useBackendHealth: () => ({
-    status: "healthy",
-    lastCheckedAt: 1_700_000_000_000,
-    lastError: null,
-  }),
-}));
-
 function renderHeader(activeTab = "feed", unreadCount = 0) {
   return render(
-    <Header activeTab={activeTab} setActiveTab={() => {}} unreadCount={unreadCount} />,
+    <VizPreferenceProvider>
+      <Header activeTab={activeTab} setActiveTab={() => {}} unreadCount={unreadCount} />
+    </VizPreferenceProvider>,
   );
 }
 
@@ -132,40 +116,9 @@ describe("Header — the desktop destinations are a real navigation region", () 
 
   it("names every desktop destination", () => {
     renderHeader();
-    for (const label of [/live feed/i, /discover/i, /creator studio/i, /inbox/i]) {
+    for (const label of [/live feed/i, /discover/i, /creator studio/i, /voices/i, /inbox/i]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
-  });
-});
-
-describe("Header — the backend-health signal exists on mobile", () => {
-  it("is not inside a `hidden` wrapper, so it is in the a11y tree at any width", () => {
-    // THE regression. The block was `hidden lg:flex`, and the app is
-    // mobile-first (`ReelList` sizes a reel to a phone viewport), so on the
-    // primary device there was no backend-health signal whatsoever.
-    renderHeader();
-
-    const region = screen.getByRole("status");
-    const hiddenAncestors = ancestorsOf(region).filter((el) =>
-      /(^|\s)hidden(\s|$)/.test(el.className ?? ""),
-    );
-    expect(hiddenAncestors.map((el) => el.className)).toEqual([]);
-  });
-
-  it("still states only what the probes measured", () => {
-    // A1's real-probe work is load-bearing: `/health/` and `/ready/` are
-    // liveness and readiness, NOT worker health. Widening the signal to mobile
-    // must not widen what it claims.
-    renderHeader();
-    const region = screen.getByRole("status");
-    expect(region).toHaveTextContent(/backend ready/i);
-    expect(region).not.toHaveTextContent(/worker/i);
-  });
-
-  it("keeps the decorative dot out of the accessibility tree", () => {
-    renderHeader();
-    const region = screen.getByRole("status");
-    expect(region.querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 });
 

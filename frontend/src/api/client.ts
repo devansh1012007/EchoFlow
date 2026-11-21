@@ -611,8 +611,8 @@ export const feedAPI = {
 };
 
 export const clipsAPI = {
-  async uploadClip(formData: FormData): Promise<{ message: string; clip_id: string; status: string }> {
-    return apiRequest<{ message: string; clip_id: string; status: string }>("/clips/", {
+  async uploadClip(formData: FormData): Promise<{ message: string; clip_id: string; status: string; cover_status?: string }> {
+    return apiRequest<{ message: string; clip_id: string; status: string; cover_status?: string }>("/clips/", {
       method: "POST",
       body: formData,
       // The one call that can carry 100 MB. The default deadline would abort

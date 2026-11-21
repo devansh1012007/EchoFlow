@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { installFetchMock, json, type FetchMock } from "./fetchMock";
 import { FeedPage } from "../pages/Feed";
 import { ReelList } from "../components/feed/ReelList";
+import { VizPreferenceProvider } from "../stores/viz";
 import type { FeedClip } from "../types/echoflow";
 
 /**
@@ -115,23 +116,28 @@ function cold(retryAfterMs = 1500) {
   });
 }
 
+/** The stage's cover/wave needs the viz preference context (`main.tsx` mounts it app-wide). */
 function renderFeed() {
   return render(
-    <FeedPage onOpenCreatorProfile={() => {}} onOpenOnboarding={() => {}} />,
+    <VizPreferenceProvider>
+      <FeedPage onOpenCreatorProfile={() => {}} onOpenOnboarding={() => {}} />
+    </VizPreferenceProvider>,
   );
 }
 
 function renderReelList(props: Partial<React.ComponentProps<typeof ReelList>> = {}) {
   return render(
-    <ReelList
-      clips={[makeClip()]}
-      loading={false}
-      hasMore={false}
-      onOpenCreatorProfile={() => {}}
-      onOpenComments={() => {}}
-      onOpenShare={() => {}}
-      {...props}
-    />,
+    <VizPreferenceProvider>
+      <ReelList
+        clips={[makeClip()]}
+        loading={false}
+        hasMore={false}
+        onOpenCreatorProfile={() => {}}
+        onOpenComments={() => {}}
+        onOpenShare={() => {}}
+        {...props}
+      />
+    </VizPreferenceProvider>,
   );
 }
 

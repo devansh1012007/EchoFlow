@@ -134,9 +134,9 @@ describe("tokens.css — a global focus-visible indicator", () => {
     for (const surface of SURFACES) {
       expect(contrast(ring, surface), `focus ring on ${surface}`).toBeGreaterThanOrEqual(3);
     }
-    // The brief assigns focus indicators to blue: the ring must be a blue.
+    // Focus indicators are the signal colour: the ring must be a mint (green-dominant).
     const [r, g, b] = [1, 3, 5].map((i) => parseInt(ring.slice(i, i + 2), 16)) as [number, number, number];
-    expect(b, "focus ring is blue-dominant").toBeGreaterThan(Math.max(r, g));
+    expect(g, "focus ring is mint (green-dominant)").toBeGreaterThan(Math.max(r, b));
   });
 });
 
@@ -257,15 +257,22 @@ describe("tokens.css — contrast of every role pairing", () => {
     }
   });
 
-  it("white text on every solid fill clears 4.5:1", () => {
-    for (const fill of ["--color-accent", "--color-accent-hover", "--color-danger-solid", "--color-danger-solid-hover"]) {
+  it("black text on every mint fill and white text on every red fill clears 4.5:1", () => {
+    for (const fill of ["--color-accent", "--color-accent-hover"]) {
+      expect(contrast("#000000", tokenHex(fill)), `black on ${fill}`).toBeGreaterThanOrEqual(4.5);
+    }
+    for (const fill of ["--color-danger-solid", "--color-danger-solid-hover"]) {
       expect(contrast("#ffffff", tokenHex(fill)), `white on ${fill}`).toBeGreaterThanOrEqual(4.5);
     }
-    expect(tokenHex("--color-accent-fg").toLowerCase()).toBe("#ffffff");
+    expect(tokenHex("--color-accent-fg").toLowerCase()).toBe("#000000");
     expect(tokenHex("--color-danger-fg").toLowerCase()).toBe("#ffffff");
   });
 
-  it("the hover fills are darker than their resting fills, so white only gains contrast on hover", () => {
+  it("white on the mint fill is below 3:1, which is why designSystem.test.ts bans it", () => {
+    expect(contrast("#ffffff", tokenHex("--color-accent"))).toBeLessThan(3);
+  });
+
+  it("the hover fills are darker than their resting fills", () => {
     expect(relativeLuminance(tokenHex("--color-accent-hover"))).toBeLessThan(relativeLuminance(tokenHex("--color-accent")));
     expect(relativeLuminance(tokenHex("--color-danger-solid-hover"))).toBeLessThan(relativeLuminance(tokenHex("--color-danger-solid")));
   });

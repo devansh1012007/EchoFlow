@@ -43,6 +43,7 @@ import {
   type ApiError,
 } from "../api/client";
 import App from "../App";
+import { VizPreferenceProvider } from "../stores/viz";
 import { installFetchMock, json, tooManyRequests, type FetchMock } from "./fetchMock";
 
 const ACCESS = "access-token-1";
@@ -217,7 +218,7 @@ describe("F6 — a transport failure inside the refresh ends the session loudly"
     // polls while it is still (briefly) authenticated.
     api.on("*", /.*/, () => json(200, {}));
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     // The shell is gone and the login form is up...
     await waitFor(() =>

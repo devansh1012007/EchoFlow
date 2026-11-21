@@ -2,7 +2,7 @@ import React from "react";
 import { Headphones } from "lucide-react";
 import { usePlayer } from "../../stores/player";
 import { useAuth } from "../../stores/auth";
-import { useBackendHealth, type BackendHealth } from "./useBackendHealth";
+import { VizToggle } from "../feed/VizToggle";
 
 interface HeaderProps {
   activeTab: string;
@@ -11,86 +11,44 @@ interface HeaderProps {
 }
 
 /**
- * Copy is scoped to what the probes actually measure. `GET /health/` is a
- * Django liveness probe and `GET /ready/` runs `SELECT 1` against Postgres
- * (backend/EchoFlow/health.py) — neither observes a Celery worker, so this
- * must not claim workers are active. It said "Workers Active" for months while
- * never having asked anything.
+ * The shell's top bar: the wordmark, the desktop navigation, the two playback
+ * switches (hands-free, sound wave) and the profile route.
  *
- * A note on the opacity floor in this file. The faint text was `text-fg-subtle`
- * (3.77:1) and `text-fg-subtle` (2.61:1) — both under the 4.5:1 of WCAG 1.4.3,
- * at 9-10px. They are now `text-fg-subtle` (5.29:1), the smallest step that
- * clears AA, because the app-wide decision about whether to move these to
- * `--text-secondary` / `--text-tertiary` belongs to one sweep across all
- * thirteen component files rather than to the four this pass touched. Do not
- * reintroduce `/40` or `/30` here in the meantime.
+ * The backend-health indicator that used to sit here ("System Status /
+ * Backend Ready / Not Reachable") was removed on the owner's instruction: it
+ * was operator chrome on a listener's app, and its green state asserted a
+ * liveness probe the listener has no action for. The probe hook
+ * (`useBackendHealth`) went with it; nothing else consumed it.
  *
- * `bg-white/30` on the "checking" dot is left alone: it is `aria-hidden`,
- * decorative, and redundant with the text label beside it, so it carries no
- * information a sighted user needs it for.
+ * Navigation is five destinations — Live Feed, Discover, Creator Studio,
+ * Voices, Inbox — with Profile reachable through the avatar on the right, the
+ * same rule `BottomNav` follows on a phone.
  */
-const HEALTH_VIEW: Record<
-  BackendHealth["status"],
-  { label: string; dot: string; text: string }
-> = {
-  checking: {
-    label: "Checking",
-    dot: "bg-white/30",
-    text: "text-fg-subtle",
-  },
-  healthy: {
-    label: "Backend Ready",
-    dot: "bg-link",
-    text: "text-link",
-  },
-  unreachable: {
-    label: "Not Reachable",
-    dot: "bg-danger",
-    text: "text-danger",
-  },
-};
-
-function healthTitle(health: BackendHealth): string {
-  const checked = health.lastCheckedAt ? new Date(health.lastCheckedAt).toLocaleTimeString() : "never";
-  const suffix = health.lastError ? ` — ${health.lastError}` : "";
-  return `Liveness /health/ and readiness /ready/ — last checked ${checked}${suffix}`;
-}
-
 export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadCount }) => {
   const { handsFreeMode, setHandsFreeMode } = usePlayer();
   const { user, profile } = useAuth();
-  const health = useBackendHealth();
-  const healthView = HEALTH_VIEW[health.status];
 
   const navLinks = [
     { id: "feed", label: "Live Feed" },
     { id: "explore", label: "Discover" },
     { id: "upload", label: "Creator Studio" },
+    { id: "voices", label: "Voices" },
     { id: "inbox", label: "Inbox", badge: unreadCount },
   ];
 
   return (
-    <header className="sticky top-0 z-30 w-full bg-canvas border-b border-line px-4 md:px-8 py-3.5 transition-all">
-      <div className="max-w-7xl mx-auto flex items-center justify-between">
+    <header className="sticky top-0 z-30 w-full bg-canvas border-b border-line px-4 md:px-8 py-3 transition-all">
+      <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
         {/* Brand mark.
             A <button>, not a <div onClick>: this is the shortest route back to
             the feed from anywhere in the app, and as a div it had no role, no
             tabIndex and no key handler, so it was unreachable by keyboard
             (RECON-06 §10). `type="button"` keeps it from submitting anything.
 
-            The mark was CSS-drawn and is now the real brand image, served from public/logo.png — 512px with
-            transparent corners, so no import and no bundler asset entry. `alt`
-            is empty because the wordmark beside it already names the brand; a
-            non-empty alt would announce "EchoFlow" twice. The logo is a raster
-            image with its own terracotta colour, which the UI palette does not
-            recolour: replace public/logo.png to change it. `rounded-[17%]` is the
-            mark's measured corner radius (0.1695 of its width), so the
-            silhouette still reads as a squircle rather than a hard square.
-
-            The old mark pulsed (`animate-pulse` on the inner dot). That motion
-            is not carried over: pulsing a 32px image is a far larger flicker
-            than pulsing a 14px dot, and the concentric arcs are a static
-            emission graphic. Hover scale is unchanged. */}
+            The wordmark is Archivo at weight 800, expanded — the display face
+            the headings use, so the brand and the content speak with one
+            voice. `alt` is empty because the wordmark beside it already names
+            the brand; a non-empty alt would announce "EchoFlow" twice. */}
         <button
           type="button"
           onClick={() => setActiveTab("feed")}
@@ -104,24 +62,33 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
             className="w-8 h-8 rounded-[17%] transition-transform group-hover:scale-105"
           />
           <div>
-            <span className="text-xl md:text-2xl font-semibold tracking-tight text-fg leading-none">
+            <span
+              className="block text-xl md:text-2xl leading-none text-fg"
+              style={{
+                fontFamily: "var(--font-display)",
+                fontWeight: 800,
+                fontStretch: "112%",
+                letterSpacing: "-0.01em",
+              }}
+            >
               EchoFlow
             </span>
-            <p className="text-[11px] tabular-nums text-fg-subtle leading-none mt-0.5">
+            <p className="text-[11px] tabular-nums text-fg-subtle leading-none mt-1">
               Audio-First Short-Form
             </p>
           </div>
         </button>
 
         {/* Center Desktop Navigation Tabs.
-            Wrapped in a <nav>. The app's only other <nav> is `BottomNav`, which
-            is `md:hidden`, so on a desktop viewport — where these five
-            destinations are the entire navigation — the page had no navigation
-            landmark at all. Labelled because a second, equally valid answer to
-            "where am I?" is to name both (RECON-06 §16 Q10). `aria-current` is
-            the part that was outright missing: without it a screen-reader user
-            on desktop had no indication of the current page. */}
-        <nav aria-label="Primary" className="hidden md:flex items-center gap-6 text-xs font-semibold text-fg-subtle">
+            Wrapped in a <nav>: on a desktop viewport these five destinations
+            are the entire navigation. Labelled because `BottomNav` renders a
+            second navigation landmark below `md`, and two unlabelled ones are
+            a list a screen reader cannot act on. `aria-current` marks the page
+            the user is on. */}
+        <nav
+          aria-label="Primary"
+          className="hidden md:flex items-center gap-5 text-xs font-bold text-fg-subtle"
+        >
           {navLinks.map((tab) => {
             const isActive = activeTab === tab.id;
             return (
@@ -130,7 +97,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
                 aria-current={isActive ? "page" : undefined}
-                className={`relative py-1 transition-colors hover:text-fg flex items-center gap-1.5 ${
+                className={`relative py-1.5 transition-colors hover:text-fg flex items-center gap-1.5 ${
                   isActive ? "text-link" : ""
                 }`}
               >
@@ -139,92 +106,67 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
                   <>
                     <span
                       aria-hidden="true"
-                      className="px-1.5 py-0.2 rounded-full bg-accent text-accent-fg text-[11px] tabular-nums font-semibold"
+                      className="px-1.5 rounded-full bg-accent text-accent-fg text-[11px] tabular-nums font-bold"
                     >
                       {tab.badge}
                     </span>
                     {/* The badge alone is a number that states nothing about what
                         it counts, and it changed on a 30s poll that no live region
-                        announced. The visible chip is now decorative and the
-                        count is spelled out for assistive technology. */}
+                        announced. The visible chip is decorative and the count is
+                        spelled out for assistive technology. */}
                     <span className="sr-only">{tab.badge} unread</span>
                   </>
                 ) : null}
                 {isActive && (
-                  <span className="absolute -bottom-1 left-0 right-0 h-0.5 bg-accent" />
+                  <span className="absolute -bottom-0.5 left-0 right-0 h-0.5 bg-accent" />
                 )}
               </button>
             );
           })}
         </nav>
 
-        {/* Right Actions: System Status & User Controls */}
-        <div className="flex items-center gap-3 md:gap-5">
-          {/* System Status Indicator — driven by a real poll of /health/ and
-              /ready/. `animate-pulse` appears only while a probe is genuinely
-              in flight; the old `animate-ping` pulsed for ever, which is a
-              visual claim of continuous activity the code never made.
-
-              It was wrapped in `hidden lg:flex`, which put it outside the
-              accessibility tree below 1024px — on a mobile-first app whose reels
-              are sized to a phone viewport. There was no backend-health signal at
-              all on the primary device. The region is now rendered at every
-              width; only the "System Status" caption drops below `sm`, where the
-              header row has no room for a third two-line block, and the dot plus
-              the verdict still carry the signal. What the indicator *claims* is
-              unchanged and must stay that way: `/health/` is liveness and
-              `/ready/` is readiness, and neither observes a Celery worker. */}
-          <div className="flex flex-col text-right">
-            <span className="hidden sm:block text-[11px] tabular-nums font-bold text-fg-subtle ">
-              System Status
-            </span>
-            <span
-              role="status"
-              aria-live="polite"
-              title={healthTitle(health)}
-              className={`text-[11px] tabular-nums font-bold whitespace-nowrap flex items-center justify-end gap-1 ${healthView.text}`}
-            >
-              <span
-                aria-hidden="true"
-                className={`w-1.5 h-1.5 rounded-full ${healthView.dot} ${
-                  health.status === "checking" ? "animate-pulse" : ""
-                }`}
-              />
-              {healthView.label}
-            </span>
-          </div>
-
-          {/* Hands-Free Toggle */}
+        {/* Right Actions: the two playback switches and the profile route. */}
+        <div className="flex items-center gap-2 md:gap-3">
+          {/* Hands-Free Toggle. Kept from the previous header: it gates the
+              feed's autoplay and auto-advance (`ReelList`), and the feed page
+              labels the mode it is in. */}
           <button
             type="button"
             onClick={() => setHandsFreeMode(!handsFreeMode)}
             aria-pressed={handsFreeMode}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] tabular-nums font-bold transition-all border ${
+            className={`tap-target flex items-center gap-1.5 px-2.5 rounded-lg text-[11px] font-bold transition-colors border ${
               handsFreeMode
-                ? "bg-accent text-accent-fg border-accent "
+                ? "bg-accent text-accent-fg border-accent"
                 : "bg-white/5 text-fg-muted hover:text-fg border-line hover:bg-white/10"
             }`}
             title="Toggle Hands-Free Continuous Playback"
           >
-            <Headphones className="w-3.5 h-3.5" />
+            <Headphones className="w-3.5 h-3.5" aria-hidden="true" />
             <span className="hidden sm:inline">Hands-Free</span>
-            {handsFreeMode && <span className="w-1.5 h-1.5 rounded-full bg-black" />}
+            {handsFreeMode && (
+              <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-black" />
+            )}
           </button>
+
+          {/* The sound wave on/off switch. The wave is the reel's backup
+              imagery; a person who would rather not have it moving can turn it
+              off, and the choice survives the session in a cookie. */}
+          <VizToggle />
 
           {/* User Profile Avatar.
               `aria-label` rather than relying on `title`: accessible-name
               computation is aria-labelledby → aria-label → content → title, so
               the only child here — `<img alt={user?.username}>`, or the initial
               letter — supplied the name and the button was announced as the
-              user's own username. "alice" was the name of the control that opens
-              the profile page. The alt text is left intact rather than
+              user's own username. The alt text is left intact rather than
               `aria-hidden`, so the avatar is still described when the button is
-              reached by its label. */}
+              reached by its label. The avatar is the one Profile route on a
+              phone (`BottomNav` carries the other five destinations). */}
           <button
             type="button"
             onClick={() => setActiveTab("profile")}
             aria-label="My Profile"
-            className="flex items-center gap-2 p-1 rounded-full hover:ring-2 hover:ring-link/50 transition-all"
+            className="tap-target flex items-center gap-2 p-1 rounded-full hover:ring-2 hover:ring-link/50 transition-all"
             title="My Profile"
           >
             <div className="w-8 h-8 rounded-full bg-white/10 border border-line-strong overflow-hidden flex items-center justify-center">
@@ -235,7 +177,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, unreadC
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <span className="font-semibold text-xs text-link">
+                <span className="font-bold text-xs text-link">
                   {user?.username?.[0]?.toUpperCase() || "E"}
                 </span>
               )}

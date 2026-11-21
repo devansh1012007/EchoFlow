@@ -166,6 +166,7 @@ vi.mock("../components/feed/ReelList", () => ({
 }));
 
 import App from "../App";
+import { VizPreferenceProvider } from "../stores/viz";
 
 function makeClip(id: string, title: string): FeedClip {
   return {
@@ -353,7 +354,7 @@ describe("?clip= — the share deep link", () => {
     resolveRoute(CLIP_ID, 404, { error: "Clip not found." });
     setQuery(`?clip=${TARGET_CLIP.id}`);
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     expect(await screen.findByRole("heading", { name: TARGET_CLIP.title })).toBeInTheDocument();
     // The failure state must never have been shown, and the wait means it is
@@ -385,7 +386,7 @@ describe("?clip= — the share deep link", () => {
     playbackTokenRoute();
     setQuery(`?clip=${CLIP_ID}`);
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     expect(await screen.findByRole("heading", { name: TARGET_CLIP.title })).toBeInTheDocument();
 
     expect(resolveCalls(CLIP_ID).length).toBeGreaterThan(0);
@@ -403,7 +404,7 @@ describe("?clip= — the share deep link", () => {
     player.notify();
     setQuery(`?clip=${CLIP_ID}`);
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     expect(await screen.findByRole("heading", { name: TARGET_CLIP.title })).toBeInTheDocument();
     expect(api.callsTo(/\/clips\//)).toHaveLength(0);
@@ -421,7 +422,7 @@ describe("?clip= — the share deep link", () => {
     playbackTokenRoute();
     setQuery(`?clip=${CLIP_ID}`);
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     expect(await screen.findByRole("heading", { name: TARGET_CLIP.title })).toBeInTheDocument();
     expect(resolveCalls(CLIP_ID)).toHaveLength(1);
@@ -436,7 +437,7 @@ describe("?clip= — the share deep link", () => {
   it("refuses a malformed ?clip= without a request and without an error state", async () => {
     setQuery("?clip=../../admin");
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     // It falls through to the feed rather than showing a failure: a broken link
     // is not a failure the user can act on.
@@ -457,7 +458,7 @@ describe("?clip= — the share deep link", () => {
     // and there is no honest use for it.
     setQuery("?clip=00000000-0000-1000-8000-000000000000");
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     expect(await screen.findByTestId("reel-list")).toBeInTheDocument();
     expect(api.callsTo(/\/clips\//)).toHaveLength(0);
@@ -472,7 +473,7 @@ describe("?clip= — the share deep link", () => {
     playbackTokenRoute();
     setQuery(`?clip=${CLIP_ID}`);
 
-    const { unmount } = render(<App />);
+    const { unmount } = render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     expect(await screen.findByRole("heading", { name: TARGET_CLIP.title })).toBeInTheDocument();
 
     // Stripped before any await, so a refresh mid-resolve cannot re-fire it.
@@ -480,7 +481,7 @@ describe("?clip= — the share deep link", () => {
 
     // A reload is the next mount with the same URL: it must not resolve again.
     unmount();
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await act(async () => {});
 
     expect(resolveCalls(CLIP_ID)).toHaveLength(1);
@@ -499,7 +500,7 @@ describe("?clip= — the share deep link", () => {
     resolveRoute(CLIP_ID, 404, { error: "Clip not found." });
     setQuery(`?clip=${CLIP_ID}`);
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/not available on your account/i);
@@ -528,7 +529,7 @@ describe("?clip= — the share deep link", () => {
       playbackTokenRoute(testCase.status);
       setQuery(`?clip=${CLIP_ID}`);
 
-      const { unmount } = render(<App />);
+      const { unmount } = render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
       const alert = await screen.findByRole("alert");
       const text = alert.textContent ?? "";
       expect(text, testCase.label).toMatch(testCase.expected);
@@ -566,7 +567,7 @@ describe("?clip= — the share deep link", () => {
     resolveRoute(CLIP_ID, 404, { error: "Clip not found." });
     setQuery(`?clip=${CLIP_ID}`);
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     // The resolve request has been answered and refused. The feed has not.
     await act(async () => {});
@@ -595,7 +596,7 @@ describe("?clip= — the share deep link", () => {
 
     vi.useFakeTimers();
     try {
-      render(<App />);
+      render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -627,7 +628,7 @@ describe("?clip= — the share deep link", () => {
     resolveRoute(CLIP_ID, 404, { error: "Clip not found." });
     setQuery(`?clip=${CLIP_ID}`);
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     await screen.findByRole("alert");
     expect(player.state.currentClip).toBe(FEED_CLIP);
@@ -646,7 +647,7 @@ describe("?clip= — the share deep link", () => {
     playbackTokenRoute();
     setQuery(`?clip=${CLIP_ID}`);
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     await screen.findByRole("heading", { name: TARGET_CLIP.title });
     // Compared by id, not by identity: the clip arrived as a parsed JSON body,
@@ -663,7 +664,7 @@ describe("?clip= — the share deep link", () => {
     playbackTokenRoute();
     setQuery(`?clip=${CLIP_ID}`);
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByRole("heading", { name: TARGET_CLIP.title });
 
     await act(async () => {
@@ -683,7 +684,7 @@ describe("?clip= — the share deep link", () => {
 
 describe("tab navigation", () => {
   it("moves focus to the content it just swapped, and says so", async () => {
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByTestId("reel-list");
 
     await clickNav(/discover/i);
@@ -696,7 +697,7 @@ describe("tab navigation", () => {
   });
 
   it("announces the new tab in a live region that is mounted before the text exists", async () => {
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByTestId("reel-list");
 
     // The NetworkBanner / SessionNotice idiom: mounted and empty on a healthy
@@ -724,7 +725,7 @@ describe("tab navigation", () => {
     // A live region whose accessible text does not change is not re-announced.
     // The message is keyed by a counter for exactly this reason, the same fix
     // `SessionAnnouncer.tsx:37-39` made for its own message.
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByTestId("reel-list");
 
     await clickNav(/discover/i);
@@ -741,7 +742,7 @@ describe("tab navigation", () => {
     // The pill used to stay fixed over the app for the whole session after the
     // first tab switch, covering dialog inputs. It is confirmation for sighted
     // users only; screen readers get the text when it is set.
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByTestId("reel-list");
 
     await clickNav(/discover/i);
@@ -755,7 +756,7 @@ describe("tab navigation", () => {
   }, 8000);
 
   it("changes document.title per tab", async () => {
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByTestId("reel-list");
     expect(document.title).toBe("EchoFlow — Live Feed");
 
@@ -777,7 +778,7 @@ describe("tab navigation", () => {
     playbackTokenRoute();
     setQuery(`?clip=${CLIP_ID}`);
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByRole("heading", { name: TARGET_CLIP.title });
 
     // "Live Feed" would be false: the feed is not mounted.
@@ -794,7 +795,7 @@ describe("tab navigation", () => {
     //
     // The count is a REQUEST count through the real `feedAPI.getFeed` and the
     // shared `fetch` mock, not a mount count of a test double.
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByTestId("reel-list");
     expect(api.callsTo(/\/feed\//)).toHaveLength(1);
 
@@ -809,7 +810,7 @@ describe("tab navigation", () => {
   });
 
   it("keeps the feed mounted but out of the accessibility tree while another tab is up", async () => {
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByTestId("reel-list");
 
     await clickNav(/discover/i);
@@ -827,7 +828,7 @@ describe("tab navigation", () => {
     // precisely so it survives the transition it explains — and a peer just made
     // a network throw dispatch `ef_session_expired`, which is the case that
     // needs it most.
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByTestId("reel-list");
 
     act(() => {
@@ -853,7 +854,7 @@ describe("tab navigation", () => {
     console.error = () => {};
     try {
       player.providerShouldThrow = true;
-      render(<App />);
+      render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     } finally {
       console.error = spy;
     }
@@ -874,7 +875,7 @@ describe("the auth-loading window", () => {
     sessionStorage.setItem("ef_refresh_token", "refresh");
     setAuth({ isAuthenticated: false, isLoading: true });
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     expect(screen.queryByRole("heading", { name: /sign in/i })).not.toBeInTheDocument();
     expect(await screen.findByText(/signing you in/i)).toBeInTheDocument();
@@ -886,7 +887,7 @@ describe("the auth-loading window", () => {
     // The loading screen must not become a permanent gate in front of the form.
     setAuth({ isAuthenticated: false, isLoading: true });
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     expect(screen.getByRole("heading", { name: /sign in/i })).toBeInTheDocument();
   });
@@ -914,7 +915,7 @@ describe("unhandled rejections and uncaught errors", () => {
     // not route an event-handler throw, an effect throw or an async rejection to
     // any boundary — so the whole class of "it silently did nothing" failures
     // ended in the console.
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     expect(screen.queryByText(/didn't finish/i)).not.toBeInTheDocument();
 
     // No manual `mockRestore`: the suite config sets `restoreMocks: true` and
@@ -932,7 +933,7 @@ describe("unhandled rejections and uncaught errors", () => {
   });
 
   it("surfaces an uncaught error too, and can be dismissed", () => {
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     vi.spyOn(console, "error").mockImplementation(() => {});
     act(() => {
       const event = new Event("error");
@@ -950,7 +951,7 @@ describe("unhandled rejections and uncaught errors", () => {
   });
 
   it("renders nothing visible while healthy", () => {
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     expect(screen.queryByText(/didn't finish/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /dismiss error/i })).not.toBeInTheDocument();
   });
@@ -968,7 +969,7 @@ describe("unread share count", () => {
     api.fail("GET", /\/share\/unread-count\//, new TypeError("Failed to fetch"));
     baseRoutes();
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     expect(await screen.findByText(/unread shares: could not be checked/i)).toBeInTheDocument();
     // The badge's rendering is `Header`'s and `BottomNav`'s; the claim that
@@ -981,7 +982,7 @@ describe("unread share count", () => {
     feedRoute([FEED_CLIP]);
     baseRoutes({ unread: 0 });
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
 
     await waitFor(() => expect(api.callsTo(/unread-count/)).toHaveLength(1));
     expect(screen.queryByText(/unread shares/i)).not.toBeInTheDocument();
@@ -1005,7 +1006,7 @@ describe("unread share count", () => {
 
     vi.useFakeTimers();
     try {
-      render(<App />);
+      render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
       // `advanceTimersByTimeAsync(0)` both flushes the settled poll's state
       // update and runs the header's own first probe. `waitFor` is unusable
       // under fake timers — see the note in `backendHealth.test.tsx:40-44`.
@@ -1038,7 +1039,7 @@ describe("unread share count", () => {
     );
     baseRoutes();
 
-    render(<App />);
+    render(<VizPreferenceProvider><App /></VizPreferenceProvider>);
     await screen.findByText(/could not be checked/i);
 
     fail = false;

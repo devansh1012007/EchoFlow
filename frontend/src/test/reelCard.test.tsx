@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installFetchMock, type FetchMock } from "./fetchMock";
 import { ReelCard } from "../components/feed/ReelCard";
+import { VizPreferenceProvider } from "../stores/viz";
 import type { FeedClip } from "../types/echoflow";
 
 /**
@@ -120,18 +121,26 @@ function makeClip(overrides: Partial<FeedClip> = {}): FeedClip {
   };
 }
 
+/**
+ * The card's stage (cover image or sound wave) needs the viz preference
+ * context — `main.tsx` mounts `VizPreferenceProvider` around the whole app, so
+ * this wrapper reproduces the production tree. Without it the card's stage
+ * cannot know whether the wave is on or off.
+ */
 function renderCard(
   clip: FeedClip,
   options: { isActive?: boolean; onCreatorClick?: (creatorId: number) => void } = {},
 ) {
   return render(
-    <ReelCard
-      clip={clip}
-      isActive={options.isActive ?? false}
-      onOpenComments={() => {}}
-      onOpenShare={() => {}}
-      onCreatorClick={options.onCreatorClick}
-    />,
+    <VizPreferenceProvider>
+      <ReelCard
+        clip={clip}
+        isActive={options.isActive ?? false}
+        onOpenComments={() => {}}
+        onOpenShare={() => {}}
+        onCreatorClick={options.onCreatorClick}
+      />
+    </VizPreferenceProvider>,
   );
 }
 
@@ -249,12 +258,14 @@ describe("ReelCard follow button", () => {
     expect(screen.getByRole("button", { name: /^follow$/i })).toBeInTheDocument();
 
     rerender(
-      <ReelCard
-        clip={makeClip({ is_following: true })}
-        isActive={false}
-        onOpenComments={() => {}}
-        onOpenShare={() => {}}
-      />,
+      <VizPreferenceProvider>
+        <ReelCard
+          clip={makeClip({ is_following: true })}
+          isActive={false}
+          onOpenComments={() => {}}
+          onOpenShare={() => {}}
+        />
+      </VizPreferenceProvider>,
     );
 
     expect(screen.getByRole("button", { name: /following/i })).toBeInTheDocument();
@@ -418,15 +429,22 @@ describe("ReelCard accessibility", () => {
     expect(like).toHaveAccessibleName("Like reel, 4 likes");
   });
 
-  it("hides the decorative waveform from assistive tech", () => {
-    // There is no AnalyserNode behind these bars; they are ornament. Left in
-    // the accessibility tree they are read as a spectrum analyser.
+  it("hides the decorative stage from assistive tech", () => {
+    // The stage (cover image or sound wave) is ornament around the clip's real
+    // information. Left in the accessibility tree it reads as a spectrum
+    // analyser or an unnamed picture, announced on every card in the feed.
     const { container } = renderCard(makeClip());
 
-    const bars = Array.from(container.querySelectorAll<HTMLElement>('div[style*="height"]'));
-    expect(bars.length).toBeGreaterThan(0);
-    for (const bar of bars) {
-      expect(bar.closest('[aria-hidden="true"]')).not.toBeNull();
+    // The wave canvas, when there is no cover, is aria-hidden.
+    const canvases = Array.from(container.querySelectorAll("canvas"));
+    expect(canvases.length).toBeGreaterThan(0);
+    for (const canvas of canvases) {
+      expect(canvas.closest('[aria-hidden="true"]')).not.toBeNull();
+    }
+    // The legibility veils are styled divs; they are ornament too.
+    const veils = Array.from(container.querySelectorAll<HTMLElement>('div[style*="height"]'));
+    for (const veil of veils) {
+      expect(veil.closest('[aria-hidden="true"]')).not.toBeNull();
     }
   });
 

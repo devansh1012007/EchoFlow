@@ -371,7 +371,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
         ) : (
           <>
             {/* Profile Header Card */}
-            <div className="p-6 md:p-8 rounded-2xl md:rounded-3xl bg-panel border border-line shadow-float space-y-6">
+            <div className="p-4 md:p-5 rounded-xl md:rounded-2xl bg-panel border border-line shadow-float space-y-4">
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-5">
                   <div className="relative">
@@ -529,7 +529,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
               </div>
             ) : activeTab === "uploads" ? (
               userClips.length === 0 ? (
-                <div className="p-12 rounded-3xl bg-panel border border-line text-center text-fg-subtle tabular-nums text-xs ">
+                <div className="p-8 rounded-xl bg-panel border border-line text-center text-fg-subtle tabular-nums text-xs ">
                   No audio reels published to network.
                 </div>
               ) : (
@@ -626,7 +626,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ targetUserId, onBackTo
                 </div>
               )
             ) : likedClips === undefined || likedClips.length === 0 ? (
-              <div className="p-12 rounded-3xl bg-panel border border-line text-center text-fg-subtle tabular-nums text-xs ">
+              <div className="p-8 rounded-xl bg-panel border border-line text-center text-fg-subtle tabular-nums text-xs ">
                 {likedClips === undefined
                   ? "Liked reels unavailable."
                   : "No audio reels saved yet. Heart reels in the live feed to archive them here."}

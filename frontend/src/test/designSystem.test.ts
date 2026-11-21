@@ -51,12 +51,12 @@ describe("design system — no off-palette colour in source", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("never sets black text on the blue action fill", () => {
-    // Black on #2459e0 is 3.58:1. White on it is 5.87:1.
+  it("never sets white text on the mint action fill", () => {
+    // White on #3dffb5 is 1.30:1. Black on it is 16.17:1 (use text-accent-fg).
     const offenders = files.flatMap((f) =>
       [...code(f).matchAll(/"[^"\n]*"|`[^`]*`/g)]
         .map((m) => m[0])
-        .filter((s) => /(^|[\s"`:])bg-accent(?=[\s"`/])/.test(s) && /(^|[\s"`:])text-black(?=[\s"`])/.test(s))
+        .filter((s) => /(^|[\s"`:])bg-accent(?=[\s"`/])/.test(s) && /(^|[\s"`:])text-white(?=[\s"`])/.test(s))
         .map((s) => `${relative(SRC, f)}: ${s.slice(0, 80)}`),
     );
     expect(offenders).toEqual([]);

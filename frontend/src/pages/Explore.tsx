@@ -267,7 +267,7 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
             rather than a descendant — a `<button>` inside a `<button>` is
             invalid and, worse, only the inner one is reachable.
           */}
-          <ul role="list" className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <ul role="list" className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {clips.map((clip) => {
               const isThisPlaying = currentClip?.id === clip.id && isPlaying;
               const isThisSelected = currentClip?.id === clip.id;
@@ -275,7 +275,7 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
               return (
                 <li
                   key={clip.id}
-                  className={`p-5 rounded-2xl border transition-all flex items-center gap-4 group ${
+                  className={`py-2.5 px-3 rounded-lg border transition-colors flex items-center gap-3 group ${
                     isThisSelected
                       ? "bg-panel border-accent ring-1 ring-link"
                       : "bg-panel/80 hover:bg-panel border-line hover:border-line-strong"
@@ -286,9 +286,9 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
                     type="button"
                     onClick={() => handlePlayClip(clip)}
                     aria-label={`${isThisPlaying ? "Pause" : "Play"} ${clip.title}`}
-                    className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 transition-transform ${
+                    className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors ${
                       isThisPlaying
-                        ? "bg-accent text-accent-fg scale-105 "
+                        ? "bg-accent text-accent-fg "
                         : "bg-white/10 text-fg group-hover:bg-accent group-hover:text-accent-fg"
                     }`}
                   >
@@ -315,7 +315,7 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
                       are `<h2>` — and the title itself is the second button,
                       which keeps the whole title row clickable as before.
                     */}
-                    <h2 className="text-sm font-semibold tracking-tight text-fg leading-snug line-clamp-2">
+                    <h2 className="text-sm font-bold tracking-tight text-fg leading-snug line-clamp-1">
                       <button
                         type="button"
                         onClick={() => handlePlayClip(clip)}
@@ -325,7 +325,7 @@ export const ExplorePage: React.FC<ExplorePageProps> = ({ onOpenFeed: _onOpenFee
                       </button>
                     </h2>
 
-                    <div className="flex items-center gap-4 text-[11px] tabular-nums text-fg-muted mt-2">
+                    <div className="flex items-center gap-3 text-[11px] tabular-nums text-fg-muted mt-1">
                       <span className="flex items-center gap-1">
                         <Heart className="w-3 h-3 text-link" aria-hidden="true" />
                         {clip.likes}

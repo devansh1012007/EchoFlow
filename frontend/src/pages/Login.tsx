@@ -252,7 +252,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
         </div>
 
         {/* Auth Card */}
-        <div className="bg-panel border border-line rounded-3xl p-6 md:p-8 shadow-float">
+        <div className="bg-panel border border-line rounded-2xl p-5 md:p-7 shadow-float">
           {/* Login / Register Toggle. RECON-06 #21: the selected state was
               background colour alone, so it is also exposed as pressed state. */}
           <div

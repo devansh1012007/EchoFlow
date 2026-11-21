@@ -133,7 +133,12 @@ def attach_cover(clip, name="covers/2026/09/30/artwork.jpg"):
     Returns the clip, so a test can chain it off `make_clip(...)`.
     """
     clip.cover_image.name = name
-    clip.save(update_fields=["cover_image"])
+    # A cover is served only once a reviewer approved it
+    # (services/cover_images.py::cover_is_servable). These tests are about the
+    # URL's host, so the fixture is an approved cover; test_cover_upload.py
+    # covers the review gate itself.
+    clip.cover_status = "approved"
+    clip.save(update_fields=["cover_image", "cover_status"])
     return clip
 
 

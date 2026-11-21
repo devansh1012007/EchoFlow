@@ -13,6 +13,14 @@ const STATUS_LABEL: Record<string, string> = {
   rejected: "Rejected",
 };
 
+/** The cover review column, in the states a reviewer can leave a cover in. */
+const COVER_LABEL: Record<string, string> = {
+  pending: "Cover in review",
+  approved: "Cover approved",
+  rejected: "Cover declined",
+  none: "No cover",
+};
+
 export const statusLabel = (status: string): string => STATUS_LABEL[status] ?? status.charAt(0).toUpperCase() + status.slice(1);
 
 /**
@@ -80,7 +88,22 @@ export const UploadsPanel: React.FC = () => {
           {unfinished.map((c) => (
             <li key={c.id} className="flex items-baseline justify-between gap-4 border-b border-line py-2 text-sm last:border-b-0">
               <span className="min-w-0 truncate text-fg">{c.title}</span>
-              <span className={c.status === "processing" ? "text-fg-muted" : "text-danger"}>{statusLabel(c.status)}</span>
+              <span className="flex items-baseline gap-3 whitespace-nowrap">
+                {c.cover_status && c.cover_status !== "none" && (
+                  <span
+                    className={`text-xs font-bold ${
+                      c.cover_status === "rejected"
+                        ? "text-danger"
+                        : c.cover_status === "approved"
+                          ? "text-link"
+                          : "text-fg-subtle"
+                    }`}
+                  >
+                    {COVER_LABEL[c.cover_status] ?? c.cover_status}
+                  </span>
+                )}
+                <span className={c.status === "processing" ? "text-fg-muted" : "text-danger"}>{statusLabel(c.status)}</span>
+              </span>
             </li>
           ))}
         </ul>

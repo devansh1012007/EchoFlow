@@ -197,6 +197,12 @@ export interface OwnClip {
   category?: string;
   /** "processing" | "ready" | "failed" | "rejected" — free text on the server, so never assume the set is closed. */
   status: string;
+  /**
+   * Cover review state: "none" | "pending" | "approved" | "rejected". A cover
+   * is never served until a reviewer approves it, so "pending" is the honest
+   * label for a reel that will show the sound wave until then.
+   */
+  cover_status?: string;
 }
 
 /** DRF `PageNumberPagination` (page size 20). */

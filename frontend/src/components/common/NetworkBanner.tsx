@@ -39,8 +39,9 @@ const RECONNECTED_MESSAGE = "Back online";
  * the device has *a* network interface, not whether anything is reachable, and
  * it stays `true` for a Wi-Fi link that is associated but has no upstream. It
  * is the standard primitive for this and it is what the app already assumes
- * elsewhere; it is not a reachability probe. Whether the *backend* is up is a
- * separate question, answered by `useBackendHealth`.
+ * elsewhere; it is not a reachability probe. (The backend-liveness probe that
+ * used to sit in the Header was removed; a request that fails says everything
+ * this banner needs to say about reachability.)
  */
 export function NetworkBanner() {
   const [offline, setOffline] = useState<boolean>(!navigator.onLine);

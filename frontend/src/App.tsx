@@ -14,6 +14,7 @@ import { UploadPage } from "./pages/Upload";
 import { InboxPage } from "./pages/Inbox";
 import { ProfilePage } from "./pages/Profile";
 import { LoginPage } from "./pages/Login";
+import { VoicesPage } from "./pages/Voices";
 import { ApiError, apiRequest, getStoredTokens, mediaAPI, shareAPI } from "./api/client";
 import { FeedClip } from "./types/echoflow";
 
@@ -30,6 +31,7 @@ const TAB_LABELS: Record<string, string> = {
   feed: "Live Feed",
   explore: "Discover",
   upload: "Creator Studio",
+  voices: "Voices",
   inbox: "Inbox",
   profile: "Profile",
 };
@@ -972,6 +974,7 @@ const MainContent: React.FC = () => {
         {!deepLinkActive && activeTab === "inbox" && (
           <InboxPage onRefreshUnread={refreshUnreadCount} />
         )}
+        {!deepLinkActive && activeTab === "voices" && <VoicesPage />}
         {!deepLinkActive && activeTab === "profile" && (
           <ProfilePage
             targetUserId={targetProfileUserId}

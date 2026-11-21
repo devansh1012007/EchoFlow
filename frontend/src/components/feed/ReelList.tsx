@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } f
 import { FeedClip } from "../../types/echoflow";
 import { usePlayer } from "../../stores/player";
 import { ReelCard } from "./ReelCard";
+import { StageBackdrop } from "./StageBackdrop";
 
 interface Props {
   clips: FeedClip[];
@@ -19,10 +20,32 @@ interface Props {
   onOpenCreatorProfile: (creatorId: number) => void;
   onOpenComments: (clip: FeedClip) => void;
   onOpenShare: (clip: FeedClip) => void;
+  /**
+   * The centered reel changed — the reel the stage is currently about. The
+   * feed's rails and the stage backdrop follow this, because "which reel is
+   * the subject" is a stage-level fact, not a card-level one.
+   */
+  onCenteredChange?: (index: number, clip: FeedClip) => void;
+  /**
+   * Ask the stage to bring a reel to the center (and focus it), by index.
+   * Changes are acted on; `null` is ignored. Used by the feed to land on a
+   * reel from outside the scroller without tearing down scroll state.
+   */
+  scrollToIndex?: number | null;
 }
 
-/** Viewport height minus the header + bottom-nav allowance. */
-const ITEM_HEIGHT = "calc(100vh - 156px)";
+/** The stage's height: viewport minus the header + bottom-nav allowance. */
+const STAGE_HEIGHT = "calc(100vh - 156px)";
+/**
+ * How much of the stage one reel takes. The reel either side of the centered
+ * one stays half-visible above and below — the brief's "show the reel above
+ * and below the main reel" — so the feed reads as a strip you move through,
+ * not as one card at a time with nothing beyond it.
+ */
+const REEL_SHARE = 0.78;
+const REEL_HEIGHT = `calc(${STAGE_HEIGHT} * ${REEL_SHARE})`;
+/** Half of the remaining stage, as a spacer so the first and last reels can center. */
+const SPACER_HEIGHT = `calc(${STAGE_HEIGHT} * ${(1 - REEL_SHARE) / 2})`;
 /** Ported from sample_frontend2. Comfortably above the 0.5 threshold that makes
  *  a reel flip mid-watch on a phone with a system scrollbar. */
 const AUTOPLAY_THRESHOLD = 0.6;
@@ -35,11 +58,8 @@ const ADVANCE_DELAY_MS = 1000;
  * below ask for it explicitly, which is 2.2.2 "Animation from Interactions"
  * (WCAG A) failing for anyone who has asked their OS to stop moving things.
  *
- * This is only the half of RECON-06 #17 that lives in this file — the global
- * `html { scroll-behavior: smooth }` and the seven keyframe animations in
- * `tokens.css` are a single app-wide pass, and are not touched here. Read once
- * per call rather than subscribing, so a mid-session change to the OS setting
- * is picked up without a listener.
+ * Read once per call rather than subscribing, so a mid-session change to the
+ * OS setting is picked up without a listener.
  */
 function prefersReducedMotion(): boolean {
   return (
@@ -50,22 +70,13 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
- * Vertical scroll-snap feed with viewability-driven autoplay.
+ * The feed stage: a vertical scroll-snap column with the centered reel as the
+ * subject and the neighbouring reels half-visible, receded, around it.
  *
- * Ported from sample_frontend2/src/components/feed/ReelList.tsx (preserved in
- * git as 20451d3). This is the core product interaction and the previous
- * frontend had no autoplay at all — no IntersectionObserver anywhere in src/,
- * so a clip only ever played because the user tapped it.
- *
- * Adapted for the target: `FeedClip` instead of the source's `AudioClip`,
- * `currentClip`/`playClip` instead of `active`/`play`.
- *
- * The source declared a `retry` prop that its own signature dropped, so error
- * retry was always a full page reload. There is no `retry`/`err` prop here any
- * more either: the component that owns the request (`Feed.tsx`) owns both the
- * error surface and the retry, so a failure can never be invisible here (it
- * used to be — `Feed.tsx` short-circuited on `errorMsg && clips.length === 0`
- * before this file's `ListError` could ever render, making it dead code).
+ * Viewability autoplay is driven by an `IntersectionObserver` on the item
+ * wrappers (ported from sample_frontend2, preserved in git as 20451d3). The
+ * observer is ALWAYS installed so `onCenteredChange` fires in manual mode
+ * too; the `playClip` inside it is what `handsFreeMode` gates.
  */
 export function ReelList({
   clips,
@@ -77,6 +88,8 @@ export function ReelList({
   onOpenCreatorProfile,
   onOpenComments,
   onOpenShare,
+  onCenteredChange,
+  scrollToIndex,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -86,6 +99,30 @@ export function ReelList({
   useEffect(() => {
     currentClipRef.current = currentClip?.id;
   }, [currentClip?.id]);
+
+  /**
+   * The reel the stage is centered on, by index. Drives the neighbours'
+   * receded treatment and (through `onCenteredChange`) the feed's rails and
+   * the backdrop behind the stage.
+   */
+  const [centeredIndex, setCenteredIndex] = useState<number>(0);
+  const centeredRef = useRef<number>(-1);
+
+  /** Report a new centered reel once, to state and to the caller. */
+  const reportCentered = useCallback(
+    (index: number) => {
+      if (centeredRef.current === index) return;
+      centeredRef.current = index;
+      setCenteredIndex(index);
+      const clip = clips[index];
+      if (clip) onCenteredChange?.(index, clip);
+    },
+    [clips, onCenteredChange],
+  );
+  const reportCenteredRef = useRef(reportCentered);
+  useEffect(() => {
+    reportCenteredRef.current = reportCentered;
+  }, [reportCentered]);
 
   /**
    * What the feed just did, in words.
@@ -119,18 +156,26 @@ export function ReelList({
         block: "center",
       });
       el.focus({ preventScroll: true });
+      reportCentered(index);
       setAnnouncement(
         reason === "auto-advance"
           ? `Next reel, ${index + 1} of ${clips.length}: ${clip.title}`
           : `Reel ${index + 1} of ${clips.length}: ${clip.title}`,
       );
     },
-    [clips],
+    [clips, reportCentered],
   );
   const focusReelRef = useRef(focusReel);
   useEffect(() => {
     focusReelRef.current = focusReel;
-  });
+  }, [focusReel]);
+
+  // Bring an externally named reel to the center. The feed names an index; the
+  // stage owns the scroll. `scrollToIndex` changing identity is the signal.
+  useEffect(() => {
+    if (scrollToIndex == null || scrollToIndex < 0 || scrollToIndex >= clips.length) return;
+    focusReelRef.current(scrollToIndex, "keyboard");
+  }, [scrollToIndex, clips.length]);
 
   // Pagination sentinel — separate observer from autoplay so that fetching the
   // next page can never start a clip.
@@ -148,24 +193,22 @@ export function ReelList({
     return () => observer.disconnect();
   }, [clips.length, hasMore, loading, onLoadMore]);
 
-  // Autoplay the most-visible reel.
+  // The most-visible reel: always reported (the rails follow it), and played
+  // when hands-free mode is on. `handsFreeMode` off means nothing plays until
+  // the user asks for it — the observer stays live because the stage still
+  // needs to know where it is.
   useEffect(() => {
     if (!clips.length) return;
-    // `handsFreeMode` off means nothing plays until the user asks for it. The
-    // observer was ungated, so the flag the Header toggle sets
-    // (`Header.tsx:182`) controlled nothing at all on the feed, and
-    // `Feed.tsx`'s "Manual Navigation Mode" string was a false statement
-    // (RECON-06 #14).
-    if (!handsFreeMode) return;
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
           if (!entry.isIntersecting) return;
           const index = Number((entry.target as HTMLElement).dataset.index);
           const clip = clips[index];
+          reportCenteredRef.current(index);
           // Guard on id, not on isPlaying: several entries can intersect in one
           // callback, and each playClip would restart the source.
-          if (clip && currentClipRef.current !== clip.id) {
+          if (handsFreeMode && clip && currentClipRef.current !== clip.id) {
             playClip(clip, clips);
           }
         });
@@ -192,19 +235,16 @@ export function ReelList({
   /**
    * Reel-to-reel keyboard navigation.
    *
-   * The scroll container was a bare `<div className="overflow-y-auto">` with
-   * no `tabIndex`, no `role` and no key handler, so it was not in the tab
-   * order: arrow keys, PageUp/PageDown, Home and End did nothing, and
-   * `.scrollbar-hide` (`tokens.css:263-269`) had removed the visual position
-   * indicator too. The only way to reach reel 2 was to tab through all ~11
-   * controls of reel 1, with the reel changing as a side effect of tabbing.
+   * The scroll container is the keyboard surface: arrow keys, PageUp/PageDown,
+   * Home and End move between reels, with the wrapper receiving focus so the
+   * reel's own controls stay one Tab away.
    */
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     const last = clips.length - 1;
     if (last < 0) return;
     const focused = itemRefs.current.findIndex((el) => el === document.activeElement);
-    const from = focused < 0 ? 0 : focused;
+    const from = focused < 0 ? centeredRef.current < 0 ? 0 : centeredRef.current : focused;
     let target: number;
     switch (event.key) {
       case "ArrowDown":
@@ -243,7 +283,7 @@ export function ReelList({
             type="button"
             onClick={onLoadMore}
             disabled={isLoadingMore}
-            className="px-6 py-2.5 rounded-xl border border-line bg-panel text-fg text-xs font-semibold hover:border-accent hover:text-link transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            className="px-6 py-2.5 rounded-xl border border-line bg-panel text-fg text-xs font-bold hover:border-accent hover:text-link transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {isLoadingMore ? "Loading..." : "Load more reels"}
           </button>
@@ -255,9 +295,7 @@ export function ReelList({
         </>
       ) : (
         // Reached only when the server says this is the end: a response with
-        // no `next`, or `queue_health` of 0 on a non-degraded page. It used to
-        // be rendered on every feed, unconditionally, from a hardcoded
-        // `hasMore={false}`.
+        // no `next`, or `queue_health` of 0 on a non-degraded page.
         <p
           role="status"
           aria-live="polite"
@@ -270,53 +308,75 @@ export function ReelList({
     </div>
   );
 
+  const centeredClip = clips[centeredIndex] ?? null;
+
   return (
     <>
-      <div
-        role="region"
-        aria-label="Reel feed"
-        aria-describedby={hintId}
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-        className="scrollbar-hide flex flex-col overflow-y-auto mx-auto w-full"
-        style={{ height: ITEM_HEIGHT, scrollSnapType: "y mandatory", maxWidth: "var(--content-max)" }}
-      >
-        {clips.map((clip, i) => (
-          <div
-            key={clip.id}
-            data-index={i}
-            tabIndex={-1}
-            role="group"
-            aria-label={`Reel ${i + 1} of ${clips.length}: ${clip.title}`}
-            ref={(el) => {
-              itemRefs.current[i] = el;
-              // Arm the pagination sentinel one item from the end.
-              if (i === clips.length - 2) sentinelRef.current = el;
-            }}
-            className="flex items-center justify-center relative"
-            style={{
-              flex: `0 0 ${ITEM_HEIGHT}`,
-              minHeight: ITEM_HEIGHT,
-              scrollSnapAlign: "center",
-            }}
-          >
-            <ReelCard
-              clip={clip}
-              isActive={currentClip?.id === clip.id}
-              onOpenComments={onOpenComments}
-              onOpenShare={onOpenShare}
-              onCreatorClick={onOpenCreatorProfile}
-            />
-          </div>
-        ))}
+      <div className="relative mx-auto w-full" style={{ height: STAGE_HEIGHT, maxWidth: "var(--content-max)" }}>
+        {/* The blurred surroundings: a dimmed copy of the centered reel's
+            cover behind the strip, so the subject sits in depth. No cover, no
+            backdrop — the true black is the statement. */}
+        {centeredClip && <StageBackdrop clip={centeredClip} />}
 
-        {loading && (
-          <div className="flex items-center justify-center" style={{ flex: `0 0 ${ITEM_HEIGHT}` }}>
-            <div className="skeleton h-1 w-3/5" />
-          </div>
-        )}
+        <div
+          role="region"
+          aria-label="Reel feed"
+          aria-describedby={hintId}
+          tabIndex={0}
+          onKeyDown={onKeyDown}
+          className="scrollbar-hide relative flex flex-col overflow-y-auto mx-auto w-full h-full"
+          style={{ scrollSnapType: "y mandatory" }}
+        >
+          {/* Spacers so the first and last reels can reach the center. */}
+          <div aria-hidden="true" style={{ flex: `0 0 ${SPACER_HEIGHT}` }} />
 
-        {endOfFeed}
+          {clips.map((clip, i) => (
+            <div
+              key={clip.id}
+              data-index={i}
+              tabIndex={-1}
+              role="group"
+              aria-label={`Reel ${i + 1} of ${clips.length}: ${clip.title}`}
+              ref={(el) => {
+                itemRefs.current[i] = el;
+                // Arm the pagination sentinel one item from the end.
+                if (i === clips.length - 2) sentinelRef.current = el;
+              }}
+              // The neighbours recede: blurred and dimmed, present enough to
+              // say "there is more above and below", never competing with the
+              // centered reel. CSS in tokens.css; the transition is disabled
+              // under prefers-reduced-motion by the global block.
+              data-active={i === centeredIndex}
+              className="reel-item flex items-center justify-center relative"
+              style={{
+                flex: `0 0 ${REEL_HEIGHT}`,
+                minHeight: REEL_HEIGHT,
+                scrollSnapAlign: "center",
+                padding: "0 4px",
+              }}
+            >
+              <div className="w-full h-full">
+                <ReelCard
+                  clip={clip}
+                  isActive={currentClip?.id === clip.id}
+                  onOpenComments={onOpenComments}
+                  onOpenShare={onOpenShare}
+                  onCreatorClick={onOpenCreatorProfile}
+                />
+              </div>
+            </div>
+          ))}
+
+          {loading && (
+            <div className="flex items-center justify-center" style={{ flex: `0 0 ${REEL_HEIGHT}` }}>
+              <div className="skeleton h-1 w-3/5" />
+            </div>
+          )}
+
+          {endOfFeed}
+
+          <div aria-hidden="true" style={{ flex: `0 0 ${SPACER_HEIGHT}` }} />
+        </div>
       </div>
 
       <p id={hintId} className="sr-only">
@@ -390,7 +450,7 @@ function ListEmpty({
           type="button"
           onClick={onLoadMore}
           disabled={isLoadingMore}
-          className="px-6 py-2.5 rounded-xl border border-line bg-panel text-fg text-xs font-semibold hover:border-accent hover:text-link transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          className="px-6 py-2.5 rounded-xl border border-line bg-panel text-fg text-xs font-bold hover:border-accent hover:text-link transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {isLoadingMore ? "Loading..." : "Load more reels"}
         </button>

@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import Hls from "hls.js";
 import { interactionsAPI, mediaAPI } from "../api/client";
+import { createSpectrumTap, type SpectrumTap, type TapState } from "../lib/spectrumTap";
 import { FeedClip } from "../types/echoflow";
 
 interface PlayerContextType {
@@ -21,6 +22,20 @@ interface PlayerContextType {
   volume: number;
   queue: FeedClip[];
   audioFrequencies: number[];
+  /**
+   * Real measured audio, when the browser can provide it.
+   *
+   * Fills `out` (any length) with 0..255 magnitudes and returns the tap's
+   * state: `"live"` is a genuine spectrum, `"silent"` is a playing stream
+   * with no energy right now, `"unavailable"` means "draw the fallback".
+   * Cheap enough to call once per animation frame.
+   *
+   * The tap reads a *copy* of the element's output (`captureStream` + an
+   * analyser that is never connected to `destination`), so it cannot mute,
+   * duplicate or otherwise affect playback — and `createMediaElementSource`
+   * is never called (a unit test enforces this).
+   */
+  readSpectrum: (out: Uint8Array) => TapState;
   /**
    * Why playback is not running, in the user's terms, or `null`.
    *
@@ -75,20 +90,16 @@ interface PlayerContextType {
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
-// Decorative envelope
+// Decorative envelope (the fallback for `readSpectrum`)
 // ---------------------------------------------------------------------------
-// These bars are NOT an audio spectrum. There is no AnalyserNode in the graph
-// (an earlier version declared `analyserRef` and `audioContextRef` and never
-// built the graph), and the previous implementation synthesised bars from
-// Math.sin/Math.random, which both re-rolled on every frame and presented noise
-// to the user as if it were measured audio.
-//
-// Per docs/mobile-rebuild-plan.md §13 the agreed substitution is a
-// deterministic pseudo-reactive envelope: smooth, reproducible, and seeded once
-// rather than randomised per frame. A real analyser would need
-// `createMediaElementSource`, which silences cross-origin media unless the
-// storage origin also returns a CORS header — so it is deliberately out of
-// scope here rather than half-built.
+// Real audio arrives through `readSpectrum` above, backed by `lib/spectrumTap`
+// (`captureStream` + an analyser, never `createMediaElementSource`). This
+// envelope is what the bars show when the tap is unavailable: no
+// `captureStream` in this browser (Safari, or the test environment's
+// MockAudio), or a tainted/flat stream that gave up. Per
+// docs/mobile-rebuild-plan.md §13 the agreed substitution is a deterministic
+// pseudo-reactive envelope: smooth, reproducible, and seeded once rather than
+// randomised per frame — ornament that claims nothing.
 
 const BAR_COUNT = 24;
 const PHASES = Array.from({ length: BAR_COUNT }, (_, i) => (i / BAR_COUNT) * Math.PI * 2);
@@ -244,6 +255,13 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const playbackRateRef = useRef<number>(1);
+  /**
+   * The non-intrusive spectrum tap for the audio element, or `null` where the
+   * browser cannot build one (no `captureStream`). Created in the same `[]`
+   * effect as the element so the two always share a lifetime; `readSpectrum`
+   * is the only reader.
+   */
+  const tapRef = useRef<SpectrumTap | null>(null);
   /**
    * Latched when the server refuses telemetry outright, so the 6 s heartbeat
    * stops rather than retrying a decision that will not change. It records that
@@ -487,6 +505,10 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const audio = new Audio();
     audio.crossOrigin = "anonymous";
     audioRef.current = audio;
+    // The tap reads a copy of the element's output and never re-routes it, so
+    // playback is untouched whether it works or not. `null` in the test
+    // environment (MockAudio has no captureStream) and on browsers without it.
+    tapRef.current = createSpectrumTap(audio);
 
     const handleTimeUpdate = () => {
       const { sourceClip, clip, sourceReady } = session.current;
@@ -571,6 +593,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     return () => {
       audio.pause();
+      tapRef.current?.dispose();
+      tapRef.current = null;
       audio.removeEventListener("timeupdate", handleTimeUpdate);
       audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
       audio.removeEventListener("play", handlePlay);
@@ -612,6 +636,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const playClip = useCallback(
     (clip: FeedClip, newQueue?: FeedClip[]) => {
+      // `playClip` is the card-tap path, so it is as much a user gesture as
+      // `togglePlay`/`resume`; the same one-line resume applies.
+      tapRef.current?.resume();
       if (newQueue) {
         setQueue(newQueue);
       }
@@ -672,6 +699,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || session.current.clip === null) return;
+    // Same gesture argument as `resume`.
+    tapRef.current?.resume();
 
     // The element's own `paused` is the state of record, not `isPlaying`: it
     // cannot lag a `pause` the element has already applied, which is how the
@@ -690,7 +719,24 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const pause = useCallback(() => audioRef.current?.pause(), []);
 
+  /**
+   * The one reader of the spectrum tap. Stable identity for the context value;
+   * `tapRef` is the same object for the provider's lifetime, so no deps.
+   */
+  const readSpectrum = useCallback((out: Uint8Array): TapState => {
+    const tap = tapRef.current;
+    if (!tap) {
+      out.fill(0);
+      return "unavailable";
+    }
+    return tap.read(out);
+  }, []);
+
   const resume = useCallback(() => {
+    // A user gesture: the AudioContext the tap reads through can still be in
+    // its "suspended" start-up state, and this is the one moment a resume is
+    // guaranteed to be allowed. Harmless if already running.
+    tapRef.current?.resume();
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.readyState === HTMLMediaElement.HAVE_NOTHING) {
@@ -793,6 +839,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       volume,
       queue,
       audioFrequencies,
+      readSpectrum,
       playbackError,
       handsFreeMode,
       playClip,

@@ -126,6 +126,18 @@ class AudioClip(models.Model):
     
     original_file = models.FileField(upload_to='uploads/%Y/%m/%d/', null=True)
     cover_image = models.ImageField(upload_to='covers/%Y/%m/%d/', blank=True, null=True)
+    # Review state of the cover image. Covers are user-supplied images and the
+    # audio moderation pipeline never looks at them, so a cover is served only
+    # when this is "approved" (services/cover_images.py::cover_is_servable).
+    COVER_STATUS_CHOICES = [
+        ('none', 'No cover'),
+        ('pending', 'Awaiting review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    cover_status = models.CharField(max_length=10, choices=COVER_STATUS_CHOICES, default='none', db_index=True)
+    cover_moderation_reason = models.CharField(max_length=500, blank=True, default='')
+    cover_moderated_at = models.DateTimeField(null=True, blank=True)
     hls_playlist_url = models.CharField(max_length=500, blank=True, null=True)
     # Provenance and licensing metadata retained for legacy imported rows.
     source_name = models.CharField(max_length=100, blank=True, null=True)

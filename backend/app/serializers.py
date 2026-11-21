@@ -9,6 +9,7 @@ from django.db.models import Exists, OuterRef
 from backend.EchoFlow.client_ip import get_client_ip
 from .media_urls import get_hls_playback_url, get_signed_media_url
 from .models import AudioClip, UserInteraction, ShareEvent, Comment, ConsentAudit, Grievance, AuditLog
+from .services import cover_images
 from rest_framework.validators import UniqueValidator
 
 
@@ -319,17 +320,22 @@ class AudioUploadSerializer(serializers.ModelSerializer):
     copyright_acknowledgement = serializers.BooleanField(
         required=True,
     )
+    # DEFECT B (see `_cover_image_url`): never let DRF auto-build an ImageField
+    # here. An auto-built field would serialise `cover_image.url`, which is the
+    # container-internal storage endpoint. The field is write-only and the
+    # review state is exposed separately as the read-only `cover_status`.
+    cover_image = serializers.FileField(write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = AudioClip
-        fields = ['id', 'title', 'category', 'original_file', 'status', 'license_type', 'copyright_owner_name', 'copyright_acknowledgement']
+        fields = ['id', 'title', 'category', 'original_file', 'status', 'license_type', 'copyright_owner_name', 'copyright_acknowledgement', 'cover_image', 'cover_status']
         # N8 fix: original_file is writable on create (POST) but read-only
         # on update (PATCH/PUT). The serializer-level read_only_fields
         # applies to BOTH, so we use 'original_file' as a writable
         # field here and enforce read-only-on-update at the view level
         # via an update() override that raises PermissionDenied or
         # silently ignores the field. See AudioUploadViewSet.update().
-        read_only_fields = ['id', 'status']
+        read_only_fields = ['id', 'status', 'cover_status']
 
     def validate(self, data):
         # SECURITY / REGULATORY: Enforce copyright acknowledgment.
@@ -396,6 +402,23 @@ class AudioUploadSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"original_file": f"Free tier upload limit is {max_mb}MB. Upgrade to Pro for unlimited uploads."}
             )
+
+    def validate_cover_image(self, value):
+        """Re-encode the cover from decoded pixels, or refuse it with a reason.
+
+        Create-time only. Replacing a cover after the fact would have to reset
+        review and delete the old object, which is a separate decision.
+        """
+        if value is None:
+            return None
+        if self.instance is not None:
+            raise serializers.ValidationError(
+                "A cover image can only be set when the clip is uploaded."
+            )
+        try:
+            return cover_images.sanitize_cover_image(value)
+        except cover_images.CoverImageError as exc:
+            raise serializers.ValidationError(str(exc))
 
     def validate_original_file(self, value):
         if value.size > self.MAX_SIZE:
@@ -527,6 +550,16 @@ class AudioUploadSerializer(serializers.ModelSerializer):
         validated_data['is_noncommercial'] = is_noncommercial
         validated_data['requires_share_alike'] = requires_share_alike
 
+        # A cover is held for review: no automated check looks at images, so
+        # it is served only after `cover_images.approve_cover` (admin action).
+        # Assigned unconditionally for the same reason as the two flags above:
+        # `cover_status` is read-only, and a client must not be able to pre-set it.
+        validated_data['cover_status'] = (
+            cover_images.COVER_PENDING
+            if validated_data.get('cover_image') is not None
+            else cover_images.COVER_NONE
+        )
+
         clip = super().create(validated_data)
 
         # (A2) `Unknown` derives to (False, False) — the same answer
@@ -594,7 +627,7 @@ def _cover_image_url(clip):
     Returns None when the clip has no cover, which is the field's contract for
     "no image" and is what both call sites and the clients expect.
     """
-    if not clip.cover_image or not clip.cover_image.name:
+    if not cover_images.cover_is_servable(clip):
         return None
     return get_signed_media_url(clip.cover_image.name)
 

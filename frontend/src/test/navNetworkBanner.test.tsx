@@ -198,7 +198,7 @@ describe("BottomNav", () => {
 
   it("leaves aria-current off the inactive items", () => {
     renderNav("feed");
-    expect(screen.getByRole("button", { name: /profile/i })).not.toHaveAttribute(
+    expect(screen.getByRole("button", { name: /voices/i })).not.toHaveAttribute(
       "aria-current",
     );
   });
@@ -225,7 +225,7 @@ describe("BottomNav", () => {
 
   it("names every destination", () => {
     renderNav("feed");
-    for (const label of [/live feed/i, /discover/i, /create/i, /inbox/i, /profile/i]) {
+    for (const label of [/live feed/i, /discover/i, /create/i, /voices/i, /inbox/i]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
   });
